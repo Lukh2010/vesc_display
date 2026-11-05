@@ -1,13 +1,17 @@
 #pragma once
 
+#ifndef LGFX_USE_V1
 #define LGFX_USE_V1
+#endif
+#ifndef LGFX_LINUX_FB
 #define LGFX_LINUX_FB
+#endif
 #include <LovyanGFX.hpp>
 #include "board_config.h"
 
 class DisplayDriver {
 public:
-    DisplayDriver() {
+    DisplayDriver() : _sim_touching(false), _sim_touch_x(0), _sim_touch_y(0) {
         _sprite.setColorDepth(16);
         _sprite.createSprite(LCD_WIDTH, LCD_HEIGHT);
     }
@@ -26,6 +30,22 @@ public:
     LovyanGFX* getCanvas() { return &_sprite; }
     lgfx::LGFX_Sprite& getSprite() { return _sprite; }
     void pushCanvas() {}
+
+    // Simulated Touch Interface
+    bool getTouch(int16_t *x, int16_t *y) {
+        if (_sim_touching) {
+            if (x) *x = _sim_touch_x;
+            if (y) *y = _sim_touch_y;
+            return true;
+        }
+        return false;
+    }
+
+    void setSimTouch(bool touching, int16_t x = 0, int16_t y = 0) {
+        _sim_touching = touching;
+        _sim_touch_x = x;
+        _sim_touch_y = y;
+    }
 
     void dumpBMP(const char *filename) {
         FILE *f = fopen(filename, "wb");
@@ -78,6 +98,9 @@ public:
 
 private:
     lgfx::LGFX_Sprite _sprite;
+    bool    _sim_touching;
+    int16_t _sim_touch_x;
+    int16_t _sim_touch_y;
 };
 
 extern DisplayDriver Display;

@@ -277,12 +277,94 @@ void testButtonDebouncing() {
     printf("=== All Button Debounce & Chord Tests PASSED! ===\n\n");
 }
 
+void testTouchGestures() {
+    printf("\n=== Running GT911 Capacitive Touch Gesture & Navigation Unit Tests ===\n");
+    Buttons.begin();
+
+    auto simTouchAction = [](int start_x, int start_y, int end_x, int end_y, uint32_t duration_ms) {
+        simAdvanceMs(120); // Allow 100ms debounce cooldown from previous gesture
+        Display.setSimTouch(true, start_x, start_y);
+        Buttons.update(); // Record initial touch-down at t=0
+
+        int steps = 5;
+        for (int i = 1; i <= steps; i++) {
+            int cx = start_x + (end_x - start_x) * i / steps;
+            int cy = start_y + (end_y - start_y) * i / steps;
+            Display.setSimTouch(true, cx, cy);
+            simAdvanceMs(duration_ms / steps);
+            Buttons.update();
+        }
+
+        Display.setSimTouch(false, 0, 0);
+        Buttons.update();
+        simAdvanceMs(120);
+        return Buttons.getNavAction();
+    };
+
+    // 1. Initial State: No touch
+    Display.setSimTouch(false);
+    simAdvanceMs(110);
+    Buttons.update();
+    assert(Buttons.getNavAction() == NAV_NONE);
+    printf("[PASS] Touch idle at boot.\n");
+
+    // 2. Test Swipe Left -> NAV_BTN2_SHORT (Next Screen)
+    NavAction actSwipeLeft = simTouchAction(550, 240, 420, 240, 60);
+    assert(actSwipeLeft == NAV_BTN2_SHORT);
+    printf("[PASS] Swipe Left triggered NAV_BTN2_SHORT (Next Screen).\n");
+
+    // 3. Test Swipe Right -> NAV_BTN1_SHORT (Previous Screen)
+    NavAction actSwipeRight = simTouchAction(300, 240, 430, 240, 60);
+    assert(actSwipeRight == NAV_BTN1_SHORT);
+    printf("[PASS] Swipe Right triggered NAV_BTN1_SHORT (Previous Screen).\n");
+
+    // 4. Test Tap Left Edge -> NAV_BTN1_SHORT
+    NavAction actTapLeft = simTouchAction(90, 240, 90, 240, 50);
+    assert(actTapLeft == NAV_BTN1_SHORT);
+    printf("[PASS] Tap Left Edge triggered NAV_BTN1_SHORT.\n");
+
+    // 5. Test Tap Right Edge -> NAV_BTN2_SHORT
+    NavAction actTapRight = simTouchAction(710, 240, 710, 240, 50);
+    assert(actTapRight == NAV_BTN2_SHORT);
+    printf("[PASS] Tap Right Edge triggered NAV_BTN2_SHORT.\n");
+
+    // 6. Test Tap Top-Right Badge -> NAV_BTN1_LONG (Open Settings Menu)
+    NavAction actTapTopRight = simTouchAction(700, 30, 700, 30, 50);
+    assert(actTapTopRight == NAV_BTN1_LONG);
+    printf("[PASS] Tap Top-Right badge triggered NAV_BTN1_LONG (Settings Menu).\n");
+
+    // 7. Test Long Press on Bottom Strip -> NAV_BTN2_LONG (Reset Trip Odometer)
+    Display.setSimTouch(true, 100, 440);
+    Buttons.update(); // Record touch down at t=0
+    simAdvanceMs(850);
+    Buttons.update(); // Fire long press after 850ms hold
+    NavAction actLongBottom = Buttons.getNavAction();
+    assert(actLongBottom == NAV_BTN2_LONG);
+    Display.setSimTouch(false);
+    simAdvanceMs(110);
+    Buttons.update();
+    printf("[PASS] Long Press on Bottom Strip triggered NAV_BTN2_LONG (Trip Reset).\n");
+
+    // 8. Test Edit Mode: Left side decrement, Right side increment
+    Buttons.setEditMode(true);
+    NavAction actEditDec = simTouchAction(200, 280, 200, 280, 50);
+    assert(actEditDec == NAV_EDIT_DEC);
+    printf("[PASS] Edit Mode Left Tap triggered NAV_EDIT_DEC (-).\n");
+
+    NavAction actEditInc = simTouchAction(650, 280, 650, 280, 50);
+    assert(actEditInc == NAV_EDIT_INC);
+    printf("[PASS] Edit Mode Right Tap triggered NAV_EDIT_INC (+).\n");
+
+    Buttons.setEditMode(false);
+    printf("=== All GT911 Capacitive Touch Tests PASSED! ===\n\n");
+}
+
 int main(int argc, char **argv) {
     printf("==================================================\n");
-    printf("   VESC 3.16 Display Native Emulator & Renderer   \n");
+    printf("   VESC 4.3\" Touch LCD Emulator & Renderer (800x480) \n");
     printf("==================================================\n");
 
-    // testButtonDebouncing();
+    testTouchGestures();
 
     Settings.begin();
     Battery.begin();

@@ -6,37 +6,42 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 cd "$ROOT_DIR"
 
-echo "=== Compiling VESC Display Simulator ==="
+LGFX_SRC_DIR=$(find .pio/libdeps -name "LovyanGFX" -type d | head -n 1)/src
+if [ ! -d "$LGFX_SRC_DIR" ]; then
+    echo "LovyanGFX not found in .pio/libdeps, installing via platformio..."
+    pio pkg install --library "lovyan03/LovyanGFX@^1.1.16"
+    LGFX_SRC_DIR=$(find .pio/libdeps -name "LovyanGFX" -type d | head -n 1)/src
+fi
+
+echo "=== Compiling VESC Display Simulator (800x480) ==="
 g++ -std=c++17 -O2 -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   -Itools/simulator/include \
   -Iinclude \
-  -I.pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src \
+  -I"$LGFX_SRC_DIR" \
   src/dash_renderer.cpp \
   src/settings_manager.cpp \
   src/battery_manager.cpp \
   src/buttons.cpp \
   tools/simulator/sim_main.cpp \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/v1/LGFXBase.cpp \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/v1/LGFX_Sprite.cpp \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/v1/lgfx_fonts.cpp \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/Fonts/IPA/lgfx_font_japan.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/Fonts/efont/lgfx_efont_cn.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/Fonts/efont/lgfx_efont_ja.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/Fonts/efont/lgfx_efont_kr.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/Fonts/efont/lgfx_efont_tw.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/utility/lgfx_miniz.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/utility/lgfx_pngle.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/utility/lgfx_qoi.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/utility/lgfx_qrcode.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/utility/lgfx_tjpgd.c \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/v1/misc/common_function.cpp \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/v1/misc/pixelcopy.cpp \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/v1/misc/SpriteBuffer.cpp \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/v1/panel/Panel_Device.cpp \
-  .pio/libdeps/waveshare-esp32-s3-lcd-316/LovyanGFX/src/lgfx/v1/platforms/framebuffer/common.cpp \
+  "$LGFX_SRC_DIR/lgfx/v1/LGFXBase.cpp" \
+  "$LGFX_SRC_DIR/lgfx/v1/lgfx_fonts.cpp" \
+  "$LGFX_SRC_DIR/lgfx/v1/lgfx_v1.cpp" \
+  "$LGFX_SRC_DIR/lgfx/v1/lgfx_v1_panel.cpp" \
+  "$LGFX_SRC_DIR/lgfx/v1/lgfx_v1_platforms.cpp" \
+  "$LGFX_SRC_DIR/lgfx/Fonts/IPA/lgfx_font_japan.c" \
+  "$LGFX_SRC_DIR/lgfx/Fonts/efont/lgfx_efont_cn.c" \
+  "$LGFX_SRC_DIR/lgfx/Fonts/efont/lgfx_efont_ja.c" \
+  "$LGFX_SRC_DIR/lgfx/Fonts/efont/lgfx_efont_kr.c" \
+  "$LGFX_SRC_DIR/lgfx/Fonts/efont/lgfx_efont_tw.c" \
+  "$LGFX_SRC_DIR/lgfx/utility/lgfx_miniz.c" \
+  "$LGFX_SRC_DIR/lgfx/utility/lgfx_pngle.c" \
+  "$LGFX_SRC_DIR/lgfx/utility/lgfx_qoi.c" \
+  "$LGFX_SRC_DIR/lgfx/utility/lgfx_qrcode.c" \
+  "$LGFX_SRC_DIR/lgfx/utility/lgfx_tjpgd.c" \
   -o tools/simulator/simulator
 
 echo "=== Running Scenarios ==="
+mkdir -p tools/simulator/screenshots
 ./tools/simulator/simulator
 
 echo "=== Converting to PNG ==="

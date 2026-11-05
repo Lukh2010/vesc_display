@@ -18,10 +18,11 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println("\n=============================================");
-    Serial.println(" Waveshare ESP32-S3-LCD-3.16 eBike Dashboard ");
-    Serial.println(" Clean OEM Instrument Cluster UI (820x320)");
-    Serial.println(" Target: Flipsky 75100 V1 (VESC UART)");
-    Serial.println(" Motor: Bafang BBS Mid-Drive (No Regen)");
+    Serial.println(" Waveshare ESP32-S3-Touch-LCD-4.3 Dashboard  ");
+    Serial.println(" Clean OEM Instrument Cluster UI (800x480)   ");
+    Serial.println(" Goodix GT911 Capacitive Touch / Swipe Nav   ");
+    Serial.println(" Target: Flipsky / VESC UART (TX:43, RX:44)  ");
+    Serial.println(" Target: VESC CAN Bus (TX:20, RX:19)         ");
     Serial.println("=============================================");
 
     // 2. Initialize Persistent Settings
@@ -62,16 +63,16 @@ void setup() {
     telemetry.vesc_connected      = false;
     telemetry.uptime_sec          = 0;
 
-    // 5. Initialize Physical Navigation Buttons (SCL=GPIO 7, SDA=GPIO 15)
+    // 5. Initialize Touch and Input Handling (GT911 I2C SDA=8, SCL=9)
     Buttons.begin();
-    Serial.println("[OK] Navigation Buttons initialized on SCL (GPIO 7) and SDA (GPIO 15)");
+    Serial.println("[OK] Touch & Input Handler initialized (GT911 on I2C SDA=8, SCL=9)");
 
-    // 6. Initialize ST7701 Display and Backlight
-    Serial.println("[INFO] Initializing ST7701 Display Driver...");
+    // 6. Initialize ST7262 RGB Display and Backlight (via CH422G Expander)
+    Serial.println("[INFO] Initializing Waveshare ST7262 RGB Panel and Touch via LovyanGFX...");
     if (!Display.init()) {
         Serial.println("[ERROR] Display initialization failed!");
     } else {
-        Serial.println("[OK] Display initialized with Octal PSRAM frame buffer (820x320 landscape).");
+        Serial.println("[OK] Display initialized with Octal PSRAM frame buffer (800x480 landscape).");
     }
     uint8_t br = (uint8_t)map(Settings.get().brightness_pct, 0, 100, 0, 255);
     Display.setBrightness(br);
@@ -86,9 +87,9 @@ void setup() {
     Vesc.begin();
 #if SIMULATION_MODE
     Serial.println("[MODE] Self-Test Simulation Mode Active.");
-    Serial.println("       Set SIMULATION_MODE in include/board_config.h to 0 for live Flipsky 75100 UART.");
+    Serial.println("       Set SIMULATION_MODE in include/board_config.h to 0 for live Flipsky / VESC UART.");
 #else
-    Serial.println("[MODE] Live Flipsky 75100 VESC UART Mode Active (TX: GPIO 43, RX: GPIO 44).");
+    Serial.println("[MODE] Live VESC UART Mode Active (TX: GPIO 43, RX: GPIO 44).");
 #endif
 
     Serial.println("[OK] Setup complete. Entering main render loop.");
@@ -100,13 +101,13 @@ void loop() {
     static uint32_t boot_ms = millis();
     uint32_t now = millis();
 
-    // 1. Process Physical Button Inputs
+    // 1. Process Touch & Button Navigation Inputs
     Buttons.update();
     NavAction nav = Buttons.getNavAction();
 
     if (nav != NAV_NONE) {
         if (Vesc.isBridgeActive()) {
-            if (nav == NAV_BTN2_LONG || nav == NAV_BOTH_PRESSED || nav == NAV_BTN1_LONG) {
+            if (nav == NAV_BTN2_LONG || nav == NAV_BOTH_PRESSED || nav == NAV_BTN1_LONG || nav == NAV_BTN1_SHORT || nav == NAV_BTN2_SHORT) {
                 if (Vesc.isUsbBridgeActive()) Vesc.exitBridgeMode();
                 if (Vesc.isWifiBridgeActive()) Vesc.exitWifiBridgeMode();
                 telemetry.screen = SCREEN_RIDE_DASH;
@@ -117,46 +118,46 @@ void loop() {
             Renderer.handleMenuNav(nav, telemetry);
         } else {
             switch (nav) {
-                case NAV_BTN1_SHORT: // Previous Screen (Up): Ride Dash <-> Perf Stats <-> Energy Stats
+                case NAV_BTN1_SHORT: // Previous Screen (Swipe Right / Left Tap): Ride Dash <-> Perf Stats <-> Energy Stats
                     {
                         int cur = (int)telemetry.screen;
                         telemetry.screen = (DashboardScreen)((cur - 1 + 3) % 3);
                         if (telemetry.screen == SCREEN_RIDE_DASH && Settings.get().dash_style == STYLE_ANALOG_DIAL) {
                             Renderer.triggerNeedleSweep();
                         }
-                        Serial.printf("[NAV] BTN1 Short: Switched to Screen ID %d\n", (int)telemetry.screen);
+                        Serial.printf("[NAV] Switched to Screen ID %d (Prev)\n", (int)telemetry.screen);
                     }
                     break;
 
-                case NAV_BTN2_SHORT: // Next Screen (Down): Ride Dash -> Energy Stats -> Perf Stats -> Ride Dash
+                case NAV_BTN2_SHORT: // Next Screen (Swipe Left / Right Tap): Ride Dash -> Energy Stats -> Perf Stats -> Ride Dash
                     {
                         int cur = (int)telemetry.screen;
                         telemetry.screen = (DashboardScreen)((cur + 1) % 3);
                         if (telemetry.screen == SCREEN_RIDE_DASH && Settings.get().dash_style == STYLE_ANALOG_DIAL) {
                             Renderer.triggerNeedleSweep();
                         }
-                        Serial.printf("[NAV] BTN2 Short: Switched to Screen ID %d\n", (int)telemetry.screen);
+                        Serial.printf("[NAV] Switched to Screen ID %d (Next)\n", (int)telemetry.screen);
                     }
                     break;
 
-                case NAV_BTN1_LONG: // Button 1 Long Press: Open Settings Menu directly
+                case NAV_BTN1_LONG: // Long Press Top / Tap Settings: Open Settings Menu directly
                     telemetry.screen = SCREEN_SETTINGS_MENU;
-                    Serial.println("[NAV] BTN1 Long: Opened Settings Menu");
+                    Serial.println("[NAV] Opened Settings Menu");
                     break;
 
-                case NAV_BTN2_LONG: // Button 2 Long Press: Reset Trip Odometer & Statistics
+                case NAV_BTN2_LONG: // Long Press Bottom / Trip Reset: Reset Trip Odometer & Statistics
                     telemetry.trip_km = 0.0f;
                     telemetry.stats.reset();
-                    Serial.println("[NAV] BTN2 Long: Reset Trip Odometer and Statistics to 0.0");
+                    Serial.println("[NAV] Reset Trip Odometer and Statistics to 0.0");
                     break;
 
-                case NAV_BOTH_PRESSED: // BTN1 + BTN2: Fast Toggle Active Battery Profile
+                case NAV_BOTH_PRESSED: // Fast Toggle Active Battery Profile
                     {
                         uint8_t next_p = (Settings.get().active_battery_profile == 0) ? 1 : 0;
                         Settings.get().active_battery_profile = next_p;
                         Battery.setActiveProfile(next_p);
                         Settings.save();
-                        Serial.printf("[NAV] BTN1+BTN2 Short: Fast Toggled Battery Profile: %d (%s)\n",
+                        Serial.printf("[NAV] Fast Toggled Battery Profile: %d (%s)\n",
                                       next_p, Battery.getProfile(next_p).name);
                     }
                     break;
@@ -193,4 +194,3 @@ void loop() {
                       telemetry.battery_pct, telemetry.current_amps, telemetry.phase_amps, telemetry.est_range_km);
     }
 }
-
