@@ -28,23 +28,29 @@ private:
     void initRideDashboard(const DashTelemetry &telemetry);
     void renderRideDashboard(const DashTelemetry &telemetry);
 
-    // Style A: Left-Hug Analog Duty Dial Cluster (Motorcycle/Koso inspired)
+    // Style 0: "Best VESC Screen Ever Made" Hyper-VESC 35kW+ Pro Cluster
+    void initHyper35kwStyle(const DashTelemetry &telemetry);
+    void renderHyper35kwStyle(const DashTelemetry &telemetry);
+
+    // Style 1: Left-Hug Analog Duty Dial Cluster (Motorcycle/Koso inspired)
     void initLeftHugAnalogStyle(const DashTelemetry &telemetry);
     void renderLeftHugAnalogStyle(const DashTelemetry &telemetry);
     void drawAnalogNeedle(int cx, int cy, int length, float angle_rad, uint16_t color);
 
-    // Style B: Horizontal Duty Bar Cluster
+    // Style 2: Horizontal Duty Bar Cluster
     void initHorizontalBarStyle(const DashTelemetry &telemetry);
     void renderHorizontalBarStyle(const DashTelemetry &telemetry);
     void drawPreciseDutyBar(int x, int y, int w, int h, float duty, float max_duty);
 
-    // Screen 1: Energy & Battery Analytics Dashboard
-    void initEnergyStatsScreen(const DashTelemetry &telemetry);
-    void renderEnergyStatsScreen(const DashTelemetry &telemetry);
+    // Screen 1: Controllable LEDs & Light Modules (Color Wheel & Hazard)
+    void initLightsScreen(const DashTelemetry &telemetry);
+    void renderLightsScreen(const DashTelemetry &telemetry);
+    void drawColorWheel(int cx, int cy, int r_in, int r_out, uint8_t selected_hue);
 
-    // Screen 2: Power, Speed & Dynamics Analytics Dashboard
-    void initPerfStatsScreen(const DashTelemetry &telemetry);
-    void renderPerfStatsScreen(const DashTelemetry &telemetry);
+    // Screen 2: Real-Time Waveform Curves (Speed & Power) & Dual Controllers
+    void initRtGraphsScreen(const DashTelemetry &telemetry);
+    void renderRtGraphsScreen(const DashTelemetry &telemetry);
+    void drawWaveformGraph(int x, int y, int w, int h, const float *data, int count, float max_val, uint16_t line_col, uint16_t fill_col, const char *label, const char *val_str, uint16_t val_col);
 
     // Screen 3: Interactive Settings Menu System
     void initSettingsScreen(const DashTelemetry &telemetry);
@@ -61,6 +67,10 @@ private:
     void initWifiBridgeScreen(const DashTelemetry &telemetry);
     void renderWifiBridgeScreen(const DashTelemetry &telemetry);
 
+    // PIN-Lockscreen & VESC Alarm Banner (Requirements 1 & 7)
+    void renderPinLockScreen(const DashTelemetry &telemetry);
+    void drawFaultBanner(uint8_t fault_code);
+
     // Common UI Helpers
     void drawCard(int x, int y, int w, int h, uint16_t bg, uint16_t border);
     void drawValWithUnit(int x, int y, int numPadW, int unitPadW, const char *numStr, const char *unitStr, uint16_t numCol, uint16_t unitCol, uint16_t bgCol = 0x0821);
@@ -70,6 +80,7 @@ private:
     DashboardScreen _active_screen;
     DashboardStyle  _active_style;
     bool            _screen_dirty;
+    bool            _mode_banner_active;
 
     // Menu Navigation State
     bool     _menu_in_sub;
@@ -111,6 +122,15 @@ private:
         int soh_x10;
         uint32_t ride_sec;
 
+        // Hyper 35kW & Lights Caches
+        int ride_mode;
+        bool tuning_mode;
+        bool boost_active;
+        bool hazard_active;
+        uint8_t light_mode;
+        uint8_t light_hue;
+        uint8_t light_brightness;
+
         void invalidate() {
             speed = -999;
             duty_x10 = -999;
@@ -140,6 +160,14 @@ private:
             eff_x10 = -1;
             soh_x10 = -1;
             ride_sec = 0xFFFFFFFF;
+
+            ride_mode = -1;
+            tuning_mode = false;
+            boost_active = false;
+            hazard_active = false;
+            light_mode = 255;
+            light_hue = 255;
+            light_brightness = 255;
         }
     } _cache;
 
@@ -149,11 +177,12 @@ private:
         bool valid;
     } _last_needle;
 
-    // Needle Sweep Animation State
+    // Needle & Speed Sweep Animation State
     bool     _is_sweeping;
     uint8_t  _sweep_phase;
     float    _sweep_progress;
     float    _sweep_duty;
+    float    _sweep_speed;
     uint32_t _last_sweep_tick_ms;
 
     // VESC Bridge Display State
@@ -162,6 +191,13 @@ private:
     uint32_t _bridge_last_wifi_rx;
     uint32_t _bridge_last_wifi_tx;
     int8_t   _bridge_last_wifi_conn;
+
+    // 60 FPS Fluid Animation State
+    float    _anim_speed;
+    float    _anim_power;
+    float    _anim_duty;
+    uint32_t _anim_last_ms;
+    bool     _anim_inited;
 };
 
 extern DashboardRenderer Renderer;

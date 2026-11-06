@@ -31,6 +31,9 @@ public:
     float getFusedSocPct() const { return _fused_soc_pct; }
     float getRemainingWh() const { return _remaining_wh; }
     float getEstRangeKm() const { return _est_range_km; }
+    float getDynamicWhKm() const { return _dynamic_wh_km; }
+    float getOcvSoc(float v_pack);
+    void resetTrip();
 
 private:
     BatteryProfile _profiles[2];
@@ -47,7 +50,15 @@ private:
     float    _cycle_wh_accum;
     bool     _tracking_full_cycle;
 
-    float getOcvSoc(float v_pack);
+    // Rolling Dynamic Consumption Window (last ~2km)
+    static const int ROLLING_SECTORS = 10;
+    float    _sector_wh[ROLLING_SECTORS];
+    float    _sector_km[ROLLING_SECTORS];
+    int      _current_sector;
+    float    _dist_in_current_sector;
+    float    _wh_in_current_sector;
+    float    _dynamic_wh_km;
+
     void  loadDefaults();
 };
 

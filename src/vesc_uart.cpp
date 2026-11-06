@@ -1,7 +1,21 @@
 #include "vesc_uart.h"
 #include "settings_manager.h"
 #include "battery_manager.h"
+#include "fault_manager.h"
+#include "mode_manager.h"
 #include <math.h>
+
+#if !defined(NATIVE_SIMULATOR)
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+static SemaphoreHandle_t s_uartMutex = NULL;
+struct UartLock {
+    UartLock() { if (s_uartMutex) xSemaphoreTake(s_uartMutex, portMAX_DELAY); }
+    ~UartLock() { if (s_uartMutex) xSemaphoreGive(s_uartMutex); }
+};
+#else
+struct UartLock { UartLock() {} ~UartLock() {} };
+#endif
 
 VescHandler Vesc;
 
@@ -55,6 +69,7 @@ VescHandler::VescHandler()
       _sim_throttle(0.0f),
       _target_speed(0.0f),
       _target_rpm(0.0f),
+      _sim_fault_code(0),
       _last_poll_ms(0),
       _sim_last_update_ms(0),
       _bridge_active(false),
@@ -71,6 +86,11 @@ VescHandler::VescHandler()
 }
 
 void VescHandler::begin() {
+#if !defined(NATIVE_SIMULATOR)
+    if (s_uartMutex == NULL) {
+        s_uartMutex = xSemaphoreCreateMutex();
+    }
+#endif
     VESC_UART_PORT.setRxBufferSize(4096);
     VESC_UART_PORT.setTxBufferSize(4096);
     VESC_UART_PORT.begin(VESC_UART_BAUDRATE, SERIAL_8N1, VESC_UART_RX_PIN, VESC_UART_TX_PIN);
@@ -124,15 +144,26 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
         sim_t = 0.0f;
     }
 
+    // Check if vehicle is locked by boot PIN
+    if (ModeManager::instance().isLocked() || telemetry.is_locked) {
+        sim_t = 0.0f;
+    }
+
     _sim_throttle = sim_t;
     telemetry.throttle_pct = _sim_throttle;
 
-    // 1. Target Speed and Duty Cycle calculation
-    float max_possible_speed = 62.0f;
-    uint8_t speed_limit = Settings.get().max_speed_kmh;
-    if (speed_limit > 0 && max_possible_speed > (float)speed_limit) {
-        max_possible_speed = (float)speed_limit;
+    // Fault injection/simulation
+    if (_sim_fault_code != 0) {
+        telemetry.fault_code = _sim_fault_code;
+        FaultManager::instance().recordFault(_sim_fault_code, telemetry.voltage, telemetry.current_amps, telemetry.phase_amps, telemetry.temp_esc, telemetry.temp_motor, telemetry.uptime_sec);
+    } else {
+        telemetry.fault_code = 0;
+        FaultManager::instance().setActiveFault(0);
     }
+
+    // 1. Target Speed and Duty Cycle calculation
+    uint8_t speed_limit = Settings.get().max_speed_kmh;
+    float max_possible_speed = (speed_limit > 0) ? (float)speed_limit : 95.0f;
 
     _target_speed = (_sim_throttle / 100.0f) * max_possible_speed;
     telemetry.speed_kmh += (_target_speed - telemetry.speed_kmh) * (dt * 1.6f);
@@ -155,8 +186,8 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     telemetry.rpm = (telemetry.speed_kmh / 45.0f) * 130.0f * 35.0f; // ~4500 motor RPM
 
     // 3. Current & Phase Amps (Bafang Mid-Drive tuning)
-    uint8_t max_bat_a = Settings.get().max_battery_amps; // e.g. 28A
-    uint8_t max_pha_a = Settings.get().max_phase_amps;   // e.g. 55A
+    uint16_t max_bat_a = Settings.get().max_battery_amps; // e.g. 28A
+    uint16_t max_pha_a = Settings.get().max_phase_amps;   // e.g. 160A / up to 300A
 
     float target_bat_amps = (_sim_throttle / 100.0f) * (float)max_bat_a;
     telemetry.current_amps += (target_bat_amps - telemetry.current_amps) * (dt * 3.5f);
@@ -212,10 +243,18 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     if (telemetry.temp_esc > telemetry.stats.max_temp_esc) {
         telemetry.stats.max_temp_esc = telemetry.temp_esc;
     }
-    if (telemetry.speed_kmh > 1.2f) {
-        telemetry.stats.ride_time_sec += (uint32_t)(dt + 0.5f);
+    static float s_vesc_ride_time_accum = 0.0f;
+    if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
+        s_vesc_ride_time_accum = 0.0f;
     }
-    if (telemetry.stats.ride_time_sec > 4 && telemetry.trip_km > 0.05f) {
+    if (telemetry.speed_kmh > 1.2f) {
+        s_vesc_ride_time_accum += dt;
+        while (s_vesc_ride_time_accum >= 1.0f) {
+            telemetry.stats.ride_time_sec += 1;
+            s_vesc_ride_time_accum -= 1.0f;
+        }
+    }
+    if (telemetry.stats.ride_time_sec > 2 && telemetry.trip_km > 0.01f) {
         telemetry.stats.avg_speed_kmh = telemetry.trip_km / (telemetry.stats.ride_time_sec / 3600.0f);
     }
 
@@ -226,6 +265,7 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
 // Live Flipsky 75100 VESC UART Communication
 // ==============================================================================
 void VescHandler::pollRealVesc(DashTelemetry &telemetry) {
+    UartLock lock;
     uint32_t now = millis();
     static uint32_t last_update_time_ms = millis();
     float dt = (now - last_update_time_ms) / 1000.0f;
@@ -318,9 +358,31 @@ void VescHandler::pollRealVesc(DashTelemetry &telemetry) {
                       _last_adc2_v, _last_adc2_pct);
     }
 
-    // Update Battery State
+    // Update Battery State & Real-Time Statistics
     if (dt > 0.001f && dt < 1.0f) {
         Battery.update(telemetry, dt);
+
+        if (telemetry.current_amps > telemetry.stats.peak_current_amps) telemetry.stats.peak_current_amps = telemetry.current_amps;
+        if (telemetry.phase_amps > telemetry.stats.peak_phase_amps) telemetry.stats.peak_phase_amps = telemetry.phase_amps;
+        if (telemetry.power_watts > telemetry.stats.peak_power_watts) telemetry.stats.peak_power_watts = telemetry.power_watts;
+        if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
+        if (telemetry.temp_motor > telemetry.stats.max_temp_motor) telemetry.stats.max_temp_motor = telemetry.temp_motor;
+        if (telemetry.temp_esc > telemetry.stats.max_temp_esc) telemetry.stats.max_temp_esc = telemetry.temp_esc;
+
+        static float s_real_ride_time_accum = 0.0f;
+        if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
+            s_real_ride_time_accum = 0.0f;
+        }
+        if (telemetry.speed_kmh > 1.2f) {
+            s_real_ride_time_accum += dt;
+            while (s_real_ride_time_accum >= 1.0f) {
+                telemetry.stats.ride_time_sec += 1;
+                s_real_ride_time_accum -= 1.0f;
+            }
+        }
+        if (telemetry.stats.ride_time_sec > 2 && telemetry.trip_km > 0.01f) {
+            telemetry.stats.avg_speed_kmh = telemetry.trip_km / (telemetry.stats.ride_time_sec / 3600.0f);
+        }
     }
 }
 
@@ -398,7 +460,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         idx += 2; // skip batt_level
         int32_t ah_used = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
         idx += 4; // skip ah_charge_tot
-        int32_t wh_used = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
+        idx += 4; // skip wh_used
         idx += 4; // skip wh_charge_tot
         int32_t dist_m = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
 
@@ -418,54 +480,92 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         // Ground speed from VESC (injected by Port 4 LispBM wheel sensor override)
         telemetry.speed_kmh      = fabsf((speed_m_s / 1000.0f) * 3.6f);
         telemetry.trip_km        = fabsf((dist_m / 1000.0f) / 1000.0f);
+
+        // Fault code extraction (idx 51 in COMM_GET_VALUES_SETUP)
+        uint8_t fault_code = (payload_len > 51) ? payload[51] : 0;
+        telemetry.fault_code = fault_code;
+        if (fault_code != 0) {
+            FaultManager::instance().recordFault(fault_code, telemetry.voltage, telemetry.current_amps, telemetry.phase_amps, telemetry.temp_esc, telemetry.temp_motor, telemetry.uptime_sec);
+        } else {
+            FaultManager::instance().setActiveFault(0);
+        }
+
+        if (telemetry.is_locked || ModeManager::instance().isLocked()) {
+            telemetry.speed_kmh = 0.0f;
+            telemetry.current_amps = 0.0f;
+            telemetry.phase_amps = 0.0f;
+            telemetry.power_watts = 0.0f;
+            telemetry.throttle_pct = 0.0f;
+            telemetry.duty_cycle_pct = 0.0f;
+        }
         return true;
     }
 
     // 3. Fallback: Standard Telemetry Packet (COMM_GET_VALUES = 0x04)
-    if (cmd_id != 0x04) return false;
-    if (len < 60) return false;
+    if (cmd_id == 0x04) {
+        if (len < 60) return false;
 
-    // Unpack big-endian payload
-    int idx = 1;
-    int16_t temp_mos = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
-    int16_t temp_mot = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
-    int32_t current_mot = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
-    int32_t current_in  = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
-    idx += 8; // skip id, iq
-    int16_t duty_now = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
-    int32_t erpm = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
-    int16_t v_in = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
-    int32_t ah_used = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
-    idx += 4; // skip ah_charged
-    int32_t wh_used = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
-    idx += 4; // skip wh_charged
-    int32_t tachometer = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
+        // Unpack big-endian payload
+        int idx = 1;
+        int16_t temp_mos = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
+        int16_t temp_mot = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
+        int32_t current_mot = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
+        int32_t current_in  = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
+        idx += 8; // skip id, iq
+        int16_t duty_now = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
+        int32_t erpm = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
+        int16_t v_in = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
+        int32_t ah_used = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
+        idx += 4; // skip ah_charged
+        idx += 4; // skip wh_used
+        idx += 4; // skip wh_charged
+        int32_t tachometer = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
 
-    telemetry.temp_esc       = temp_mos / 10.0f;
-    telemetry.temp_motor     = temp_mot / 10.0f;
-    telemetry.phase_amps     = fabsf(current_mot / 100.0f);
-    telemetry.current_amps   = fabsf(current_in / 100.0f);
-    telemetry.duty_cycle_pct = fabsf((float)duty_now / 10.0f);
-    telemetry.voltage        = (v_in / 10.0f) + Settings.get().voltage_trim_v;
-    if (telemetry.voltage < 0.0f) telemetry.voltage = 0.0f;
-    telemetry.power_watts    = telemetry.voltage * telemetry.current_amps;
-    telemetry.amphours_used  = ah_used / 10000.0f;
+        telemetry.temp_esc       = temp_mos / 10.0f;
+        telemetry.temp_motor     = temp_mot / 10.0f;
+        telemetry.phase_amps     = fabsf(current_mot / 100.0f);
+        telemetry.current_amps   = fabsf(current_in / 100.0f);
+        telemetry.duty_cycle_pct = fabsf((float)duty_now / 10.0f);
+        telemetry.voltage        = (v_in / 10.0f) + Settings.get().voltage_trim_v;
+        if (telemetry.voltage < 0.0f) telemetry.voltage = 0.0f;
+        telemetry.power_watts    = telemetry.voltage * telemetry.current_amps;
+        telemetry.amphours_used  = ah_used / 10000.0f;
 
-    // Convert ERPM to Vehicle Speed (km/h)
-    int pole_pairs = Settings.get().motor_pole_pairs;
-    if (pole_pairs < 2) pole_pairs = 15;
-    float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
-    float gear_ratio = Settings.get().gear_ratio;
-    if (gear_ratio < 0.1f) gear_ratio = 1.0f;
+        // Convert ERPM to Vehicle Speed (km/h)
+        int pole_pairs = Settings.get().motor_pole_pairs;
+        if (pole_pairs < 2) pole_pairs = 15;
+        float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
+        float gear_ratio = Settings.get().gear_ratio;
+        if (gear_ratio < 0.1f) gear_ratio = 1.0f;
 
-    float mech_rpm = (float)erpm / (float)pole_pairs;
-    telemetry.rpm = fabsf(mech_rpm);
-    float wheel_rpm = mech_rpm / gear_ratio;
-    telemetry.speed_kmh = fabsf((wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f);
+        float mech_rpm = (float)erpm / (float)pole_pairs;
+        telemetry.rpm = fabsf(mech_rpm);
+        float wheel_rpm = mech_rpm / gear_ratio;
+        telemetry.speed_kmh = fabsf((wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f);
 
-    // Odometer & Trip from tachometer step counts
-    float revs = (float)tachometer / ((float)pole_pairs * 6.0f);
-    telemetry.trip_km = fabsf((revs * wheel_circ_m) / (gear_ratio * 1000.0f));
+        // Odometer & Trip from tachometer step counts
+        float revs = (float)tachometer / ((float)pole_pairs * 6.0f);
+        telemetry.trip_km = fabsf((revs * wheel_circ_m) / (gear_ratio * 1000.0f));
+
+        // Fault code extraction (idx 53 in COMM_GET_VALUES)
+        uint8_t fault_code = (payload_len > 53) ? payload[53] : 0;
+        telemetry.fault_code = fault_code;
+        if (fault_code != 0) {
+            FaultManager::instance().recordFault(fault_code, telemetry.voltage, telemetry.current_amps, telemetry.phase_amps, telemetry.temp_esc, telemetry.temp_motor, telemetry.uptime_sec);
+        } else {
+            FaultManager::instance().setActiveFault(0);
+        }
+
+        if (telemetry.is_locked || ModeManager::instance().isLocked()) {
+            telemetry.speed_kmh = 0.0f;
+            telemetry.current_amps = 0.0f;
+            telemetry.phase_amps = 0.0f;
+            telemetry.power_watts = 0.0f;
+            telemetry.throttle_pct = 0.0f;
+            telemetry.duty_cycle_pct = 0.0f;
+        }
+        return true;
+    }
 
     // 4. Motor Configuration Packet (COMM_GET_MCCONF = 0x0E / 14)
     if (cmd_id == 0x0E) {
@@ -473,9 +573,9 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
             int32_t ind = 5; // skip cmd_id (1) and MCCONF_SIGNATURE (4)
             ind += 4;        // skip pwm_mode, comm_mode, motor_type, sensor_mode
             float l_current_max    = buffer_get_float32_auto(payload, &ind);
-            float l_current_min    = buffer_get_float32_auto(payload, &ind);
+            (void)buffer_get_float32_auto(payload, &ind); // skip l_current_min
             float l_in_current_max = buffer_get_float32_auto(payload, &ind);
-            float l_in_current_min = buffer_get_float32_auto(payload, &ind);
+            (void)buffer_get_float32_auto(payload, &ind); // skip l_in_current_min
 
             if (l_current_max > 5.0f && l_current_max < 200.0f &&
                 l_in_current_max > 5.0f && l_in_current_max < 150.0f) {
@@ -500,7 +600,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         return true;
     }
 
-    return true;
+    return false;
 }
 
 void VescHandler::requestMcconf() {
@@ -683,4 +783,158 @@ void VescHandler::updateBridge() {
         updateWifiBridge();
     }
 }
+
+void VescHandler::sendTerminalCommand(const char *str) {
+#if !SIMULATION_MODE
+    size_t slen = strlen(str);
+    if (slen > 68) slen = 68;
+    uint8_t t_payload[70];
+    t_payload[0] = 0x14; // COMM_TERMINAL_CMD
+    memcpy(&t_payload[1], str, slen);
+    uint8_t t_packet[76];
+    t_packet[0] = 0x02;
+    t_packet[1] = (uint8_t)(slen + 1);
+    memcpy(&t_packet[2], t_payload, slen + 1);
+    uint16_t tcrc = crc16(t_payload, slen + 1);
+    t_packet[3 + slen] = (uint8_t)(tcrc >> 8);
+    t_packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
+    t_packet[5 + slen] = 0x03;
+    VESC_UART_PORT.write(t_packet, slen + 6);
+#endif
+}
+
+void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, float max_battery_amps, float max_phase_amps, float cutoff_start, float cutoff_end) {
+    UartLock lock;
+    // 1. Calculate ERPM from speed limit
+    int pole_pairs = Settings.get().motor_pole_pairs;
+    if (pole_pairs < 2) pole_pairs = 15;
+    float wheel_diam_in = Settings.get().wheel_diameter_in;
+    if (wheel_diam_in < 5.0f) wheel_diam_in = 26.0f;
+    float wheel_circ_m = (wheel_diam_in * 0.0254f) * M_PI;
+    float gear_ratio = Settings.get().gear_ratio;
+    if (gear_ratio < 0.1f) gear_ratio = 1.0f;
+
+    bool is_locked = (max_power_watts <= 0.0f && max_battery_amps <= 0.0f && max_phase_amps <= 0.0f);
+    float max_erpm = 100000.0f; // Default unlimited
+
+    if (is_locked) {
+        max_erpm = 0.0f;
+        max_power_watts = 0.0f;
+        max_battery_amps = 0.0f;
+        max_phase_amps = 0.0f;
+        max_speed_kmh = 0.0f;
+    } else {
+        if (max_speed_kmh > 0.0f && max_speed_kmh < 150.0f) {
+            float wheel_rpm = (max_speed_kmh * 1000.0f / 60.0f) / wheel_circ_m;
+            float mech_rpm = wheel_rpm * gear_ratio;
+            max_erpm = mech_rpm * (float)pole_pairs;
+            if (max_erpm < 500.0f) max_erpm = 500.0f;
+        }
+
+        // Sanity clamp power and currents for active driving
+        if (max_power_watts < 50.0f) max_power_watts = 50.0f;
+        if (max_power_watts > 40000.0f) max_power_watts = 40000.0f;
+        if (max_battery_amps < 2.0f) max_battery_amps = 2.0f;
+        if (max_battery_amps > 200.0f) max_battery_amps = 200.0f;
+        if (max_phase_amps < 5.0f) max_phase_amps = 5.0f;
+        if (max_phase_amps > 300.0f) max_phase_amps = 300.0f;
+
+        // Keep active UI settings in sync without uint8 overflow
+        Settings.get().max_speed_kmh    = (uint8_t)roundf(max_speed_kmh);
+        Settings.get().max_battery_amps = (uint16_t)roundf(max_battery_amps);
+        Settings.get().max_phase_amps   = (uint16_t)roundf(max_phase_amps);
+    }
+
+    Serial.printf("[VESC_CMD] Dynamic Limits -> Spd: %.1f km/h (ERPM: %.0f) | Pwr: %.0f W | Bat: %.1f A | Phase: %.1f A\n",
+                  max_speed_kmh, max_erpm, max_power_watts, max_battery_amps, max_phase_amps);
+
+#if !SIMULATION_MODE
+    // 2. Transmit COMM_SET_MCCONF_TEMP (Command ID 0x3E / 62)
+    // Structure:
+    // [0] = 0x3E
+    // [1..4] = current_min (float32 auto)
+    // [5..8] = current_max (float32 auto)
+    // [9..12] = min_erpm (float32 auto)
+    // [13..16] = max_erpm (float32 auto)
+    // [17..20] = in_current_min (float32 auto)
+    // [21..24] = in_current_max (float32 auto)
+    // [25..26] = duty_min (int16 / 1000)
+    // [27..28] = duty_max (int16 / 1000)
+    // [29..32] = watt_min (float32 auto)
+    // [33..36] = watt_max (float32 auto)
+    uint8_t payload[37];
+    int32_t p_idx = 0;
+    payload[p_idx++] = 0x3E;
+
+    auto append_f32 = [](uint8_t *b, float val, int32_t *idx) {
+        union { float f; uint32_t u; } u;
+        u.f = val;
+        b[(*idx)++] = (uint8_t)(u.u >> 24);
+        b[(*idx)++] = (uint8_t)(u.u >> 16);
+        b[(*idx)++] = (uint8_t)(u.u >> 8);
+        b[(*idx)++] = (uint8_t)(u.u);
+    };
+    auto append_i16 = [](uint8_t *b, int16_t val, int32_t *idx) {
+        b[(*idx)++] = (uint8_t)(val >> 8);
+        b[(*idx)++] = (uint8_t)(val);
+    };
+
+    append_f32(payload, -max_phase_amps, &p_idx);
+    append_f32(payload, max_phase_amps, &p_idx);
+    append_f32(payload, -max_erpm, &p_idx);
+    append_f32(payload, max_erpm, &p_idx);
+    append_f32(payload, -max_battery_amps, &p_idx);
+    append_f32(payload, max_battery_amps, &p_idx);
+    append_i16(payload, 0, &p_idx);        // duty_min: 0.00
+    append_i16(payload, 950, &p_idx);      // duty_max: 0.95
+    append_f32(payload, -max_power_watts, &p_idx);
+    append_f32(payload, max_power_watts, &p_idx);
+
+    // Short packet: 0x02, len, payload..., crc_hi, crc_lo, 0x03
+    uint8_t packet[45];
+    packet[0] = 0x02;
+    packet[1] = (uint8_t)p_idx;
+    memcpy(&packet[2], payload, p_idx);
+    uint16_t crc = crc16(payload, p_idx);
+    packet[2 + p_idx] = (uint8_t)(crc >> 8);
+    packet[3 + p_idx] = (uint8_t)(crc & 0xFF);
+    packet[4 + p_idx] = 0x03;
+    VESC_UART_PORT.write(packet, p_idx + 5);
+
+    // Also forward to Ubox secondary VESC via CAN (CAN ID 1)
+    uint8_t can_payload[39];
+    can_payload[0] = 0x22; // COMM_FORWARD_CAN
+    can_payload[1] = 0x01; // CAN ID 1
+    memcpy(&can_payload[2], payload, p_idx);
+    uint8_t can_packet[47];
+    can_packet[0] = 0x02;
+    can_packet[1] = (uint8_t)(p_idx + 2);
+    memcpy(&can_packet[2], can_payload, p_idx + 2);
+    uint16_t can_crc = crc16(can_payload, p_idx + 2);
+    can_packet[4 + p_idx] = (uint8_t)(can_crc >> 8);
+    can_packet[5 + p_idx] = (uint8_t)(can_crc & 0xFF);
+    can_packet[6 + p_idx] = 0x03;
+    VESC_UART_PORT.write(can_packet, p_idx + 7);
+
+    // 3. Fallback / Universal Terminal Commands
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "conf_set l_current_max %.1f", max_phase_amps);
+    sendTerminalCommand(cmd);
+    snprintf(cmd, sizeof(cmd), "conf_set l_in_current_max %.1f", max_battery_amps);
+    sendTerminalCommand(cmd);
+    snprintf(cmd, sizeof(cmd), "conf_set l_watt_max %.1f", max_power_watts);
+    sendTerminalCommand(cmd);
+    snprintf(cmd, sizeof(cmd), "conf_set l_max_erpm %.0f", max_erpm);
+    sendTerminalCommand(cmd);
+
+    // Battery cutoff voltages if configured
+    if (cutoff_start > 20.0f && cutoff_end > 20.0f) {
+        snprintf(cmd, sizeof(cmd), "conf_set l_battery_cut_start %.1f", cutoff_start);
+        sendTerminalCommand(cmd);
+        snprintf(cmd, sizeof(cmd), "conf_set l_battery_cut_end %.1f", cutoff_end);
+        sendTerminalCommand(cmd);
+    }
+#endif
+}
+
 

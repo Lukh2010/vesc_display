@@ -33,12 +33,9 @@ public:
 
     // Simulated Touch Interface
     bool getTouch(int16_t *x, int16_t *y) {
-        if (_sim_touching) {
-            if (x) *x = _sim_touch_x;
-            if (y) *y = _sim_touch_y;
-            return true;
-        }
-        return false;
+        if (x) *x = _sim_touch_x;
+        if (y) *y = _sim_touch_y;
+        return _sim_touching;
     }
 
     void setSimTouch(bool touching, int16_t x = 0, int16_t y = 0) {

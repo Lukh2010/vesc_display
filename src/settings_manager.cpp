@@ -7,7 +7,7 @@ SettingsManager::SettingsManager() {
 }
 
 void SettingsManager::loadDefaults() {
-    _settings.dash_style             = STYLE_ANALOG_DIAL;
+    _settings.dash_style             = STYLE_HYPER_35KW;
     _settings.brightness_pct         = 90;
     _settings.max_battery_amps       = 25;
     _settings.max_phase_amps         = 45;
@@ -20,6 +20,8 @@ void SettingsManager::loadDefaults() {
     _settings.active_battery_profile = 0;
     _settings.voltage_trim_v         = -0.3f;
     _settings.throttle_adc_channel   = 0; // Default to ADC1 (standard VESC throttle)
+    _settings.pin_lock_enabled       = true; // Handystyle 4-digit PIN lock on startup
+    strncpy(_settings.pin_code, "1234", sizeof(_settings.pin_code));
 }
 
 void SettingsManager::begin() {
@@ -35,8 +37,8 @@ void SettingsManager::begin() {
     } else {
         _settings.dash_style             = _prefs.getUChar("style", STYLE_ANALOG_DIAL);
         _settings.brightness_pct         = _prefs.getUChar("bright", 90);
-        _settings.max_battery_amps       = _prefs.getUChar("bat_a", 28);
-        _settings.max_phase_amps         = _prefs.getUChar("pha_a", 55);
+        _settings.max_battery_amps       = _prefs.getUShort("bat_a", 28);
+        _settings.max_phase_amps         = _prefs.getUShort("pha_a", 55);
         _settings.field_weak_amps        = _prefs.getUChar("fw_a", 10);
         _settings.max_speed_kmh          = _prefs.getUChar("spd_lim", 0);
         _settings.throttle_ramp_sec      = _prefs.getFloat("t_ramp", 0.2f);
@@ -46,6 +48,11 @@ void SettingsManager::begin() {
         _settings.active_battery_profile = _prefs.getUChar("bat_prof", 0);
         _settings.voltage_trim_v         = _prefs.getFloat("v_trim", -0.3f);
         _settings.throttle_adc_channel   = _prefs.getUChar("adc_ch", 0);
+        _settings.pin_lock_enabled       = _prefs.getBool("pin_en", true);
+        _prefs.getString("pin_code", _settings.pin_code, sizeof(_settings.pin_code));
+        if (strlen(_settings.pin_code) != 4) {
+            strncpy(_settings.pin_code, "1234", sizeof(_settings.pin_code));
+        }
 
         // One-time automatic migration: fix boards that had adc_ch set to 1 by previous buggy default
         if (!_prefs.getBool("adc_v2_fixed", false)) {
@@ -62,8 +69,8 @@ void SettingsManager::begin() {
 void SettingsManager::save() {
     _prefs.putUChar("style", _settings.dash_style);
     _prefs.putUChar("bright", _settings.brightness_pct);
-    _prefs.putUChar("bat_a", _settings.max_battery_amps);
-    _prefs.putUChar("pha_a", _settings.max_phase_amps);
+    _prefs.putUShort("bat_a", _settings.max_battery_amps);
+    _prefs.putUShort("pha_a", _settings.max_phase_amps);
     _prefs.putUChar("fw_a", _settings.field_weak_amps);
     _prefs.putUChar("spd_lim", _settings.max_speed_kmh);
     _prefs.putFloat("t_ramp", _settings.throttle_ramp_sec);
@@ -73,6 +80,8 @@ void SettingsManager::save() {
     _prefs.putUChar("bat_prof", _settings.active_battery_profile);
     _prefs.putFloat("v_trim", _settings.voltage_trim_v);
     _prefs.putUChar("adc_ch", _settings.throttle_adc_channel);
+    _prefs.putBool("pin_en", _settings.pin_lock_enabled);
+    _prefs.putString("pin_code", _settings.pin_code);
 }
 
 void SettingsManager::resetToDefaults() {

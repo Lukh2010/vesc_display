@@ -1,4 +1,5 @@
 #include "battery_manager.h"
+#include "mode_manager.h"
 #include <string.h>
 
 BatteryManager Battery;
@@ -12,7 +13,15 @@ BatteryManager::BatteryManager()
       _is_resting(false),
       _cycle_start_v(54.2f),
       _cycle_wh_accum(0.0f),
-      _tracking_full_cycle(false) {
+      _tracking_full_cycle(false),
+      _current_sector(0),
+      _dist_in_current_sector(0.0f),
+      _wh_in_current_sector(0.0f),
+      _dynamic_wh_km(22.0f) {
+    for (int i = 0; i < ROLLING_SECTORS; i++) {
+        _sector_wh[i] = 0.0f;
+        _sector_km[i] = 0.0f;
+    }
     loadDefaults();
 }
 
@@ -98,19 +107,26 @@ void BatteryManager::resetProfileLearning(uint8_t id) {
     saveProfiles();
 }
 
-// 14S Li-Ion (52V nominal) Open-Circuit Voltage table (58.8V max to 43.4V min)
+// Multi-chemistry / Multi-S (10S to 24S) Li-Ion Open-Circuit Voltage calculation
 float BatteryManager::getOcvSoc(float v_pack) {
-    if (v_pack >= 58.0f) return 100.0f;
-    if (v_pack >= 56.5f) return 90.0f + (v_pack - 56.5f) * (10.0f / 1.5f);
-    if (v_pack >= 55.0f) return 80.0f + (v_pack - 55.0f) * (10.0f / 1.5f);
-    if (v_pack >= 53.6f) return 70.0f + (v_pack - 53.6f) * (10.0f / 1.4f);
-    if (v_pack >= 52.4f) return 60.0f + (v_pack - 52.4f) * (10.0f / 1.2f);
-    if (v_pack >= 51.2f) return 50.0f + (v_pack - 51.2f) * (10.0f / 1.2f);
-    if (v_pack >= 49.8f) return 40.0f + (v_pack - 49.8f) * (10.0f / 1.4f);
-    if (v_pack >= 48.2f) return 30.0f + (v_pack - 48.2f) * (10.0f / 1.6f);
-    if (v_pack >= 46.8f) return 20.0f + (v_pack - 46.8f) * (10.0f / 1.4f);
-    if (v_pack >= 45.0f) return 10.0f + (v_pack - 45.0f) * (10.0f / 1.8f);
-    if (v_pack >= 43.4f) return 0.0f  + (v_pack - 43.4f) * (10.0f / 1.6f);
+    if (v_pack < 30.0f) return 0.0f;
+    uint8_t cfg_cells = ModeManager::instance().getConfig().battery_cells;
+    int s_count = (cfg_cells >= 10 && cfg_cells <= 24) ? cfg_cells : (int)roundf(v_pack / 3.75f);
+    if (s_count < 10) s_count = 10;
+    if (s_count > 24) s_count = 24;
+
+    float cell_v = v_pack / (float)s_count;
+    if (cell_v >= 4.15f) return 100.0f;
+    if (cell_v >= 4.05f) return 90.0f + (cell_v - 4.05f) * 100.0f;
+    if (cell_v >= 3.93f) return 80.0f + (cell_v - 3.93f) * 83.3f;
+    if (cell_v >= 3.82f) return 70.0f + (cell_v - 3.82f) * 90.9f;
+    if (cell_v >= 3.73f) return 60.0f + (cell_v - 3.73f) * 111.1f;
+    if (cell_v >= 3.65f) return 50.0f + (cell_v - 3.65f) * 125.0f;
+    if (cell_v >= 3.56f) return 40.0f + (cell_v - 3.56f) * 111.1f;
+    if (cell_v >= 3.44f) return 30.0f + (cell_v - 3.44f) * 83.3f;
+    if (cell_v >= 3.32f) return 20.0f + (cell_v - 3.32f) * 83.3f;
+    if (cell_v >= 3.20f) return 10.0f + (cell_v - 3.20f) * 83.3f;
+    if (cell_v >= 3.00f) return (cell_v - 3.00f) * 50.0f;
     return 0.0f;
 }
 
@@ -118,9 +134,9 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
     uint32_t now = millis();
     BatteryProfile &prof = _profiles[_active_profile_id];
 
-    // Check if battery voltage is within a plausible 14S Li-Ion window (41.0V - 62.0V)
-    // When powered by low-voltage Lab PSU (e.g. 22V-28V) or disconnected, suppress battery stats
-    if (telemetry.voltage < 41.0f || telemetry.voltage > 62.0f) {
+    // Check if battery voltage is within a plausible pack window (30.0V - 105.0V for 10S to 24S)
+    // When powered by very low-voltage Lab PSU or disconnected, suppress battery stats
+    if (telemetry.voltage < 30.0f || telemetry.voltage > 105.0f) {
         telemetry.battery_pct = -1.0f;
         telemetry.remaining_wh = -1.0f;
         telemetry.est_range_km = -1.0f;
@@ -170,18 +186,69 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
     if (_fused_soc_pct > 100.0f) _fused_soc_pct = 100.0f;
     if (_fused_soc_pct < 0.0f)   _fused_soc_pct = 0.0f;
 
-    // 5. Projected Remaining Range (km)
-    // Energy efficiency Wh/km:
+    // 5. Projected Dynamic Remaining Range (km) via rolling distance window
+    float dist_delta = (telemetry.speed_kmh / 3600.0f) * dt;
+    if (dist_delta > 0.0f) {
+        _dist_in_current_sector += dist_delta;
+        if (delta_wh > 0.0f) {
+            _wh_in_current_sector += delta_wh;
+        }
+
+        // When 200m accumulated in current sector, advance bucket
+        if (_dist_in_current_sector >= 0.2f) {
+            _sector_wh[_current_sector] = _wh_in_current_sector;
+            _sector_km[_current_sector] = _dist_in_current_sector;
+            _current_sector = (_current_sector + 1) % ROLLING_SECTORS;
+            _dist_in_current_sector = 0.0f;
+            _wh_in_current_sector = 0.0f;
+        }
+    }
+
+    // Sum rolling window (up to 2km)
+    float rolling_wh_sum = _wh_in_current_sector;
+    float rolling_km_sum = _dist_in_current_sector;
+    for (int i = 0; i < ROLLING_SECTORS; i++) {
+        rolling_wh_sum += _sector_wh[i];
+        rolling_km_sum += _sector_km[i];
+    }
+
+    // Calculate dynamic Wh/km:
+    if (rolling_km_sum >= 0.3f && rolling_wh_sum > 0.5f) {
+        float instant_eff = rolling_wh_sum / rolling_km_sum;
+        if (instant_eff < 10.0f) instant_eff = 10.0f;
+        if (instant_eff > 140.0f) instant_eff = 140.0f;
+        // Smooth convergence
+        _dynamic_wh_km += (instant_eff - _dynamic_wh_km) * (dt * 0.25f);
+    } else if (telemetry.trip_km > 0.4f && telemetry.stats.trip_wh > 1.0f) {
+        _dynamic_wh_km = telemetry.stats.trip_wh / telemetry.trip_km;
+    } else {
+        _dynamic_wh_km = 22.0f;
+    }
+
     if (telemetry.trip_km > 0.4f && telemetry.stats.trip_wh > 1.0f) {
         telemetry.stats.trip_wh_km = telemetry.stats.trip_wh / telemetry.trip_km;
     } else {
-        telemetry.stats.trip_wh_km = 22.0f; // Typical BBS mid-drive consumption
+        telemetry.stats.trip_wh_km = 22.0f;
     }
 
-    float eff = telemetry.stats.trip_wh_km;
-    if (eff < 14.0f) eff = 14.0f; // Minimum realistic floor
+    telemetry.stats.dynamic_wh_km = _dynamic_wh_km;
+    telemetry.dynamic_wh_km = _dynamic_wh_km;
+
+    float eff = _dynamic_wh_km;
+    if (eff < 10.0f) eff = 10.0f;
     _est_range_km = _remaining_wh / eff;
-    if (_est_range_km > 150.0f) _est_range_km = 150.0f;
+    if (_est_range_km > 180.0f) _est_range_km = 180.0f;
+    if (_est_range_km < 0.0f)   _est_range_km = 0.0f;
+
+    // Track min and max voltage under load
+    if (telemetry.voltage > 20.0f) {
+        if (telemetry.stats.min_voltage == 0.0f || telemetry.voltage < telemetry.stats.min_voltage) {
+            telemetry.stats.min_voltage = telemetry.voltage;
+        }
+        if (telemetry.voltage > telemetry.stats.max_voltage) {
+            telemetry.stats.max_voltage = telemetry.voltage;
+        }
+    }
 
     // 6. Self-Learning Battery Degradation / Full-Cycle Detection
     if (telemetry.voltage > 57.5f) {
@@ -213,4 +280,15 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
     telemetry.remaining_wh       = _remaining_wh;
     telemetry.battery_health_soh = prof.health_soh_pct;
     telemetry.est_range_km       = _est_range_km;
+}
+
+void BatteryManager::resetTrip() {
+    _current_sector = 0;
+    _dist_in_current_sector = 0.0f;
+    _wh_in_current_sector = 0.0f;
+    for (int i = 0; i < ROLLING_SECTORS; i++) {
+        _sector_wh[i] = 0.0f;
+        _sector_km[i] = 0.0f;
+    }
+    _dynamic_wh_km = 22.0f;
 }

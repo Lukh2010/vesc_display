@@ -7,6 +7,9 @@
 #include "battery_manager.h"
 #include "buttons.h"
 #include "vesc_uart.h"
+#include "mode_manager.h"
+#include "captive_portal.h"
+#include "fault_manager.h"
 
 // Active Telemetry State
 static DashTelemetry telemetry;
@@ -62,9 +65,19 @@ void setup() {
     telemetry.screen              = SCREEN_RIDE_DASH;
     telemetry.vesc_connected      = false;
     telemetry.uptime_sec          = 0;
+    telemetry.ride_mode           = MODE_ECO;
+    telemetry.tuning_mode         = false; // Requirement 1: Boot state is ALWAYS stealth / gedrosselt!
+    telemetry.is_locked           = Settings.get().pin_lock_enabled;
+    telemetry.pin_entry[0]        = '\0';
+    telemetry.pin_error           = false;
+    telemetry.pin_error_end_ms    = 0;
+    telemetry.fault_code          = 0;
+    telemetry.fault_start_ms      = 0;
+    telemetry.dynamic_wh_km       = Battery.getDynamicWhKm();
 
     // 5. Initialize Touch and Input Handling (GT911 I2C SDA=8, SCL=9)
     Buttons.begin();
+    Buttons.setTuningMode(false);
     Serial.println("[OK] Touch & Input Handler initialized (GT911 on I2C SDA=8, SCL=9)");
 
     // 6. Initialize ST7262 RGB Display and Backlight (via CH422G Expander)
@@ -79,7 +92,7 @@ void setup() {
 
     // 7. Initialize Renderer
     Renderer.begin(&Display);
-    if (Settings.get().dash_style == STYLE_ANALOG_DIAL) {
+    if (!Settings.get().pin_lock_enabled) {
         Renderer.triggerNeedleSweep();
     }
 
@@ -92,6 +105,24 @@ void setup() {
     Serial.println("[MODE] Live VESC UART Mode Active (TX: GPIO 43, RX: GPIO 44).");
 #endif
 
+    // 9. Initialize Mode Profiles & Send Boot Stealth Limits to VESC (Requirement 1 & 4)
+    ModeManager::instance().begin();
+    if (Settings.get().pin_lock_enabled) {
+        ModeManager::instance().setLocked(true);
+        Serial.println("[SECURITY] Boot PIN-Lockscreen ACTIVE. VESC locked at 0A.");
+    } else {
+        ModeManager::instance().setLocked(false);
+    }
+    Serial.println("[OK] Mode Manager initialized: Stealth limits dispatched to VESC on boot.");
+
+    // 9b. Initialize VESC Fault Blackbox Manager
+    FaultManager::instance().begin();
+    Serial.printf("[OK] Fault Manager initialized (%d logged faults).\n", FaultManager::instance().getFaultCount());
+
+    // 10. Start Dual-Core SoftAP, DNS Server & WebServer on Core 0 (Requirement 4 & 5)
+    CaptivePortal::instance().begin();
+    Serial.println("[OK] Core 0 Captive Portal active (SSID: 'VESC-HyperDash', IP: 192.168.4.1).");
+
     Serial.println("[OK] Setup complete. Entering main render loop.");
 }
 
@@ -101,9 +132,243 @@ void loop() {
     static uint32_t boot_ms = millis();
     uint32_t now = millis();
 
+    // Sync external tuning mode or ride mode changes from Captive Portal web UI (Core 0 -> Core 1)
+    if (telemetry.tuning_mode != ModeManager::instance().isTuningMode()) {
+        telemetry.tuning_mode = ModeManager::instance().isTuningMode();
+        Buttons.setTuningMode(telemetry.tuning_mode);
+        telemetry.mode_badge_until = now + 2500;
+        Renderer.markScreenDirty();
+    }
+    if (telemetry.ride_mode != ModeManager::instance().getRideMode()) {
+        telemetry.ride_mode = ModeManager::instance().getRideMode();
+        telemetry.mode_badge_until = now + 2500;
+        Renderer.markScreenDirty();
+    }
+
+    // Auto-unlock if PIN lock was disabled via Captive Portal
+    if (!Settings.get().pin_lock_enabled && telemetry.is_locked) {
+        telemetry.is_locked = false;
+        ModeManager::instance().setLocked(false);
+        Renderer.markScreenDirty();
+        Renderer.invalidateCache();
+        Renderer.triggerNeedleSweep();
+    }
+    CaptivePortal::instance().updateTelemetry(telemetry);
+
     // 1. Process Touch & Button Navigation Inputs
+    Buttons.setActiveScreen(telemetry.screen);
     Buttons.update();
-    NavAction nav = Buttons.getNavAction();
+
+    // PIN Lockscreen Input Processing (when locked)
+    if (telemetry.is_locked) {
+        if (telemetry.pin_error) {
+            if (millis() >= telemetry.pin_error_end_ms) {
+                telemetry.pin_error = false;
+                Renderer.markScreenDirty();
+            } else {
+                // Debounce / spam immunity: Discard any taps while error indicator is showing
+                int16_t dummy_x, dummy_y;
+                Buttons.getLastTap(&dummy_x, &dummy_y);
+            }
+        }
+
+        int16_t tx = -1, ty = -1;
+        if (!telemetry.pin_error && Buttons.getLastTap(&tx, &ty)) {
+            // Continuous column mapping without dead zones between buttons
+            int c = -1;
+            if (tx >= 150 && tx < 330) c = 0;
+            else if (tx >= 330 && tx < 470) c = 1;
+            else if (tx >= 470 && tx <= 650) c = 2;
+
+            // Continuous row mapping without dead zones between rows
+            int r = -1;
+            if (ty >= 140 && ty < 227) r = 0;
+            else if (ty >= 227 && ty < 297) r = 1;
+            else if (ty >= 297 && ty < 367) r = 2;
+            else if (ty >= 367 && ty <= 445) r = 3;
+
+            if (r >= 0 && c >= 0) {
+                static const char KEY_CHARS[4][3] = {
+                    { '1', '2', '3' },
+                    { '4', '5', '6' },
+                    { '7', '8', '9' },
+                    { '<', '0', '#' }
+                };
+                char key = KEY_CHARS[r][c];
+                int len = strlen(telemetry.pin_entry);
+
+                if (key == '<') { // DEL
+                    if (len > 0) {
+                        telemetry.pin_entry[len - 1] = '\0';
+                        telemetry.pin_error = false;
+                        Renderer.markScreenDirty();
+                    }
+                } else if (key == '#') { // OK / enter
+                    if (strcmp(telemetry.pin_entry, Settings.get().pin_code) == 0) {
+                        telemetry.is_locked = false;
+                        telemetry.pin_error = false;
+                        telemetry.pin_entry[0] = '\0';
+                        ModeManager::instance().setLocked(false);
+                        Renderer.markScreenDirty();
+                        Renderer.invalidateCache();
+                        Renderer.triggerNeedleSweep();
+                        Serial.println("[PIN] System UNLOCKED with valid PIN code!");
+                    } else {
+                        telemetry.pin_error = true;
+                        telemetry.pin_error_end_ms = millis() + 800;
+                        telemetry.pin_entry[0] = '\0';
+                        Renderer.markScreenDirty();
+                        Serial.println("[PIN] Invalid PIN code entered!");
+                    }
+                } else if (key >= '0' && key <= '9') {
+                    if (len < 4) {
+                        telemetry.pin_entry[len] = key;
+                        telemetry.pin_entry[len + 1] = '\0';
+                        telemetry.pin_error = false;
+                        len++;
+                        Renderer.markScreenDirty();
+
+                        if (len == 4) {
+                            if (strcmp(telemetry.pin_entry, Settings.get().pin_code) == 0) {
+                                telemetry.is_locked = false;
+                                telemetry.pin_error = false;
+                                telemetry.pin_entry[0] = '\0';
+                                ModeManager::instance().setLocked(false);
+                                Renderer.markScreenDirty();
+                                Renderer.invalidateCache();
+                                Renderer.triggerNeedleSweep();
+                                Serial.println("[PIN] System UNLOCKED automatically upon 4 digits!");
+                            } else {
+                                telemetry.pin_error = true;
+                                telemetry.pin_error_end_ms = millis() + 800;
+                                telemetry.pin_entry[0] = '\0';
+                                Renderer.markScreenDirty();
+                                Serial.println("[PIN] Invalid PIN code entered!");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!telemetry.is_locked && Buttons.isTouching() && telemetry.screen == SCREEN_LIGHTS) {
+        int16_t tx = Buttons.getTouchX();
+        int16_t ty = Buttons.getTouchY();
+        int cx = 220, cy = 230;
+        float dist = sqrtf((float)((tx - cx)*(tx - cx) + (ty - cy)*(ty - cy)));
+        if (dist >= 75.0f && dist <= 138.0f) {
+            float a = atan2f((float)(ty - cy), (float)(tx - cx)) * 180.0f / 3.14159265f;
+            if (a < 0) a += 360.0f;
+            telemetry.light_hue = (uint8_t)(a * 255.0f / 360.0f);
+            Renderer.markScreenDirty();
+        } else if (dist < 72.0f) {
+            static uint32_t last_disc_toggle_ms = 0;
+            if (now - last_disc_toggle_ms > 350) {
+                last_disc_toggle_ms = now;
+                telemetry.lights_enabled = !telemetry.lights_enabled;
+                Renderer.markScreenDirty();
+            }
+        } else if (tx >= 675 && tx <= 765 && ty >= 12 && ty <= 55) {
+            static uint32_t last_sw_toggle_ms = 0;
+            if (now - last_sw_toggle_ms > 350) {
+                last_sw_toggle_ms = now;
+                telemetry.lights_enabled = !telemetry.lights_enabled;
+                Renderer.markScreenDirty();
+            }
+        } else if (tx >= 405 && tx <= 775 && ty >= 60 && ty <= 245) {
+            int col = (tx - 415) / 120;
+            int row = (ty - 65) / 56;
+            if (col >= 0 && col < 3 && row >= 0 && row < 3) {
+                uint8_t m = row * 3 + col;
+                if (telemetry.light_mode != m) {
+                    telemetry.light_mode = m;
+                    Renderer.markScreenDirty();
+                }
+            }
+        } else if (tx >= 405 && tx <= 775 && ty >= 265 && ty <= 315) {
+            float bPct = (float)(tx - 415) / 345.0f;
+            if (bPct < 0.0f) bPct = 0.0f;
+            if (bPct > 1.0f) bPct = 1.0f;
+            telemetry.light_brightness = (uint8_t)(bPct * 255.0f);
+            Renderer.markScreenDirty();
+        }
+    }
+
+    // STATS / RT Graphs Screen: Interactive Backlight adjustment
+    if (!telemetry.is_locked && telemetry.screen == SCREEN_RT_GRAPHS) {
+        static bool s_backlight_dragging = false;
+        if (Buttons.isTouching()) {
+            int16_t tx = Buttons.getTouchX();
+            int16_t ty = Buttons.getTouchY();
+            if (ty >= 360 && ty <= 465 && tx >= 270 && tx <= 560) {
+                s_backlight_dragging = true;
+                float pct = (float)(tx - 280) / 270.0f;
+                int val = (int)(20.0f + pct * 80.0f + 0.5f);
+                if (val < 20) val = 20;
+                if (val > 100) val = 100;
+                DashSettings &s = Settings.get();
+                if (s.brightness_pct != val) {
+                    s.brightness_pct = val;
+                    Display.setBrightness((uint8_t)map(s.brightness_pct, 0, 100, 0, 255));
+                    Renderer.markScreenDirty();
+                }
+            }
+        } else {
+            if (s_backlight_dragging) {
+                s_backlight_dragging = false;
+                Settings.save();
+                Serial.printf("[BRIGHTNESS] Drag finished, saved %d%% to flash\n", Settings.get().brightness_pct);
+            }
+        }
+
+        int16_t tx = -1, ty = -1;
+        if (Buttons.getLastTap(&tx, &ty)) {
+            if (ty >= 360 && ty <= 465) {
+                DashSettings &s = Settings.get();
+                bool changed = false;
+                if (tx >= 195 && tx <= 275) { // Button [-]
+                    if (s.brightness_pct > 20) {
+                        s.brightness_pct = (s.brightness_pct <= 30) ? 20 : (s.brightness_pct - 10);
+                        changed = true;
+                    }
+                } else if (tx >= 556 && tx <= 628) { // Button [+]
+                    if (s.brightness_pct < 100) {
+                        s.brightness_pct = (s.brightness_pct >= 90) ? 100 : (s.brightness_pct + 10);
+                        changed = true;
+                    }
+                } else if (tx >= 276 && tx <= 555) { // Tap on slider
+                    float pct = (float)(tx - 280) / 270.0f;
+                    int val = (int)(20.0f + pct * 80.0f + 0.5f);
+                    if (val < 20) val = 20;
+                    if (val > 100) val = 100;
+                    if (s.brightness_pct != val) {
+                        s.brightness_pct = val;
+                        changed = true;
+                    }
+                } else if (tx >= 630 && tx <= 702) { // Button [25%]
+                    if (s.brightness_pct != 25) {
+                        s.brightness_pct = 25;
+                        changed = true;
+                    }
+                } else if (tx >= 705 && tx <= 778) { // Button [100%]
+                    if (s.brightness_pct != 100) {
+                        s.brightness_pct = 100;
+                        changed = true;
+                    }
+                }
+
+                if (changed) {
+                    Settings.save();
+                    Display.setBrightness((uint8_t)map(s.brightness_pct, 0, 100, 0, 255));
+                    Renderer.markScreenDirty();
+                    Serial.printf("[BRIGHTNESS] Adjusted to %d%%\n", s.brightness_pct);
+                }
+            }
+        }
+    }
+
+    NavAction nav = telemetry.is_locked ? NAV_NONE : Buttons.getNavAction();
 
     if (nav != NAV_NONE) {
         if (Vesc.isBridgeActive()) {
@@ -118,26 +383,42 @@ void loop() {
             Renderer.handleMenuNav(nav, telemetry);
         } else {
             switch (nav) {
-                case NAV_BTN1_SHORT: // Previous Screen (Swipe Right / Left Tap): Ride Dash <-> Perf Stats <-> Energy Stats
+                case NAV_BTN1_SHORT: // Previous Screen (Swipe Right / Left Tap)
                     {
-                        int cur = (int)telemetry.screen;
-                        telemetry.screen = (DashboardScreen)((cur - 1 + 3) % 3);
-                        if (telemetry.screen == SCREEN_RIDE_DASH && Settings.get().dash_style == STYLE_ANALOG_DIAL) {
-                            Renderer.triggerNeedleSweep();
+                        if (telemetry.screen == SCREEN_RT_GRAPHS) {
+                            telemetry.screen = SCREEN_RIDE_DASH;
+                        } else {
+#if ENABLE_LIGHTS_SCREEN
+                            int cur = (int)telemetry.screen;
+                            telemetry.screen = (DashboardScreen)((cur - 1 + 3) % 3);
+#else
+                            telemetry.screen = (telemetry.screen == SCREEN_RIDE_DASH) ? SCREEN_RT_GRAPHS : SCREEN_RIDE_DASH;
+#endif
                         }
                         Serial.printf("[NAV] Switched to Screen ID %d (Prev)\n", (int)telemetry.screen);
                     }
                     break;
 
-                case NAV_BTN2_SHORT: // Next Screen (Swipe Left / Right Tap): Ride Dash -> Energy Stats -> Perf Stats -> Ride Dash
+                case NAV_BTN2_SHORT: // Next Screen (Swipe Left / Right Tap)
                     {
-                        int cur = (int)telemetry.screen;
-                        telemetry.screen = (DashboardScreen)((cur + 1) % 3);
-                        if (telemetry.screen == SCREEN_RIDE_DASH && Settings.get().dash_style == STYLE_ANALOG_DIAL) {
-                            Renderer.triggerNeedleSweep();
+                        if (telemetry.screen == SCREEN_RT_GRAPHS) {
+                            telemetry.screen = SCREEN_RIDE_DASH;
+                        } else {
+#if ENABLE_LIGHTS_SCREEN
+                            int cur = (int)telemetry.screen;
+                            telemetry.screen = (DashboardScreen)((cur + 1) % 3);
+#else
+                            telemetry.screen = (telemetry.screen == SCREEN_RIDE_DASH) ? SCREEN_RT_GRAPHS : SCREEN_RIDE_DASH;
+#endif
                         }
                         Serial.printf("[NAV] Switched to Screen ID %d (Next)\n", (int)telemetry.screen);
                     }
+                    break;
+
+                case NAV_SCREEN_STATS:
+                    telemetry.screen = SCREEN_RT_GRAPHS;
+                    Renderer.markScreenDirty();
+                    Serial.println("[NAV] [ STATS ] button tapped -> Switched to Screen ID 2 (RT Graphs)");
                     break;
 
                 case NAV_BTN1_LONG: // Long Press Top / Tap Settings: Open Settings Menu directly
@@ -148,7 +429,53 @@ void loop() {
                 case NAV_BTN2_LONG: // Long Press Bottom / Trip Reset: Reset Trip Odometer & Statistics
                     telemetry.trip_km = 0.0f;
                     telemetry.stats.reset();
+                    Battery.resetTrip();
+                    Renderer.markScreenDirty();
                     Serial.println("[NAV] Reset Trip Odometer and Statistics to 0.0");
+                    break;
+
+                case NAV_BOOST_TOGGLE:
+                    telemetry.boost_active = !telemetry.boost_active;
+                    if (telemetry.boost_active) {
+                        telemetry.boost_end_ms = now + 10000;
+                    }
+                    Renderer.markScreenDirty();
+                    Serial.printf("[NAV] Toggled Hyper Boost: %s\n", telemetry.boost_active ? "ACTIVE" : "OFF");
+                    break;
+
+                case NAV_TUNING_ENABLE:
+                    telemetry.tuning_mode = true;
+                    Buttons.setTuningMode(true);
+                    ModeManager::instance().setTuningMode(true);
+                    telemetry.mode_badge_until = now + 2500;
+                    Renderer.markScreenDirty();
+                    Serial.println("[NAV] Tuning Mode ACTIVATED via 4s hold on speed number!");
+                    break;
+
+                case NAV_TUNING_DISABLE:
+                    telemetry.tuning_mode = false;
+                    Buttons.setTuningMode(false);
+                    ModeManager::instance().setTuningMode(false);
+                    telemetry.mode_badge_until = now + 2500;
+                    Renderer.markScreenDirty();
+                    Serial.println("[NAV] Tuning Mode DEACTIVATED via single tap on speed number!");
+                    break;
+
+                case NAV_MODE_CYCLE:
+                    telemetry.ride_mode = (RideMode)(((int)telemetry.ride_mode + 1) % MODE_COUNT);
+                    ModeManager::instance().setRideMode(telemetry.ride_mode);
+                    telemetry.mode_badge_until = now + 2500;
+                    Renderer.markScreenDirty();
+                    Serial.printf("[NAV] Cycled Ride Mode: %d (%s, Tuning: %s)\n",
+                                  (int)telemetry.ride_mode,
+                                  ModeManager::instance().getActiveModeName(),
+                                  telemetry.tuning_mode ? "ON" : "OFF");
+                    break;
+
+                case NAV_HAZARD_TOGGLE:
+                    telemetry.hazard_active = !telemetry.hazard_active;
+                    Renderer.markScreenDirty();
+                    Serial.printf("[NAV] Toggled Hazard Flashers: %s\n", telemetry.hazard_active ? "ACTIVE" : "OFF");
                     break;
 
                 case NAV_BOTH_PRESSED: // Fast Toggle Active Battery Profile
@@ -168,6 +495,24 @@ void loop() {
         }
     }
 
+    // Boost timer expiration check
+    if (telemetry.boost_active && now > telemetry.boost_end_ms) {
+        telemetry.boost_active = false;
+        Renderer.markScreenDirty();
+    }
+
+    // Record waveform curves every 1000ms
+    static uint32_t last_wave_sample_ms = 0;
+    if (now - last_wave_sample_ms >= 1000) {
+        last_wave_sample_ms = now;
+        for (int i = 0; i < WAVE_HISTORY_LEN - 1; i++) {
+            telemetry.speed_history[i] = telemetry.speed_history[i + 1];
+            telemetry.power_history[i] = telemetry.power_history[i + 1];
+        }
+        telemetry.speed_history[WAVE_HISTORY_LEN - 1] = telemetry.speed_kmh;
+        telemetry.power_history[WAVE_HISTORY_LEN - 1] = telemetry.power_watts;
+    }
+
     // 2. Update Telemetry or Forward Bridge Traffic
     if (Vesc.isBridgeActive()) {
         Vesc.updateBridge();
@@ -175,9 +520,31 @@ void loop() {
         Vesc.update(telemetry);
     }
     telemetry.uptime_sec = (now - boot_ms) / 1000;
+    telemetry.dynamic_wh_km = Battery.getDynamicWhKm();
+    telemetry.est_range_km = Battery.getEstRangeKm();
+    telemetry.stats.dynamic_wh_km = telemetry.dynamic_wh_km;
+    if (telemetry.voltage > 10.0f) {
+        if (telemetry.stats.min_voltage <= 0.0f || telemetry.voltage < telemetry.stats.min_voltage) {
+            telemetry.stats.min_voltage = telemetry.voltage;
+        }
+        if (telemetry.voltage > telemetry.stats.max_voltage) {
+            telemetry.stats.max_voltage = telemetry.voltage;
+        }
+    }
+    uint8_t current_fault = (uint8_t)FaultManager::instance().getActiveFault();
+    if (current_fault != telemetry.fault_code) {
+        telemetry.fault_code = current_fault;
+        if (current_fault != 0) {
+            telemetry.fault_start_ms = now;
+        } else {
+            telemetry.fault_start_ms = 0;
+        }
+        Renderer.markScreenDirty();
+        Renderer.invalidateCache();
+    }
 
-    // 3. Render at smooth ~30 FPS rate (throttled to 5 FPS in bridge mode to maximize USB/UART throughput)
-    uint32_t render_interval = Vesc.isBridgeActive() ? 200 : 33;
+    // 3. Render at smooth ~60 FPS rate on ST7262 16-bit parallel RGB panel (throttled to 5 FPS in bridge mode)
+    uint32_t render_interval = Vesc.isBridgeActive() ? 200 : 16;
     if (now - last_render_ms >= render_interval) {
         last_render_ms = now;
         Renderer.render(telemetry);

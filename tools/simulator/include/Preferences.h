@@ -13,6 +13,9 @@ public:
     bool putBool(const char* key, bool val) { return true; }
     bool getBool(const char* key, bool default_val = false) { return default_val; }
 
+    size_t putChar(const char* key, int8_t val) { return 1; }
+    int8_t getChar(const char* key, int8_t default_val = 0) { return default_val; }
+
     size_t putUChar(const char* key, uint8_t val) { return 1; }
     uint8_t getUChar(const char* key, uint8_t default_val = 0) { return default_val; }
 
@@ -24,4 +27,13 @@ public:
 
     size_t putUInt(const char* key, uint32_t val) { return 4; }
     uint32_t getUInt(const char* key, uint32_t default_val = 0) { return default_val; }
+
+    size_t putString(const char* key, const char* value) { return value ? strlen(value) : 0; }
+    size_t getString(const char* key, char* value, size_t maxLen) {
+        if (value && maxLen > 0) { value[0] = '\0'; }
+        return 0;
+    }
+
+    size_t putBytes(const char* key, const void* buf, size_t len) { return len; }
+    size_t getBytes(const char* key, void* buf, size_t maxLen) { return 0; }
 };

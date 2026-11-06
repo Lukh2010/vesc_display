@@ -18,4 +18,10 @@ Thumbs.db
 *.elf
 *.hex
 *.bmp
+*.so
+*.dylib
+*.dll
 tools/simulator/simulator
+tools/simulator/libdash_sim.so
+__pycache__/
+*.pyc
