@@ -1,5 +1,7 @@
 #include "buttons.h"
 #include "display_driver.h"
+#include "settings_manager.h"
+#include "mode_manager.h"
 #include <math.h>
 
 ButtonHandler Buttons;
@@ -14,7 +16,8 @@ static const uint32_t TOUCH_COOLDOWN_MS  = 100; // Debounce cooldown between tou
 static const int16_t  SWIPE_THRESHOLD_PX = 60;  // Movement distance required for swipe
 
 ButtonHandler::ButtonHandler()
-    : _pending_action(NAV_NONE),
+    : _active_screen(SCREEN_RIDE_DASH),
+      _pending_action(NAV_NONE),
       _in_edit_mode(false),
       _chord_active(false),
       _all_up_since_ms(0),
@@ -29,7 +32,11 @@ ButtonHandler::ButtonHandler()
       _touch_long_fired(false),
       _has_tap(false),
       _last_tap_x(0),
-      _last_tap_y(0) {
+      _last_tap_y(0),
+      _tuning_mode(false),
+      _speed_touch_started(false),
+      _speed_touch_held(false),
+      _speed_touch_fired(false) {
     _btn1 = { PIN_BTN_1, false, false, 0, 0, 0, false, false, 0 };
     _btn2 = { PIN_BTN_2, false, false, 0, 0, 0, false, false, 0 };
 }
@@ -77,6 +84,26 @@ void ButtonHandler::processDebounce(ButtonState &btn, bool raw, uint32_t now) {
     }
 }
 
+bool ButtonHandler::isSpeedNumberTouch(int16_t x, int16_t y) const {
+    if (_active_screen != SCREEN_RIDE_DASH) return false;
+
+    DashboardStyle style = (DashboardStyle)Settings.get().dash_style;
+    if (style == STYLE_HYPER_35KW) {
+        // STYLE_HYPER_35KW (Default video style):
+        // Hero digital speed number centered at cx=240, cy=195 (FreeSansBold24pt7b size 2).
+        // "km/h" label starts at y=245. Hitbox strictly excludes y>=240 and outer screen area.
+        return (x >= 150 && x <= 330 && y >= 145 && y <= 238);
+    } else if (style == STYLE_ANALOG_DIAL) {
+        // STYLE_ANALOG_DIAL: Speed at cx=520, cy=80..155 (Font8, 75px), "KM/H" label at y=172
+        return (x >= 430 && x <= 610 && y >= 75 && y <= 160);
+    } else if (style == STYLE_HORIZONTAL_BAR) {
+        // STYLE_HORIZONTAL_BAR: Speed at cx=400, cy=110..185 (Font8, 75px), "KM/H" label at y=200
+        return (x >= 310 && x <= 490 && y >= 105 && y <= 190);
+    }
+
+    return false;
+}
+
 void ButtonHandler::processTouch(uint32_t now) {
     int16_t tx = 0, ty = 0;
     bool touching = Display.getTouch(&tx, &ty);
@@ -102,13 +129,32 @@ void ButtonHandler::processTouch(uint32_t now) {
             _touch_curr_y = ty;
             _touch_start_ms = now;
             _touch_long_fired = false;
+            _speed_touch_started = isSpeedNumberTouch(tx, ty);
+            _speed_touch_held = _speed_touch_started;
+            _speed_touch_fired = false;
         } else {
             // Touch continuing
             _touch_curr_x = tx;
             _touch_curr_y = ty;
 
-            // Check for Long Press while finger is held
-            if (!_touch_long_fired && (now - _touch_start_ms >= TOUCH_LONG_MS)) {
+            // 1. Precise Speed Number 4-Second Continuous Hold (Tuning Mode Activation)
+            if (_speed_touch_started) {
+                if (_speed_touch_held) {
+                    int16_t dx = tx - _touch_start_x;
+                    int16_t dy = ty - _touch_start_y;
+                    if (abs(dx) > 35 || abs(dy) > 35 || !isSpeedNumberTouch(tx, ty)) {
+                        _speed_touch_held = false; // Finger drifted off the km/h number - safely cancel hold
+                    } else if (!_tuning_mode && !_speed_touch_fired && (now - _touch_start_ms >= 4000)) {
+                        // Continuous 4000ms hold exclusively on the km/h number
+                        _speed_touch_fired = true;
+                        _touch_long_fired = true;
+                        _pending_action = NAV_TUNING_ENABLE;
+                    }
+                }
+            }
+
+            // 2. Generic Long Press check (MUST NOT fire if touch started on speed number)
+            if (!_speed_touch_started && !_touch_long_fired && (now - _touch_start_ms >= TOUCH_LONG_MS)) {
                 int16_t dx = tx - _touch_start_x;
                 int16_t dy = ty - _touch_start_y;
                 if (abs(dx) < 35 && abs(dy) < 35) {
@@ -117,16 +163,22 @@ void ButtonHandler::processTouch(uint32_t now) {
                     // Contextual Long Touch Action
                     if (_in_edit_mode) {
                         _pending_action = NAV_BOTH_PRESSED; // Save & exit edit mode
-                    } else if (_touch_start_y > 390) {
-                        // Long press on bottom status strip -> Reset Trip Odometer
+                    } else if (_active_screen == SCREEN_RT_GRAPHS) {
+                        if (_touch_start_x >= 600 && _touch_start_y <= 65) {
+                            _pending_action = NAV_BTN2_LONG; // Reset Trip
+                        } else if (_touch_start_x <= 150 && _touch_start_y <= 65) {
+                            _pending_action = NAV_BTN1_SHORT; // Top-left < DASH returns to Ride Dash
+                        }
+                        // All other holds in STATS do NOT exit screen
+                    } else if (_touch_start_y > 390 && _touch_start_x < 400) {
+                        // Long press on bottom-left status strip -> Reset Trip Odometer
+                        // (Touches on x >= 400 are action buttons [ BOOST ] / [ MODE ], prevent accidental reset)
                         _pending_action = NAV_BTN2_LONG;
                     } else if (_touch_start_y < 80 && _touch_start_x > 620) {
                         // Long press top right -> Open Settings Menu
                         _pending_action = NAV_BTN1_LONG;
-                    } else {
-                        // General long press on screen -> Reset Trip or Back
-                        _pending_action = NAV_BTN2_LONG;
                     }
+                    // Arbitrary holds in other screen areas safely do nothing (prevent accidental trip wipes)
                 }
             }
         }
@@ -137,7 +189,37 @@ void ButtonHandler::processTouch(uint32_t now) {
             _last_touch_release_ms = now;
             uint32_t touch_dur = now - _touch_start_ms;
 
+            // Check if touch was started on the km/h number
+            if (_speed_touch_started) {
+                if (_speed_touch_held && !_speed_touch_fired) {
+                    int16_t dx = _touch_curr_x - _touch_start_x;
+                    int16_t dy = _touch_curr_y - _touch_start_y;
+                    if (abs(dx) < 35 && abs(dy) < 35 && isSpeedNumberTouch(_touch_curr_x, _touch_curr_y)) {
+                        if (_tuning_mode && touch_dur < 1000) {
+                            // Single Tap directly on km/h number -> Immediately deactivate Tuning Mode!
+                            _pending_action = NAV_TUNING_DISABLE;
+                        }
+                    }
+                }
+                _speed_touch_started = false;
+                _speed_touch_held = false;
+                _speed_touch_fired = false;
+                return;
+            }
+
+            _speed_touch_started = false;
+            _speed_touch_held = false;
+            _speed_touch_fired = false;
+
             if (!_touch_long_fired && touch_dur >= 20) {
+                // If system is locked by PIN, only register clean tap coordinates for keypad
+                if (ModeManager::instance().isLocked()) {
+                    _has_tap = true;
+                    _last_tap_x = _touch_curr_x;
+                    _last_tap_y = _touch_curr_y;
+                    return;
+                }
+
                 int16_t dx = _touch_curr_x - _touch_start_x;
                 int16_t dy = _touch_curr_y - _touch_start_y;
                 int16_t adx = abs(dx);
@@ -145,7 +227,9 @@ void ButtonHandler::processTouch(uint32_t now) {
 
                 if (adx >= SWIPE_THRESHOLD_PX && adx > ady) {
                     // Horizontal Swipe
-                    if (dx > 0) {
+                    if (_active_screen == SCREEN_RT_GRAPHS) {
+                        // In STATS screen: do NOT switch screen on swipe! Only < DASH exits.
+                    } else if (dx > 0) {
                         // Swipe Right -> Previous Screen / Value Up
                         _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BTN1_SHORT;
                     } else {
@@ -154,7 +238,9 @@ void ButtonHandler::processTouch(uint32_t now) {
                     }
                 } else if (ady >= SWIPE_THRESHOLD_PX && ady > adx) {
                     // Vertical Swipe (in menu: scroll up/down)
-                    if (dy > 0) {
+                    if (_active_screen == SCREEN_RT_GRAPHS) {
+                        // In STATS screen: do NOT switch screen on swipe! Only < DASH exits.
+                    } else if (dy > 0) {
                         // Swipe Down -> Up in menu
                         _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BTN1_SHORT;
                     } else {
@@ -176,27 +262,43 @@ void ButtonHandler::processTouch(uint32_t now) {
                         } else {
                             _pending_action = NAV_BOTH_PRESSED; // Center: Save & exit
                         }
+                    } else if (_active_screen == SCREEN_LIGHTS) {
+                        // On LIGHTS Screen:
+                        if (_last_tap_x >= 400 && _last_tap_x <= 775 && _last_tap_y >= 320 && _last_tap_y <= 435) {
+                            _pending_action = NAV_HAZARD_TOGGLE; // Bottom-Right Large [ ▲ HAZARD ]
+                        } else if (_last_tap_x >= 80 && _last_tap_x <= 260 && _last_tap_y >= 390 && _last_tap_y <= 450) {
+                            _pending_action = NAV_HAZARD_TOGGLE; // Bottom-Left Hazard Toggle Switch
+                        } else if (_last_tap_x < 50) {
+                            _pending_action = NAV_BTN1_SHORT; // Extreme Left Edge -> Prev Screen
+                        } else if (_last_tap_x > 760 && _last_tap_y > 60) {
+                            _pending_action = NAV_BTN2_SHORT; // Extreme Right Edge -> Next Screen
+                        }
+                    } else if (_active_screen == SCREEN_RT_GRAPHS) {
+                        // On RT GRAPHS Screen (Statistics Menu):
+                        if (_last_tap_x >= 600 && _last_tap_y <= 65) {
+                            _pending_action = NAV_BTN2_LONG; // Top Right -> Reset Trip
+                        } else if (_last_tap_x <= 150 && _last_tap_y <= 65) {
+                            _pending_action = NAV_BTN1_SHORT; // Top Left -> Return to Ride Dash
+                        }
+                        // All other taps (on cards, tiles, empty space, brightness controls)
+                        // do NOT exit back to Dash! Only pressing < DASH returns.
                     } else {
-                        // In Normal Mode:
-                        if (_last_tap_y < 60 && _last_tap_x > 620) {
-                            // Top Right Badge -> Open Settings Menu
+                        // On SCREEN_RIDE_DASH / Default:
+                        // 1. Top Left [ STATS ] Navigation Touch Button -> Open Statistics Screen (SCREEN_RT_GRAPHS)
+                        if (_last_tap_x >= 18 && _last_tap_x <= 125 && _last_tap_y >= 12 && _last_tap_y <= 60) {
+                            _pending_action = NAV_SCREEN_STATS;
+                        }
+                        // 2. Action Buttons on Ride Dash (Bottom Right)
+                        else if (_last_tap_y >= 360 && _last_tap_y <= 465) {
+                            if (_last_tap_x >= 430 && _last_tap_x <= 605) {
+                                _pending_action = NAV_BOOST_TOGGLE;
+                            } else if (_last_tap_x >= 605 && _last_tap_x <= 775) {
+                                _pending_action = NAV_MODE_CYCLE;
+                            }
+                        }
+                        // 3. Top Right Badge -> Open Settings Menu
+                        else if (_last_tap_y < 65 && _last_tap_x > 620) {
                             _pending_action = NAV_BTN1_LONG;
-                        } else if (_last_tap_y < 60 && _last_tap_x < 220) {
-                            // Top Left Profile Badge -> Toggle Battery Profile
-                            _pending_action = NAV_BOTH_PRESSED;
-                        } else if (_last_tap_y > 400 && _last_tap_x < 280) {
-                            // Bottom Left Trip Button -> Reset Trip
-                            _pending_action = NAV_BTN2_LONG;
-                        } else if (_last_tap_x < 180) {
-                            // Left Zone Tap -> Previous Screen / Menu Up
-                            _pending_action = NAV_BTN1_SHORT;
-                        } else if (_last_tap_x > 620) {
-                            // Right Zone Tap -> Next Screen / Menu Down
-                            _pending_action = NAV_BTN2_SHORT;
-                        } else {
-                            // Center Zone Tap:
-                            // In Menu -> Select / Enter; In Ride Dash -> Next Screen
-                            _pending_action = NAV_BTN2_SHORT;
                         }
                     }
                 }

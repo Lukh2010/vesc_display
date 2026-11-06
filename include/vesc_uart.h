@@ -20,11 +20,17 @@ public:
     // Manual simulation throttle override
     void setSimThrottle(float pct);
     float getSimThrottle() const { return _sim_throttle; }
+    void triggerSimFault(uint8_t code) { _sim_fault_code = code; }
+    uint8_t getSimFault() const { return _sim_fault_code; }
 
     // Configuration
     void setMotorPolePairs(int poles) { _pole_pairs = poles; }
     void setWheelDiameterMm(float mm) { _wheel_diameter_mm = mm; }
     void setGearRatio(float ratio) { _gear_ratio = ratio; }
+
+    // Dynamic Live Limit Control (Captive Portal & Ride Modes)
+    void sendModeLimits(float max_speed_kmh, float max_power_watts, float max_battery_amps, float max_phase_amps, float cutoff_start = 0.0f, float cutoff_end = 0.0f);
+    void sendTerminalCommand(const char *cmd);
 
     // Transparent USB CDC <-> UART Bridge for VESC Tool
     void enterBridgeMode();
@@ -68,6 +74,7 @@ private:
     float _sim_throttle;
     float _target_speed;
     float _target_rpm;
+    uint8_t _sim_fault_code;
     uint32_t _last_poll_ms;
     uint32_t _sim_last_update_ms;
 

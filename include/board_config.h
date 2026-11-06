@@ -102,3 +102,8 @@
 // 1 = Self-running simulation mode (test without VESC connected)
 // 0 = Live VESC UART / CAN communication
 #define SIMULATION_MODE     1
+
+// Light Modules / Underglow Control Screen
+// 0 = Kept in background (swiping switches directly between Ride Dash & RT Graphs)
+// 1 = Active in screen swipe loop (Ride Dash <-> Lights Screen <-> RT Graphs)
+#define ENABLE_LIGHTS_SCREEN 0

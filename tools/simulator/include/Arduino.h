@@ -27,6 +27,7 @@ inline int g_sim_pin_state[64] = {
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
 };
 inline uint32_t g_sim_time_ms = 1000;
+inline bool g_use_wall_clock_millis = false;
 
 inline void pinMode(int pin, int mode) {}
 inline int digitalRead(int pin) { return (pin >= 0 && pin < 64) ? g_sim_pin_state[pin] : HIGH; }
@@ -34,6 +35,11 @@ inline void simSetPin(int pin, int state) { if (pin >= 0 && pin < 64) g_sim_pin_
 inline void simAdvanceMs(uint32_t ms) { g_sim_time_ms += ms; }
 
 inline unsigned long millis(void) {
+    if (g_use_wall_clock_millis) {
+        static auto start_time = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        return (unsigned long)std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
+    }
     return g_sim_time_ms;
 }
 
