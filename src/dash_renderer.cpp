@@ -605,19 +605,19 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         }
 
         // Currents
-        _canvas->fillRect(410, 246, 368, 34, COLOR_BG);
+        _canvas->fillRect(435, 246, 345, 34, COLOR_BG);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextSize(1);
         _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
         _canvas->setTextDatum(textdatum_t::top_left);
         char motBuf[32];
         snprintf(motBuf, sizeof(motBuf), "MOTOR %.0f A", telemetry.phase_amps);
-        _canvas->drawString(motBuf, 415, 250);
+        _canvas->drawString(motBuf, 445, 250);
 
         _canvas->setTextDatum(textdatum_t::top_right);
         char bBuf[32];
         snprintf(bBuf, sizeof(bBuf), "BATTERY %.0f A", telemetry.current_amps);
-        _canvas->drawString(bBuf, 768, 250);
+        _canvas->drawString(bBuf, 765, 250);
     }
 
     // 9b. Dynamic Range Readout (Open minimalist layout without card container)
