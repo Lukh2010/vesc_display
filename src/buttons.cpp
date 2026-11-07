@@ -85,6 +85,7 @@ void ButtonHandler::processDebounce(ButtonState &btn, bool raw, uint32_t now) {
 }
 
 bool ButtonHandler::isSpeedNumberTouch(int16_t x, int16_t y) const {
+    if (ModeManager::instance().isLocked()) return false;
     if (_active_screen != SCREEN_RIDE_DASH) return false;
 
     // Flagship Hyper-VESC 35kW+ Cluster:
@@ -142,8 +143,8 @@ void ButtonHandler::processTouch(uint32_t now) {
                 }
             }
 
-            // 2. Generic Long Press check (MUST NOT fire if touch started on speed number)
-            if (!_speed_touch_started && !_touch_long_fired && (now - _touch_start_ms >= TOUCH_LONG_MS)) {
+            // 2. Generic Long Press check (MUST NOT fire if touch started on speed number or while locked)
+            if (!ModeManager::instance().isLocked() && !_speed_touch_started && !_touch_long_fired && (now - _touch_start_ms >= TOUCH_LONG_MS)) {
                 int16_t dx = tx - _touch_start_x;
                 int16_t dy = ty - _touch_start_y;
                 if (abs(dx) < 35 && abs(dy) < 35) {
@@ -178,6 +179,19 @@ void ButtonHandler::processTouch(uint32_t now) {
             _last_touch_release_ms = now;
             uint32_t touch_dur = now - _touch_start_ms;
 
+            // If system is locked by PIN, directly register tap from touch_start_x/y (100% reliable keypad taps)
+            if (ModeManager::instance().isLocked()) {
+                if (touch_dur >= 15) {
+                    _has_tap = true;
+                    _last_tap_x = _touch_start_x;
+                    _last_tap_y = _touch_start_y;
+                }
+                _speed_touch_started = false;
+                _speed_touch_held = false;
+                _speed_touch_fired = false;
+                return;
+            }
+
             // Check if touch was started on the km/h number
             if (_speed_touch_started) {
                 if (_speed_touch_held && !_speed_touch_fired) {
@@ -201,14 +215,6 @@ void ButtonHandler::processTouch(uint32_t now) {
             _speed_touch_fired = false;
 
             if (!_touch_long_fired && touch_dur >= 20) {
-                // If system is locked by PIN, only register clean tap coordinates for keypad
-                if (ModeManager::instance().isLocked()) {
-                    _has_tap = true;
-                    _last_tap_x = _touch_curr_x;
-                    _last_tap_y = _touch_curr_y;
-                    return;
-                }
-
                 int16_t dx = _touch_curr_x - _touch_start_x;
                 int16_t dy = _touch_curr_y - _touch_start_y;
                 int16_t adx = abs(dx);

@@ -47,7 +47,7 @@ void setup() {
     telemetry.duty_cycle_pct      = 0.0f;
     telemetry.rpm                 = 0.0f;
     telemetry.throttle_pct        = 0.0f;
-    telemetry.voltage             = 0.0f;
+    telemetry.voltage             = 53.8f;
     telemetry.current_amps        = 0.0f;
     telemetry.phase_amps          = 0.0f;
     telemetry.power_watts         = 0.0f;
@@ -164,7 +164,6 @@ void loop() {
         if (telemetry.pin_error) {
             if (millis() >= telemetry.pin_error_end_ms) {
                 telemetry.pin_error = false;
-                Renderer.markScreenDirty();
             } else {
                 // Debounce / spam immunity: Discard any taps while error indicator is showing
                 int16_t dummy_x, dummy_y;
@@ -195,13 +194,13 @@ void loop() {
                     { '<', '0', '#' }
                 };
                 char key = KEY_CHARS[r][c];
+                Serial.printf("[TOUCH PIN] tx=%d, ty=%d -> r=%d, c=%d, key='%c'\n", tx, ty, r, c, key);
                 int len = strlen(telemetry.pin_entry);
 
                 if (key == '<') { // DEL
                     if (len > 0) {
                         telemetry.pin_entry[len - 1] = '\0';
                         telemetry.pin_error = false;
-                        Renderer.markScreenDirty();
                     }
                 } else if (key == '#') { // OK / enter
                     if (strcmp(telemetry.pin_entry, Settings.get().pin_code) == 0) {
@@ -217,7 +216,6 @@ void loop() {
                         telemetry.pin_error = true;
                         telemetry.pin_error_end_ms = millis() + 800;
                         telemetry.pin_entry[0] = '\0';
-                        Renderer.markScreenDirty();
                         Serial.println("[PIN] Invalid PIN code entered!");
                     }
                 } else if (key >= '0' && key <= '9') {
@@ -226,7 +224,6 @@ void loop() {
                         telemetry.pin_entry[len + 1] = '\0';
                         telemetry.pin_error = false;
                         len++;
-                        Renderer.markScreenDirty();
 
                         if (len == 4) {
                             if (strcmp(telemetry.pin_entry, Settings.get().pin_code) == 0) {
@@ -242,7 +239,6 @@ void loop() {
                                 telemetry.pin_error = true;
                                 telemetry.pin_error_end_ms = millis() + 800;
                                 telemetry.pin_entry[0] = '\0';
-                                Renderer.markScreenDirty();
                                 Serial.println("[PIN] Invalid PIN code entered!");
                             }
                         }
@@ -311,7 +307,6 @@ void loop() {
                 if (s.brightness_pct != val) {
                     s.brightness_pct = val;
                     Display.setBrightness((uint8_t)map(s.brightness_pct, 0, 100, 0, 255));
-                    Renderer.markScreenDirty();
                 }
             }
         } else {
@@ -361,7 +356,6 @@ void loop() {
                 if (changed) {
                     Settings.save();
                     Display.setBrightness((uint8_t)map(s.brightness_pct, 0, 100, 0, 255));
-                    Renderer.markScreenDirty();
                     Serial.printf("[BRIGHTNESS] Adjusted to %d%%\n", s.brightness_pct);
                 }
             }
@@ -543,8 +537,8 @@ void loop() {
         Renderer.invalidateCache();
     }
 
-    // 3. Render at smooth ~60 FPS rate on ST7262 16-bit parallel RGB panel (throttled to 5 FPS in bridge mode)
-    uint32_t render_interval = Vesc.isBridgeActive() ? 200 : 16;
+    // 3. Render at steady 30 FPS rate on ST7262 16-bit parallel RGB panel (throttled to 5 FPS in bridge mode)
+    uint32_t render_interval = Vesc.isBridgeActive() ? 200 : 33;
     if (now - last_render_ms >= render_interval) {
         last_render_ms = now;
         Renderer.render(telemetry);

@@ -60,6 +60,8 @@ WaveshareLGFX::WaveshareLGFX() {
         cfg.vsync_pulse_width = LCD_VPW; // 10
         cfg.vsync_back_porch  = LCD_VBP; // 10
 
+        cfg.pclk_active_neg   = 0;
+        cfg.de_idle_high      = 0;
         cfg.pclk_idle_high    = 0;
 
         _bus_instance.config(cfg);
@@ -80,7 +82,7 @@ WaveshareLGFX::WaveshareLGFX() {
         cfg.pin_sda         = TOUCH_I2C_SDA;
         cfg.pin_scl         = TOUCH_I2C_SCL;
         cfg.freq            = 400000;
-        cfg.i2c_addr        = TOUCH_I2C_ADDR; // 0x5D
+        cfg.i2c_addr        = 0x5D; // GT911 primary address on Waveshare 4.3 (confirmed by scan)
         _touch_instance.config(cfg);
         _panel_instance.setTouch(&_touch_instance);
     }
@@ -92,34 +94,54 @@ DisplayDriver::DisplayDriver() : _brightness(DEFAULT_BRIGHTNESS) {}
 
 bool DisplayDriver::initIOExpander() {
     Wire.begin(TOUCH_I2C_SDA, TOUCH_I2C_SCL);
-    delay(10);
+    delay(20);
 
-    // CH422G Init: set EXIO pins to output mode
+    // I2C Bus Scan
+    Serial.println("[I2C SCAN] Scanning I2C bus (SDA=8, SCL=9)...");
+    for (uint8_t addr = 1; addr < 127; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+            Serial.printf("[I2C SCAN] Found device at 0x%02X\n", addr);
+        }
+    }
+
+    // 1. CH422G Init: set EXIO pins to output mode (write 0x01 to addr 0x24)
     Wire.beginTransmission(CH422G_I2C_ADDR);
     Wire.write(0x01);
-    if (Wire.endTransmission() != 0) {
-        Serial.println("[DISPLAY WARN] CH422G IO Expander mode write returned non-zero");
-    }
+    uint8_t err1 = Wire.endTransmission();
+    Serial.printf("[DISPLAY] CH422G mode write status: %d\n", err1);
 
-    // Pull TP_RST, LCD_BL, LCD_RST, SD_CS high (0x1E)
-    // Bit 1: TP_RST, Bit 2: LCD_BL, Bit 3: LCD_RST, Bit 4: SD_CS, Bit 5: USB_SEL (0 = CAN mode)
+    // 2. Hardware Reset Cycle: Pull TP_RST (Bit 1) and LCD_RST (Bit 3) LOW
+    // 0xD5 = 0b11010101 (Bits 1, 2, 3 LOW)
+    Wire.beginTransmission(CH422G_I2C_ADDR);
+    Wire.write(0x01);
+    Wire.endTransmission();
     Wire.beginTransmission(CH422G_I2C_DATA);
-    Wire.write(0x1E);
-    if (Wire.endTransmission() != 0) {
-        Serial.println("[DISPLAY WARN] CH422G IO Expander data write returned non-zero");
-        return false;
-    }
-    delay(50);
-    return true;
+    Wire.write(0xD5);
+    Wire.endTransmission();
+    delay(30);
+
+    // 3. Release Reset: Pull TP_RST, LCD_BL, LCD_RST, SD_CS HIGH (0xDF = 0b11011111)
+    Wire.beginTransmission(CH422G_I2C_ADDR);
+    Wire.write(0x01);
+    Wire.endTransmission();
+    Wire.beginTransmission(CH422G_I2C_DATA);
+    Wire.write(0xDF);
+    uint8_t err2 = Wire.endTransmission();
+    Serial.printf("[DISPLAY] CH422G data write status: %d (0xDF Backlight ON)\n", err2);
+    delay(120);
+
+    return (err1 == 0 && err2 == 0);
 }
 
 bool DisplayDriver::init() {
+    Serial.printf("[DISPLAY] ESP Free Heap: %lu bytes, Free PSRAM: %lu bytes\n", (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getFreePsram());
     if (ESP.getFreePsram() < (uint32_t)(LCD_WIDTH * LCD_HEIGHT * 2)) {
-        Serial.printf("[DISPLAY WARN] Low PSRAM: %u bytes available, %d required for 800x480 FB\n",
-                      ESP.getFreePsram(), LCD_WIDTH * LCD_HEIGHT * 2);
+        Serial.printf("[DISPLAY WARN] Low PSRAM: %lu bytes available, %d required for 800x480 FB\n",
+                      (unsigned long)ESP.getFreePsram(), LCD_WIDTH * LCD_HEIGHT * 2);
     }
 
-    Serial.println("[DISPLAY] Initializing CH422G IO Expander...");
+    Serial.println("[DISPLAY] Initializing CH422G IO Expander & Hardware Reset...");
     initIOExpander();
 
     Serial.println("[DISPLAY] Initializing ST7262 RGB Panel and GT911 Touch via LovyanGFX...");
@@ -130,21 +152,24 @@ bool DisplayDriver::init() {
 
     _lcd.setColorDepth(16);
     _lcd.setRotation(0); // Landscape: 800 x 480
-    _lcd.fillScreen(0x0000);
+    _lcd.fillScreen(0x001F); // Startup test color (Navy Blue) so we instantly see panel is ALIVE!
 
-    Serial.printf("[DISPLAY OK] Resolution: %d x %d\n", _lcd.width(), _lcd.height());
-    Serial.printf("[DISPLAY OK] Free Heap: %u bytes, Free PSRAM: %u bytes\n", ESP.getFreeHeap(), ESP.getFreePsram());
+    Serial.printf("[DISPLAY OK] Resolution: %d x %d\n", (int)_lcd.width(), (int)_lcd.height());
+    Serial.printf("[DISPLAY OK] Free Heap: %lu bytes, Free PSRAM: %lu bytes\n", (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getFreePsram());
     return true;
 }
 
 void DisplayDriver::setBrightness(uint8_t brightness) {
     _brightness = brightness;
-    // On Waveshare 4.3", LCD_BL on CH422G is digital ON/OFF (Bit 2).
+    Wire.beginTransmission(CH422G_I2C_ADDR);
+    Wire.write(0x01);
+    Wire.endTransmission();
+
     Wire.beginTransmission(CH422G_I2C_DATA);
     if (brightness > 20) {
-        Wire.write(0x1E); // Backlight ON
+        Wire.write(0xDF); // Backlight ON (Bit 2 HIGH)
     } else {
-        Wire.write(0x1A); // Backlight OFF
+        Wire.write(0xDB); // Backlight OFF (Bit 2 LOW)
     }
     Wire.endTransmission();
 }

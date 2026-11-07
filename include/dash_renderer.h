@@ -14,7 +14,7 @@ public:
     void triggerNeedleSweep();
     bool isSweeping() const { return _is_sweeping; }
     void markScreenDirty() { _screen_dirty = true; }
-    void invalidateCache() { _cache.invalidate(); }
+    void invalidateCache() { _cache.invalidate(); _stats_cache.invalidate(); _hyper_inited = false; _stats_inited = false; _last_arc_frac = -1.0f; _last_arc_angle = 135.0f; _last_arc_col = 0; }
 
     // Menu Navigation Handler (called by main when in SCREEN_SETTINGS_MENU)
     void handleMenuNav(NavAction action, DashTelemetry &telemetry);
@@ -188,6 +188,63 @@ private:
     float    _anim_duty;
     uint32_t _anim_last_ms;
     bool     _anim_inited;
+
+    // Hyper 35kW Zero-Flicker Cache
+    bool     _hyper_inited;
+    bool     _stats_inited;
+    float    _last_arc_frac;
+    float    _last_arc_angle;
+    uint16_t _last_arc_col;
+
+    // Statistics Screen Differential Cache (Zero Flicker)
+    struct StatsCache {
+        int trip_x10;
+        int odo_x10;
+        uint32_t ride_sec;
+        int avg_spd_x10;
+        int max_spd_x10;
+        int live_spd_x10;
+        int trip_wh;
+        int rem_wh;
+        int peak_watts;
+        int peak_curr_x10;
+        int peak_phase_x10;
+        int trip_wh_km_x10;
+        int dyn_wh_km_x10;
+        int min_v_x10;
+        int max_v_x10;
+        int live_v_x10;
+        int max_temp_mot;
+        int max_temp_esc;
+        int brightness_pct;
+
+        void invalidate() {
+            trip_x10 = -1;
+            odo_x10 = -1;
+            ride_sec = 0xFFFFFFFF;
+            avg_spd_x10 = -1;
+            max_spd_x10 = -1;
+            live_spd_x10 = -1;
+            trip_wh = -1;
+            rem_wh = -1;
+            peak_watts = -1;
+            peak_curr_x10 = -1;
+            peak_phase_x10 = -1;
+            trip_wh_km_x10 = -1;
+            dyn_wh_km_x10 = -1;
+            min_v_x10 = -1;
+            max_v_x10 = -1;
+            live_v_x10 = -1;
+            max_temp_mot = -999;
+            max_temp_esc = -999;
+            brightness_pct = -1;
+        }
+    } _stats_cache;
+
+    // PIN Lockscreen Render State
+    bool     _pin_screen_drawn;
+    int      _last_pin_len;
+    bool     _last_pin_err;
 };
 
 extern DashboardRenderer Renderer;

@@ -14,12 +14,12 @@
 #define LCD_WIDTH   800
 #define LCD_HEIGHT  480
 
-// ST7262 RGB Parallel Timing & Clock
+// ST7262 RGB Parallel Timing & Clock (Rock-solid 30 FPS stable timing)
 #define LCD_PIN_HSYNC   46
 #define LCD_PIN_VSYNC   3
 #define LCD_PIN_DE      5
 #define LCD_PIN_PCLK    7
-#define LCD_FREQ_HZ     14000000 // 14 MHz stable pixel clock
+#define LCD_FREQ_HZ     14000000 // 14 MHz for rock-solid 30 FPS without horizontal wobble
 
 // ST7262 RGB Timing Parameters (800x480 standard)
 #define LCD_HPW         10
@@ -101,7 +101,7 @@
 // ==============================================================================
 // 1 = Self-running simulation mode (test without VESC connected)
 // 0 = Live VESC UART / CAN communication
-#define SIMULATION_MODE     1
+#define SIMULATION_MODE     0
 
 // Light Modules / Underglow Control Screen
 // 0 = Kept in background (swiping switches directly between Ride Dash & RT Graphs)
