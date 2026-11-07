@@ -91,9 +91,11 @@ void VescHandler::begin() {
         s_uartMutex = xSemaphoreCreateMutex();
     }
 #endif
+#if !SIMULATION_MODE
     VESC_UART_PORT.setRxBufferSize(4096);
     VESC_UART_PORT.setTxBufferSize(4096);
     VESC_UART_PORT.begin(VESC_UART_BAUDRATE, SERIAL_8N1, VESC_UART_RX_PIN, VESC_UART_TX_PIN);
+#endif
     _sim_last_update_ms = millis();
     _last_poll_ms = millis();
 }
@@ -479,6 +481,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
 
         // Ground speed from VESC (injected by Port 4 LispBM wheel sensor override)
         telemetry.speed_kmh      = fabsf((speed_m_s / 1000.0f) * 3.6f);
+        if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
         telemetry.trip_km        = fabsf((dist_m / 1000.0f) / 1000.0f);
 
         // Fault code extraction (idx 51 in COMM_GET_VALUES_SETUP)
@@ -542,6 +545,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         telemetry.rpm = fabsf(mech_rpm);
         float wheel_rpm = mech_rpm / gear_ratio;
         telemetry.speed_kmh = fabsf((wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f);
+        if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
 
         // Odometer & Trip from tachometer step counts
         float revs = (float)tachometer / ((float)pole_pairs * 6.0f);
