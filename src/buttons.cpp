@@ -87,21 +87,10 @@ void ButtonHandler::processDebounce(ButtonState &btn, bool raw, uint32_t now) {
 bool ButtonHandler::isSpeedNumberTouch(int16_t x, int16_t y) const {
     if (_active_screen != SCREEN_RIDE_DASH) return false;
 
-    DashboardStyle style = (DashboardStyle)Settings.get().dash_style;
-    if (style == STYLE_HYPER_35KW) {
-        // STYLE_HYPER_35KW (Default video style):
-        // Hero digital speed number centered at cx=240, cy=195 (FreeSansBold24pt7b size 2).
-        // "km/h" label starts at y=245. Hitbox strictly excludes y>=240 and outer screen area.
-        return (x >= 150 && x <= 330 && y >= 145 && y <= 238);
-    } else if (style == STYLE_ANALOG_DIAL) {
-        // STYLE_ANALOG_DIAL: Speed at cx=520, cy=80..155 (Font8, 75px), "KM/H" label at y=172
-        return (x >= 430 && x <= 610 && y >= 75 && y <= 160);
-    } else if (style == STYLE_HORIZONTAL_BAR) {
-        // STYLE_HORIZONTAL_BAR: Speed at cx=400, cy=110..185 (Font8, 75px), "KM/H" label at y=200
-        return (x >= 310 && x <= 490 && y >= 105 && y <= 190);
-    }
-
-    return false;
+    // Flagship Hyper-VESC 35kW+ Cluster:
+    // Hero digital speed number centered at cx=240, cy=195 (FreeSansBold24pt7b size 2).
+    // "km/h" label starts at y=245. Hitbox strictly excludes y>=240 and outer screen area.
+    return (x >= 150 && x <= 330 && y >= 145 && y <= 238);
 }
 
 void ButtonHandler::processTouch(uint32_t now) {
