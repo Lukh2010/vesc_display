@@ -15,11 +15,9 @@ enum DashboardScreen {
     SCREEN_COUNT
 };
 
-// Main Dashboard Styles (Selected in Settings)
+// Main Dashboard Styles (Flagship Hyper-VESC 35kW+ Cluster)
 enum DashboardStyle {
-    STYLE_HYPER_35KW     = 0,  // "Best VESC Screen Ever Made" Hyper-VESC 35kW+ Cluster
-    STYLE_ANALOG_DIAL    = 1,  // Left-Hug Analog Duty Dial (0-120% Duty with FW Redline)
-    STYLE_HORIZONTAL_BAR = 2,  // Horizontal Duty Bar Cluster
+    STYLE_HYPER_35KW     = 0,  // Flagship Hyper-VESC 35kW+ Cluster
     STYLE_COUNT
 };
 

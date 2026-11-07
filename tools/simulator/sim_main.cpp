@@ -529,27 +529,7 @@ void testTouchGestures() {
     assert(Buttons.getNavAction() == NAV_NONE); // Release must safely abort without firing
     printf("[PASS] Finger drift while holding on speed number safely aborted without triggering trip reset.\n");
 
-    // 10i. Multi-Style Speed Hitbox Isolation:
-    // STYLE_ANALOG_DIAL: Speed at cx=520, cy=110
-    Settings.get().dash_style = STYLE_ANALOG_DIAL;
-    Buttons.setTuningMode(true);
-    NavAction actAnalogTap = simTouchAction(520, 110, 520, 110, 80);
-    assert(actAnalogTap == NAV_TUNING_DISABLE);
-    NavAction actAnalogOldSpot = simTouchAction(240, 195, 240, 195, 80);
-    assert(actAnalogOldSpot != NAV_TUNING_DISABLE);
-    printf("[PASS] STYLE_ANALOG_DIAL correctly triggers on its own speed hitbox (520, 110) and ignores (240, 195).\n");
-
-    // STYLE_HORIZONTAL_BAR: Speed at cx=400, cy=130
-    Settings.get().dash_style = STYLE_HORIZONTAL_BAR;
-    Buttons.setTuningMode(true);
-    NavAction actHorizTap = simTouchAction(400, 130, 400, 130, 80);
-    assert(actHorizTap == NAV_TUNING_DISABLE);
-    NavAction actHorizOldSpot = simTouchAction(240, 195, 240, 195, 80);
-    assert(actHorizOldSpot != NAV_TUNING_DISABLE);
-    printf("[PASS] STYLE_HORIZONTAL_BAR correctly triggers on its own speed hitbox (400, 130) and ignores (240, 195).\n");
-
-    // Restore Default Style & State
-    Settings.get().dash_style = STYLE_HYPER_35KW;
+    // Restore Default State
     Buttons.setTuningMode(false);
 
     // 10j. 300A Phase Current Verification (No uint8 truncation to 44A)
@@ -968,68 +948,6 @@ int main(int argc, char **argv) {
     renderAndSave("00_hyper_35kw_mode_banner", t);
     t.mode_badge_until = 0; // Clear banner
 
-    // ----------------------------------------------------
-    // Scenario 1: Analog Dial - At Rest / Idle
-    // ----------------------------------------------------
-    Settings.get().dash_style = STYLE_ANALOG_DIAL;
-    t.screen = SCREEN_RIDE_DASH;
-    t.speed_kmh = 0.0f;
-    t.duty_cycle_pct = 0.0f;
-    t.throttle_pct = 0.0f;
-    t.power_watts = 0.0f;
-    t.phase_amps = 0.0f;
-    Renderer.markScreenDirty();
-    renderAndSave("01_analog_idle", t);
-
-    // ----------------------------------------------------
-    // Scenario 2: Analog Dial - Moderate Cruise
-    // ----------------------------------------------------
-    t.speed_kmh = 32.4f;
-    t.duty_cycle_pct = 48.0f;
-    t.throttle_pct = 42.0f;
-    t.power_watts = 680.0f;
-    t.phase_amps = 26.5f;
-    t.voltage = 52.1f;
-    t.battery_pct = 82.0f;
-    renderAndSave("02_analog_cruising", t);
-
-    // ----------------------------------------------------
-    // Scenario 3: Analog Dial - High Power & Field Weakening Redline
-    // ----------------------------------------------------
-    t.speed_kmh = 58.2f;
-    t.duty_cycle_pct = 112.5f; // Over 100% (Field Weakening!)
-    t.throttle_pct = 95.0f;
-    t.power_watts = 1980.0f;   // Over 1500W (Red)
-    t.phase_amps = 64.0f;      // Over 55A (Red)
-    t.voltage = 49.4f;
-    t.battery_pct = 72.0f;
-    t.temp_motor = 82.0f;      // Amber/Red
-    t.temp_esc = 76.0f;
-    renderAndSave("03_analog_field_weakening", t);
-
-    // ----------------------------------------------------
-    // Scenario 4: Horizontal Bar - Moderate Cruise
-    // ----------------------------------------------------
-    Settings.get().dash_style = STYLE_HORIZONTAL_BAR;
-    t.speed_kmh = 34.0f;
-    t.duty_cycle_pct = 52.0f;
-    t.throttle_pct = 45.0f;
-    t.power_watts = 720.0f;
-    t.phase_amps = 28.0f;
-    t.temp_motor = 45.0f;
-    t.temp_esc = 40.0f;
-    Renderer.markScreenDirty();
-    renderAndSave("04_horizontal_cruising", t);
-
-    // ----------------------------------------------------
-    // Scenario 5: Horizontal Bar - High Power & Field Weakening
-    // ----------------------------------------------------
-    t.speed_kmh = 59.1f;
-    t.duty_cycle_pct = 114.0f;
-    t.throttle_pct = 98.0f;
-    t.power_watts = 2150.0f;
-    t.phase_amps = 68.0f;
-    renderAndSave("05_horizontal_field_weakening", t);
 
     // ----------------------------------------------------
     // Scenario 6: Screen 1 - Controllable LEDs & Lights Screen (Video Exact)

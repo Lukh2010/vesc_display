@@ -28,19 +28,9 @@ private:
     void initRideDashboard(const DashTelemetry &telemetry);
     void renderRideDashboard(const DashTelemetry &telemetry);
 
-    // Style 0: "Best VESC Screen Ever Made" Hyper-VESC 35kW+ Pro Cluster
+    // Flagship: Hyper-VESC 35kW+ Pro Cluster
     void initHyper35kwStyle(const DashTelemetry &telemetry);
     void renderHyper35kwStyle(const DashTelemetry &telemetry);
-
-    // Style 1: Left-Hug Analog Duty Dial Cluster (Motorcycle/Koso inspired)
-    void initLeftHugAnalogStyle(const DashTelemetry &telemetry);
-    void renderLeftHugAnalogStyle(const DashTelemetry &telemetry);
-    void drawAnalogNeedle(int cx, int cy, int length, float angle_rad, uint16_t color);
-
-    // Style 2: Horizontal Duty Bar Cluster
-    void initHorizontalBarStyle(const DashTelemetry &telemetry);
-    void renderHorizontalBarStyle(const DashTelemetry &telemetry);
-    void drawPreciseDutyBar(int x, int y, int w, int h, float duty, float max_duty);
 
     // Screen 1: Controllable LEDs & Light Modules (Color Wheel & Hazard)
     void initLightsScreen(const DashTelemetry &telemetry);

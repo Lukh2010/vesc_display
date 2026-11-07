@@ -16,8 +16,8 @@ Custom high-performance dashboard for VESC-driven electric scooters, e-bikes, an
 | <img src="tools/simulator/screenshots/00_hyper_35kw_idle.png" width="100%"> | <img src="tools/simulator/screenshots/15_stats_rich_overview.png" width="100%"> |
 | **PIN Security Lockscreen** | **VESC Fault Alarm Banner** |
 | <img src="tools/simulator/screenshots/17_pin_lockscreen.png" width="100%"> | <img src="tools/simulator/screenshots/16_vesc_fault_banner.png" width="100%"> |
-| **Analog Dial Cluster Style** | **Horizontal Bar Cluster Style** |
-| <img src="tools/simulator/screenshots/01_analog_idle.png" width="100%"> | <img src="tools/simulator/screenshots/04_horizontal_cruising.png" width="100%"> |
+| **Mode Banner HUD Overlay** | **Wi-Fi Bridge & Diagnostics** |
+| <img src="tools/simulator/screenshots/00_hyper_35kw_mode_banner.png" width="100%"> | <img src="tools/simulator/screenshots/13_wifi_bridge.png" width="100%"> |
 
 ---
 

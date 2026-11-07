@@ -35,7 +35,7 @@ void SettingsManager::begin() {
         _prefs.putBool("adc_v2_fixed", true);
         Serial.println("[SETTINGS] Initialized default NVS configuration.");
     } else {
-        _settings.dash_style             = _prefs.getUChar("style", STYLE_ANALOG_DIAL);
+        _settings.dash_style             = _prefs.getUChar("style", STYLE_HYPER_35KW);
         _settings.brightness_pct         = _prefs.getUChar("bright", 90);
         _settings.max_battery_amps       = _prefs.getUShort("bat_a", 28);
         _settings.max_phase_amps         = _prefs.getUShort("pha_a", 55);
