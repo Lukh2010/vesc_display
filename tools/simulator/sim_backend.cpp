@@ -618,6 +618,15 @@ void sim_step(uint32_t step_ms) {
         }
     }
 
+    // SCREEN_SETTINGS_MENU: Interactive Touch & Navigation Handling
+    if (!g_telemetry.is_locked && g_telemetry.screen == SCREEN_SETTINGS_MENU) {
+        int16_t tx = -1, ty = -1;
+        if (Buttons.getLastTap(&tx, &ty)) {
+            Renderer.handleSettingsTouch(tx, ty, g_telemetry);
+            Buttons.clearNavAction(); // Clear any pending action to prevent double-invocation
+        }
+    }
+
     NavAction nav = g_telemetry.is_locked ? NAV_NONE : Buttons.getNavAction();
 
     if (nav != NAV_NONE) {
@@ -625,6 +634,11 @@ void sim_step(uint32_t step_ms) {
             Renderer.handleMenuNav(nav, g_telemetry);
         } else {
             switch (nav) {
+                case NAV_SCREEN_DASH:
+                    g_telemetry.screen = SCREEN_RIDE_DASH;
+                    Renderer.markScreenDirty();
+                    Renderer.invalidateCache();
+                    break;
                 case NAV_BTN1_SHORT: // Prev Screen
                     {
                         if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
@@ -978,6 +992,11 @@ void sim_trigger_nav(int nav_action) {
             }
             case NAV_SCREEN_STATS:
                 g_telemetry.screen = SCREEN_RT_GRAPHS;
+                break;
+            case NAV_SCREEN_DASH:
+                g_telemetry.screen = SCREEN_RIDE_DASH;
+                Renderer.markScreenDirty();
+                Renderer.invalidateCache();
                 break;
             case NAV_BTN1_LONG:
                 g_telemetry.screen = SCREEN_SETTINGS_MENU;

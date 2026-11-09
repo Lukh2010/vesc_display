@@ -36,6 +36,9 @@ public:
         return false;
     }
 
+    // Clear any pending navigation action (used when touch tap is consumed by GUI)
+    void clearNavAction() { _pending_action = NAV_NONE; }
+
     // Tuning Mode & Speed Number Hitbox
     void setTuningMode(bool active) { _tuning_mode = active; }
     bool isTuningMode() const { return _tuning_mode; }

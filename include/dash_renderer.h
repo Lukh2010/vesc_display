@@ -18,6 +18,7 @@ public:
 
     // Menu Navigation Handler (called by main when in SCREEN_SETTINGS_MENU)
     void handleMenuNav(NavAction action, DashTelemetry &telemetry);
+    bool handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
     bool isInEditMode() const { return _menu_edit_mode; }
 
 private:
