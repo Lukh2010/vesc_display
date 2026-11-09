@@ -98,14 +98,21 @@ Custom high-performance dashboard for VESC-driven electric scooters, e-bikes, an
 - **IO Expander:** CH422G (I2C `0x24`), EXIO2 controls LCD Backlight
 - **Memory:** 16 MB Flash, 8 MB Octal PSRAM (`qio_opi`)
 
-### VESC Connection
-- **UART (Default):**
+### VESC & Peripheral Bus Topology
+- **CAN-Bus Multi-Drop (Recommended for Dual VESC & BT Dongles):**
+  - Connects display to VESC CAN port via onboard TJA1051 transceiver (`CAN_H` / `CAN_L` on GPIO 20 / GPIO 19).
+  - Operates as a shared multi-drop bus: supports **Dual VESC** simultaneously (reading Rear VESC ID 0 and Front VESC ID 1 for combined 35kW+ power telemetry and dual thermals).
+  - Leaves the VESC's COMM/UART port 100% free for your existing Bluetooth dongle (VESC Tool Mobile App)!
+- **GPS / BDS GNSS Module Integration:**
+  - Standard 3.3V UART GPS/BDS module connects directly to the display's free serial interface:
+    - GPS TX $\rightarrow$ ESP32 RX (GPIO 44)
+    - GPS RX $\rightarrow$ ESP32 TX (GPIO 43)
+    - VCC (3.3V/5V) and GND
+  - Provides true satellite ground speed (unaffected by tire slip or wear), real-time altitude, slope gradient (%), atomic UTC clock sync, and satellite lock status.
+- **Direct VESC UART (Alternative single-ESC mode):**
   - ESP32 TX (GPIO 43) $\rightarrow$ VESC RX
   - ESP32 RX (GPIO 44) $\rightarrow$ VESC TX
   - Baudrate: `115200`
-- **CAN-Bus:**
-  - Onboard TJA1051 transceiver (TX = GPIO 20, RX = GPIO 19)
-  - Connect CANH / CANL terminals to VESC CAN port (`500k` Baud)
 
 ---
 
@@ -119,10 +126,11 @@ python3 tools/simulator/live_demo.py
 ```
 - **Web Stream:** Open [http://localhost:8080](http://localhost:8080) for a clean 60 FPS interactive stream.
 - **Captive Portal Web UI:** Accessible at [http://localhost:8080/portal](http://localhost:8080/portal) or [http://localhost:8081](http://localhost:8081).
+- **VESC Tool TCP Bridge:** The simulator runs a built-in Virtual VESC TCP Server on port `6510`. Connect the official VESC Tool (Connection $\rightarrow$ TCP $\rightarrow$ `127.0.0.1:6510`) to tune limits, test throttle, and inspect real-time motor RT telemetry end-to-end!
 - **Desktop Window:** Native 800x480 interactive window on `DISPLAY=:0`.
 - **Controls:**
-  - Mouse click/drag on the display to touch and swipe.
-  - Keyboard: <kbd>W</kbd> / <kbd>Up</kbd> (Throttle), <kbd>S</kbd> / <kbd>Down</kbd> (Brake), <kbd>B</kbd> (Boost), <kbd>M</kbd> (Mode cycle), <kbd>Left</kbd> / <kbd>Right</kbd> (Swipe screen).
+  - Mouse click/drag on the display to touch and swipe; mouse wheel scrolls Settings menus.
+  - Keyboard: <kbd>W</kbd> / <kbd>Up</kbd> (Throttle), <kbd>S</kbd> / <kbd>Down</kbd> (Brake), <kbd>B</kbd> (Boost), <kbd>M</kbd> (Mode cycle), <kbd>Left</kbd> / <kbd>Right</kbd> (Swipe screen or navigate), <kbd>Enter</kbd> (Select/Confirm), <kbd>Backspace</kbd> / <kbd>Esc</kbd> (Back/Exit to Dash).
 
 ### Build & Run Test Scenarios
 ```bash

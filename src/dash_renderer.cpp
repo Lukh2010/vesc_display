@@ -190,6 +190,8 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
                 _sweep_duty = 0.0f;
                 _sweep_speed = 0.0f;
                 _is_sweeping = false;
+                _screen_dirty = true;
+                _cache.invalidate();
             } else {
                 float ease = _sweep_progress * _sweep_progress * (3.0f - 2.0f * _sweep_progress);
                 _sweep_duty = ease * 120.0f;
@@ -405,7 +407,11 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
 
     // Static label "W" next to hero power
     if (telemetry.fault_code == 0) {
-        _canvas->drawString("W", 726, 86);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextSize(1);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+        _canvas->drawString("W", 730, 86);
     }
 
     // Static label "DUTY"
@@ -504,13 +510,22 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _last_arc_col = arcCol;
     } else if (arcCol != _last_arc_col) {
         // Redraw active arc on color change
-        if (_last_arc_angle > 135.0f) {
+        if (target_angle < _last_arc_angle) {
+            // Speed decreasing across color boundary: erase obsolete arc & old tip
+            _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 1.0f, COLOR_TRACK_TEAL);
+            int old_tip_x = cx + (int)roundf(cosf(_last_arc_angle * deg2rad) * mid_r);
+            int old_tip_y = cy + (int)roundf(sinf(_last_arc_angle * deg2rad) * mid_r);
+            _canvas->fillCircle(old_tip_x, old_tip_y, 13, COLOR_TRACK_TEAL);
+        }
+        if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
             _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
             _canvas->fillCircle(tip_x, tip_y, 13, arcCol);
             _canvas->fillCircle(tip_x, tip_y, 5, COLOR_WHITE);
+        } else {
+            _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_TRACK_TEAL);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
@@ -585,11 +600,18 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (!_hyper_inited || cur_watts != _cache.watts || telemetry.boost_active != _cache.boost_active) {
         _cache.watts = cur_watts;
         if (telemetry.fault_code == 0) {
-            _canvas->fillRect(460, 42, 260, 78, COLOR_BG);
+            _canvas->fillRect(460, 42, 310, 78, COLOR_BG);
             char pStr[16];
             snprintf(pStr, sizeof(pStr), "%d", cur_watts);
             uint16_t pwrCol = (cur_watts < -10) ? COLOR_GREEN : (telemetry.boost_active ? COLOR_CYAN : COLOR_WHITE);
             drawHeroDigitText(_canvas, pStr, 720, 50, textdatum_t::top_right, pwrCol, COLOR_BG);
+
+            // Redraw "W" unit label so it never gets clipped or erased
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextSize(1);
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+            _canvas->drawString("W", 730, 86);
         }
     }
 
@@ -1647,10 +1669,11 @@ void DashboardRenderer::renderSubmenu(uint8_t sub_id, const DashTelemetry &telem
     int count = getSubItemCount(sub_id);
     int start_idx = 0;
     if (count > 5) {
-        if (_menu_sub_idx >= 4) {
-            start_idx = _menu_sub_idx - 4;
-            if (start_idx + 5 > count) start_idx = count - 5;
+        if (_menu_sub_idx >= 3) {
+            start_idx = _menu_sub_idx - 2;
         }
+        if (start_idx + 5 > count) start_idx = count - 5;
+        if (start_idx < 0) start_idx = 0;
     }
     int display_count = (count > 5) ? 5 : count;
 
@@ -1677,10 +1700,19 @@ void DashboardRenderer::renderSubmenu(uint8_t sub_id, const DashTelemetry &telem
 
     // Scrollbar indicator if items exceed display capacity (count > 5)
     if (count > 5) {
-        _canvas->fillRoundRect(322, 62, 4, 372, 2, 0x18C3);
-        int thumb_h = 372 * 5 / count;
-        int thumb_y = 62 + (372 - thumb_h) * start_idx / (count - 5);
+        _canvas->fillRoundRect(322, 75, 4, 345, 2, 0x18C3);
+        int thumb_h = 345 * 5 / count;
+        if (thumb_h < 24) thumb_h = 24;
+        int thumb_y = 75 + (345 - thumb_h) * start_idx / (count - 5);
         _canvas->fillRoundRect(322, thumb_y, 4, thumb_h, 2, COLOR_CYAN);
+
+        // Visual scroll indicators
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setTextColor(start_idx > 0 ? COLOR_CYAN : 0x2965, COLOR_SURFACE);
+        _canvas->drawString("^", 324, 66);
+        _canvas->setTextColor(start_idx + 5 < count ? COLOR_CYAN : 0x2965, COLOR_SURFACE);
+        _canvas->drawString("v", 324, 430);
     }
 }
 
@@ -1712,36 +1744,40 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     _canvas->fillRect(0, 0, 800, 48, COLOR_BG);
     _canvas->drawFastHLine(20, 48, 760, COLOR_BORDER);
 
-    // [< DASH] Back button (Prominent, Always returns to Ride Dash)
-    _canvas->fillRoundRect(20, 6, 115, 36, 18, 0x18C3);
-    _canvas->drawRoundRect(20, 6, 115, 36, 18, 0x39C7);
-    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
-    _canvas->setTextDatum(textdatum_t::middle_center);
-    _canvas->setFont(&fonts::Font2);
-    _canvas->drawString("< DASH", 77, 24);
-
-    // If inside a submenu: show [< MENÜ] button to return to Root Categories
+    // Top Left Back button: In Submenu -> [< ZURUECK] to Root; In Root -> [< DASH] to Dash
     if (_menu_in_sub) {
-        _canvas->fillRoundRect(145, 6, 105, 36, 18, 0x2124);
-        _canvas->drawRoundRect(145, 6, 105, 36, 18, COLOR_CYAN);
+        _canvas->fillRoundRect(20, 6, 125, 36, 18, 0x2124);
+        _canvas->drawRoundRect(20, 6, 125, 36, 18, COLOR_CYAN);
         _canvas->setTextColor(COLOR_CYAN, 0x2124);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font2);
-        _canvas->drawString("< MENU", 197, 24);
-    }
+        _canvas->drawString("< ZURUECK", 82, 24);
 
-    // Header Title / Breadcrumb
-    _canvas->setTextDatum(textdatum_t::middle_left);
-    _canvas->setFont(&fonts::Font4);
-    if (_menu_edit_mode) {
-        _canvas->setTextColor(COLOR_AMBER, COLOR_BG);
-        _canvas->drawString("WERT BEARBEITEN", _menu_in_sub ? 260 : 145, 24);
-    } else if (_menu_in_sub) {
-        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-        _canvas->drawString(ROOT_CATEGORIES[_menu_root_idx], 260, 24);
+        // Header Title / Breadcrumb
+        _canvas->setTextDatum(textdatum_t::middle_left);
+        _canvas->setFont(&fonts::Font4);
+        if (_menu_edit_mode) {
+            _canvas->setTextColor(COLOR_AMBER, COLOR_BG);
+            _canvas->drawString("WERT BEARBEITEN", 165, 24);
+        } else {
+            _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+            char bc[64];
+            snprintf(bc, sizeof(bc), "MENU > %s", ROOT_CATEGORIES[_menu_root_idx]);
+            _canvas->drawString(bc, 165, 24);
+        }
     } else {
+        _canvas->fillRoundRect(20, 6, 115, 36, 18, 0x18C3);
+        _canvas->drawRoundRect(20, 6, 115, 36, 18, 0x39C7);
+        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->drawString("< DASH", 77, 24);
+
+        // Header Title
+        _canvas->setTextDatum(textdatum_t::middle_left);
+        _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-        _canvas->drawString("EINSTELLUNGEN", 145, 24);
+        _canvas->drawString("EINSTELLUNGEN", 150, 24);
     }
 
     // Top Right [DASH [X]] Close Button
@@ -2231,22 +2267,14 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
 
     // 1. TOP BAR CLICKS (y <= 65)
     if (ty <= 65) {
-        // Top Left: [< DASH] (Direct return to Ride Dashboard)
-        // If in root menu: wide hitbox (x <= 260)
-        // If in submenu: x <= 140
-        if ((!_menu_in_sub && tx <= 260) || tx <= 140) {
-            handleMenuNav(NAV_SCREEN_DASH, telemetry);
-            return true;
-        }
-
-        // Top Right: [DASH [X]] (x >= 640)
+        // Top Right: [DASH [X]] (x >= 640) -> Direct exit to Ride Dash
         if (tx >= 640) {
             handleMenuNav(NAV_SCREEN_DASH, telemetry);
             return true;
         }
 
-        // Top Submenu Back: [< MENÜ] (x in 140..270)
-        if (_menu_in_sub && tx > 140 && tx <= 270) {
+        // Top Left: [< ZURUECK] in submenu -> Root Menu; [< DASH] in root -> Ride Dash
+        if (tx <= 260) {
             handleMenuNav(NAV_MENU_BACK, telemetry);
             return true;
         }
@@ -2298,7 +2326,35 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         }
     }
 
-    // 3. LEFT PANE INTERACTIONS (x: 20..340, y: 56..460)
+    // 2b. SCROLLBAR INTERACTIONS (x: 315..345, y: 50..460)
+    if (_menu_in_sub && tx >= 315 && tx <= 345 && ty >= 50 && ty <= 460) {
+        int count = getSubItemCount(_menu_root_idx);
+        if (count > 5) {
+            if (ty <= 75) {
+                // Scroll UP button [^]
+                if (_menu_sub_idx > 0) {
+                    _menu_sub_idx--;
+                    _menu_dirty = true;
+                }
+            } else if (ty >= 420) {
+                // Scroll DOWN button [v]
+                if (_menu_sub_idx < count - 1) {
+                    _menu_sub_idx++;
+                    _menu_dirty = true;
+                }
+            } else {
+                // Direct jump on scrollbar track
+                int target = (ty - 75) * count / (420 - 75);
+                if (target < 0) target = 0;
+                if (target >= count) target = count - 1;
+                _menu_sub_idx = target;
+                _menu_dirty = true;
+            }
+            return true;
+        }
+    }
+
+    // 3. LEFT PANE INTERACTIONS (x: 20..315, y: 56..460)
     if (tx >= 20 && tx <= 340 && ty >= 56 && ty <= 460) {
         int k = (ty - 58) / 76;
         if (k < 0) k = 0;
@@ -2316,10 +2372,11 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             int count = getSubItemCount(_menu_root_idx);
             int start_idx = 0;
             if (count > 5) {
-                if (_menu_sub_idx >= 4) {
-                    start_idx = _menu_sub_idx - 4;
-                    if (start_idx + 5 > count) start_idx = count - 5;
+                if (_menu_sub_idx >= 3) {
+                    start_idx = _menu_sub_idx - 2;
                 }
+                if (start_idx + 5 > count) start_idx = count - 5;
+                if (start_idx < 0) start_idx = 0;
             }
             int j = start_idx + k;
             if (j < count) {

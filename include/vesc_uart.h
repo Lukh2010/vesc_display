@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include "board_config.h"
 #include "dash_types.h"
+#include "vesc_transport.h"
 
 enum VescSyncStatus {
     SYNC_IDLE = 0,
@@ -17,11 +18,21 @@ public:
     void begin();
     void update(DashTelemetry &telemetry);
 
+    // Transport Interface (UART / Loopback / Virtual)
+    void setTransport(IVescTransport *transport) { _transport = transport; }
+    IVescTransport* getTransport() const { return _transport; }
+
     // Manual simulation throttle override
     void setSimThrottle(float pct);
     float getSimThrottle() const { return _sim_throttle; }
     void triggerSimFault(uint8_t code) { _sim_fault_code = code; }
     uint8_t getSimFault() const { return _sim_fault_code; }
+
+    // ADC Diagnostic Getters
+    float getLastAdc1Voltage() const;
+    float getLastAdc1Pct() const;
+    float getLastAdc2Voltage() const;
+    float getLastAdc2Pct() const;
 
     // Configuration
     void setMotorPolePairs(int poles) { _pole_pairs = poles; }
@@ -64,6 +75,8 @@ private:
     void sendVescGetValues();
     void sendVescGetDecodedAdc();
     bool parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &telemetry);
+
+    IVescTransport *_transport;
 
     // Telemetry & Ebike Physics Parameters
     int _pole_pairs;            // Standard ebike hub motor: usually 15 or 23 pole pairs

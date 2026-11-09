@@ -62,8 +62,14 @@ static float _last_adc1_pct = 0.0f;
 static float _last_adc2_v = 0.0f;
 static float _last_adc2_pct = 0.0f;
 
+float VescHandler::getLastAdc1Voltage() const { return _last_adc1_v; }
+float VescHandler::getLastAdc1Pct() const { return _last_adc1_pct; }
+float VescHandler::getLastAdc2Voltage() const { return _last_adc2_v; }
+float VescHandler::getLastAdc2Pct() const { return _last_adc2_pct; }
+
 VescHandler::VescHandler()
-    : _pole_pairs(15),
+    : _transport(nullptr),
+      _pole_pairs(15),
       _wheel_diameter_mm(660.0f),
       _gear_ratio(1.0f),
       _sim_throttle(0.0f),
@@ -90,11 +96,20 @@ void VescHandler::begin() {
     if (s_uartMutex == NULL) {
         s_uartMutex = xSemaphoreCreateMutex();
     }
-#endif
 #if !SIMULATION_MODE
     VESC_UART_PORT.setRxBufferSize(4096);
     VESC_UART_PORT.setTxBufferSize(4096);
     VESC_UART_PORT.begin(VESC_UART_BAUDRATE, SERIAL_8N1, VESC_UART_RX_PIN, VESC_UART_TX_PIN);
+    static HardwareSerialTransport s_hwTransport(VESC_UART_PORT);
+    if (!_transport) {
+        _transport = &s_hwTransport;
+    }
+#endif
+#else
+    static VescLoopbackTransport s_defaultSimTransport;
+    if (!_transport) {
+        _transport = &s_defaultSimTransport.getSideA();
+    }
 #endif
     _sim_last_update_ms = millis();
     _last_poll_ms = millis();
@@ -197,8 +212,10 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
 
     // Phase current is higher during low-speed high-torque launches
     float duty_fraction = telemetry.duty_cycle_pct / 100.0f;
+    if (duty_fraction > 0.95f) duty_fraction = 0.95f;
     if (duty_fraction < 0.35f) duty_fraction = 0.35f;
     float calculated_phase = telemetry.current_amps / duty_fraction;
+    if (calculated_phase < telemetry.current_amps) calculated_phase = telemetry.current_amps;
     if (calculated_phase > (float)max_pha_a) calculated_phase = (float)max_pha_a;
     telemetry.phase_amps = calculated_phase;
 
@@ -296,8 +313,10 @@ void VescHandler::pollRealVesc(DashTelemetry &telemetry) {
     static uint32_t total_rx_bytes = 0;
     static uint32_t last_diag_ms = 0;
 
-    while (VESC_UART_PORT.available()) {
-        uint8_t b = VESC_UART_PORT.read();
+    if (!_transport) return;
+
+    while (_transport->available()) {
+        uint8_t b = (uint8_t)_transport->read();
         total_rx_bytes++;
         last_rx_byte_ms = now;
 
@@ -391,12 +410,12 @@ void VescHandler::pollRealVesc(DashTelemetry &telemetry) {
 void VescHandler::sendVescGetValues() {
     // Request COMM_GET_VALUES_SETUP (0x2F / 47) which contains mc_interface_get_speed()
     static const uint8_t req[] = { 0x02, 0x01, 0x2F, 0xD5, 0x8D, 0x03 };
-    VESC_UART_PORT.write(req, sizeof(req));
+    if (_transport) _transport->write(req, sizeof(req));
 }
 
 void VescHandler::sendVescGetDecodedAdc() {
     static const uint8_t req[] = { 0x02, 0x01, 0x20, 0x24, 0x62, 0x03 };
-    VESC_UART_PORT.write(req, sizeof(req));
+    if (_transport) _transport->write(req, sizeof(req));
 }
 
 bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &telemetry) {
@@ -442,6 +461,9 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
             float pct = (chosen_level / 1000000.0f) * 100.0f;
             if (pct < 0.0f) pct = 0.0f;
             if (pct > 100.0f) pct = 100.0f;
+            if (telemetry.is_locked || ModeManager::instance().isLocked()) {
+                pct = 0.0f;
+            }
             telemetry.throttle_pct = pct;
         }
         return true;
@@ -465,6 +487,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         idx += 4; // skip wh_used
         idx += 4; // skip wh_charge_tot
         int32_t dist_m = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
+        int32_t dist_tot = (payload_len >= 51) ? (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]) : 0; idx += 4;
 
         telemetry.temp_esc       = temp_mos / 10.0f;
         telemetry.temp_motor     = temp_mot / 10.0f;
@@ -483,9 +506,12 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         telemetry.speed_kmh      = fabsf((speed_m_s / 1000.0f) * 3.6f);
         if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
         telemetry.trip_km        = fabsf((dist_m / 1000.0f) / 1000.0f);
+        if (payload_len >= 51) {
+            telemetry.odo_km     = fabsf((dist_tot / 1000.0f) / 1000.0f);
+        }
 
-        // Fault code extraction (idx 51 in COMM_GET_VALUES_SETUP)
-        uint8_t fault_code = (payload_len > 51) ? payload[51] : 0;
+        // Fault code extraction (idx 55 in standard COMM_GET_VALUES_SETUP, backwards compatible with idx 51)
+        uint8_t fault_code = (payload_len > 55) ? payload[55] : ((payload_len > 51) ? payload[51] : 0);
         telemetry.fault_code = fault_code;
         if (fault_code != 0) {
             FaultManager::instance().recordFault(fault_code, telemetry.voltage, telemetry.current_amps, telemetry.phase_amps, telemetry.temp_esc, telemetry.temp_motor, telemetry.uptime_sec);
@@ -581,12 +607,12 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
             float l_in_current_max = buffer_get_float32_auto(payload, &ind);
             (void)buffer_get_float32_auto(payload, &ind); // skip l_in_current_min
 
-            if (l_current_max > 5.0f && l_current_max < 200.0f &&
-                l_in_current_max > 5.0f && l_in_current_max < 150.0f) {
+            if (l_current_max > 5.0f && l_current_max < 400.0f &&
+                l_in_current_max > 5.0f && l_in_current_max < 250.0f) {
                 
                 DashSettings &s = Settings.get();
-                s.max_phase_amps   = (uint8_t)roundf(fabsf(l_current_max));
-                s.max_battery_amps = (uint8_t)roundf(fabsf(l_in_current_max));
+                s.max_phase_amps   = (uint16_t)roundf(fabsf(l_current_max));
+                s.max_battery_amps = (uint16_t)roundf(fabsf(l_in_current_max));
                 Settings.save();
 
                 _sync_status = SYNC_SUCCESS;
@@ -609,7 +635,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
 
 void VescHandler::requestMcconf() {
     static const uint8_t req[] = { 0x02, 0x01, 0x0E, 0xE1, 0xCE, 0x03 };
-    VESC_UART_PORT.write(req, sizeof(req));
+    if (_transport) _transport->write(req, sizeof(req));
     _sync_status = SYNC_REQUESTED;
     _mcconf_req_ms = millis();
     Serial.println("[VESC_UART] Sent COMM_GET_MCCONF request to VESC.");
@@ -632,13 +658,17 @@ void VescHandler::enterBridgeMode() {
     // Ensure 4KB queues for high-volume configuration bursts (e.g. COMM_SET_MCCONF)
     Serial.setRxBufferSize(4096);
     Serial.setTxBufferSize(4096);
+#if !defined(NATIVE_SIMULATOR)
     VESC_UART_PORT.setRxBufferSize(4096);
     VESC_UART_PORT.setTxBufferSize(4096);
+#endif
 
     // Allow in-flight telemetry frames to conclude, then flush both pipelines
     delay(30);
     while (Serial.available()) Serial.read();
-    while (VESC_UART_PORT.available()) VESC_UART_PORT.read();
+    if (_transport) {
+        while (_transport->available()) _transport->read();
+    }
 }
 
 void VescHandler::exitBridgeMode() {
@@ -647,24 +677,24 @@ void VescHandler::exitBridgeMode() {
 }
 
 void VescHandler::updateUsbBridge() {
-    if (!_bridge_active) return;
+    if (!_bridge_active || !_transport) return;
 
-    // 1. Forward USB CDC (PC / VESC Tool) -> Flipsky 75100 VESC UART
+    // 1. Forward USB CDC (PC / VESC Tool) -> Flipsky 75100 VESC Transport
     while (Serial.available() > 0) {
         uint8_t buf[512];
         size_t n = Serial.read(buf, sizeof(buf));
         if (n > 0) {
-            VESC_UART_PORT.write(buf, n);
+            _transport->write(buf, n);
             _bridge_pc_to_vesc += n;
         } else {
             break;
         }
     }
 
-    // 2. Forward Flipsky 75100 VESC UART -> USB CDC (PC / VESC Tool)
-    while (VESC_UART_PORT.available() > 0) {
+    // 2. Forward Flipsky 75100 VESC Transport -> USB CDC (PC / VESC Tool)
+    while (_transport->available() > 0) {
         uint8_t buf[512];
-        size_t n = VESC_UART_PORT.read(buf, sizeof(buf));
+        size_t n = _transport->readBytes(buf, sizeof(buf));
         if (n > 0) {
             Serial.write(buf, n);
             _bridge_vesc_to_pc += n;
@@ -685,13 +715,17 @@ void VescHandler::enterWifiBridgeMode() {
     _bridge_vesc_to_wifi = 0;
 
     // Ensure 4KB UART queues for high-volume configuration bursts
+#if !defined(NATIVE_SIMULATOR)
     VESC_UART_PORT.setRxBufferSize(4096);
     VESC_UART_PORT.setTxBufferSize(4096);
+#endif
 
     // Allow in-flight telemetry to conclude, then flush buffers
     delay(30);
     while (Serial.available()) Serial.read();
-    while (VESC_UART_PORT.available()) VESC_UART_PORT.read();
+    if (_transport) {
+        while (_transport->available()) _transport->read();
+    }
 
 #if !defined(LGFX_LINUX_FB) && !defined(SIMULATOR)
     WiFi.mode(WIFI_AP);
@@ -749,7 +783,7 @@ void VescHandler::updateWifiBridge() {
             uint8_t buf[512];
             int bytes_read = _wifi_client.read(buf, sizeof(buf));
             if (bytes_read > 0) {
-                VESC_UART_PORT.write(buf, bytes_read);
+                if (_transport) _transport->write(buf, bytes_read);
                 _bridge_wifi_to_vesc += bytes_read;
             } else {
                 break;
@@ -757,14 +791,16 @@ void VescHandler::updateWifiBridge() {
         }
 
         // 2. Forward VESC UART -> TCP (bulk read/write loop)
-        while (VESC_UART_PORT.available() > 0) {
-            uint8_t buf[512];
-            size_t n = VESC_UART_PORT.read(buf, sizeof(buf));
-            if (n > 0) {
-                _wifi_client.write(buf, n);
-                _bridge_vesc_to_wifi += n;
-            } else {
-                break;
+        if (_transport) {
+            while (_transport->available() > 0) {
+                uint8_t buf[512];
+                size_t n = _transport->readBytes(buf, sizeof(buf));
+                if (n > 0) {
+                    _wifi_client.write(buf, n);
+                    _bridge_vesc_to_wifi += n;
+                } else {
+                    break;
+                }
             }
         }
     } else {
@@ -790,6 +826,7 @@ void VescHandler::updateBridge() {
 
 void VescHandler::sendTerminalCommand(const char *str) {
 #if !SIMULATION_MODE
+    if (!_transport) return;
     size_t slen = strlen(str);
     if (slen > 68) slen = 68;
     uint8_t t_payload[70];
@@ -803,7 +840,7 @@ void VescHandler::sendTerminalCommand(const char *str) {
     t_packet[3 + slen] = (uint8_t)(tcrc >> 8);
     t_packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
     t_packet[5 + slen] = 0x03;
-    VESC_UART_PORT.write(t_packet, slen + 6);
+    _transport->write(t_packet, slen + 6);
 #endif
 }
 
@@ -903,7 +940,7 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     packet[2 + p_idx] = (uint8_t)(crc >> 8);
     packet[3 + p_idx] = (uint8_t)(crc & 0xFF);
     packet[4 + p_idx] = 0x03;
-    VESC_UART_PORT.write(packet, p_idx + 5);
+    if (_transport) _transport->write(packet, p_idx + 5);
 
     // Also forward to Ubox secondary VESC via CAN (CAN ID 1)
     uint8_t can_payload[39];
@@ -918,7 +955,7 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     can_packet[4 + p_idx] = (uint8_t)(can_crc >> 8);
     can_packet[5 + p_idx] = (uint8_t)(can_crc & 0xFF);
     can_packet[6 + p_idx] = 0x03;
-    VESC_UART_PORT.write(can_packet, p_idx + 7);
+    if (_transport) _transport->write(can_packet, p_idx + 7);
 
     // 3. Fallback / Universal Terminal Commands
     char cmd[64];

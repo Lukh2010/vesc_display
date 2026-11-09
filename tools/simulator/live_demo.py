@@ -69,6 +69,7 @@ class SimTelemetry(ctypes.Structure):
         ("avg_speed_kmh", ctypes.c_float),
         ("ride_time_sec", ctypes.c_uint32),
         ("tuning_mode", ctypes.c_int32),
+        ("is_locked", ctypes.c_int32),
     ]
 
 sim_lib.sim_init.restype = None
@@ -114,19 +115,26 @@ sim_lib.sim_set_config_json.restype = ctypes.c_int
 
 # Navigation Constants (Matches include/dash_types.h NavAction enum)
 NAV_NONE = 0
-NAV_BTN1_SHORT = 1    # Prev screen (Swipe Right)
+NAV_BTN1_SHORT = 1    # Prev screen (Swipe Right) / Menu Up
 NAV_BTN1_LONG = 2     # Settings Menu
-NAV_BTN2_SHORT = 3    # Next screen (Swipe Left)
+NAV_BTN2_SHORT = 3    # Next screen (Swipe Left) / Menu Down
 NAV_BTN2_LONG = 4     # Long press (Trip Reset)
 NAV_EDIT_DEC = 5
 NAV_EDIT_INC = 6
-NAV_BOTH_PRESSED = 7
+NAV_BOTH_PRESSED = 7  # Select / Enter / Edit
 NAV_BOOST_TOGGLE = 8
 NAV_MODE_CYCLE = 9
 NAV_HAZARD_TOGGLE = 10
 NAV_SCREEN_STATS = 11
 NAV_TUNING_ENABLE = 12
 NAV_TUNING_DISABLE = 13
+NAV_SCREEN_DASH = 14
+NAV_MENU_BACK = 15
+
+SCREEN_RIDE_DASH = 0
+SCREEN_LIGHTS = 1
+SCREEN_RT_GRAPHS = 2
+SCREEN_SETTINGS_MENU = 3
 
 # Initialize backend
 sim_lib.sim_init()
@@ -678,26 +686,39 @@ class DesktopDemoApp:
         self.canvas.bind("<B1-Motion>", self.on_touch_move)
         self.canvas.bind("<ButtonRelease-1>", self.on_touch_up)
 
-        # Keyboard shortcuts: Spring-Return Throttle & Braking
-        self.root.bind("<KeyPress-Up>", lambda e: self.set_throttle(100.0))
-        self.root.bind("<KeyRelease-Up>", lambda e: self.set_throttle(0.0))
-        self.root.bind("<KeyPress-w>", lambda e: self.set_throttle(100.0))
-        self.root.bind("<KeyRelease-w>", lambda e: self.set_throttle(0.0))
-        self.root.bind("<KeyPress-W>", lambda e: self.set_throttle(100.0))
-        self.root.bind("<KeyRelease-W>", lambda e: self.set_throttle(0.0))
+        # Keyboard shortcuts: Spring-Return Throttle & Braking or Settings Navigation
+        self.root.bind("<KeyPress-Up>", lambda e: self.on_up_press())
+        self.root.bind("<KeyRelease-Up>", lambda e: self.on_up_release())
+        self.root.bind("<KeyPress-w>", lambda e: self.on_up_press())
+        self.root.bind("<KeyRelease-w>", lambda e: self.on_up_release())
+        self.root.bind("<KeyPress-W>", lambda e: self.on_up_press())
+        self.root.bind("<KeyRelease-W>", lambda e: self.on_up_release())
 
-        self.root.bind("<KeyPress-Down>", lambda e: self.set_brake(75.0))
-        self.root.bind("<KeyRelease-Down>", lambda e: self.set_brake(0.0))
-        self.root.bind("<KeyPress-s>", lambda e: self.set_brake(75.0))
-        self.root.bind("<KeyRelease-s>", lambda e: self.set_brake(0.0))
-        self.root.bind("<KeyPress-S>", lambda e: self.set_brake(75.0))
-        self.root.bind("<KeyRelease-S>", lambda e: self.set_brake(0.0))
+        # Number keys 1-9 for partial throttle (10% .. 90%), 0 for 0%
+        for digit in range(1, 10):
+            self.root.bind(f"<{digit}>", lambda e, p=digit * 10.0: self.on_digit_press(p))
+        self.root.bind("<0>", lambda e: self.on_digit_press(0.0))
 
+        # Mouse Wheel for fine throttle adjustment (+/- 5%) or Menu Scroll
+        self.canvas.bind("<Button-4>", lambda e: self.on_wheel_scroll(1))
+        self.canvas.bind("<Button-5>", lambda e: self.on_wheel_scroll(-1))
+        self.root.bind("<MouseWheel>", lambda e: self.on_wheel_scroll(1 if e.delta > 0 else -1))
+
+        self.root.bind("<KeyPress-Down>", lambda e: self.on_down_press())
+        self.root.bind("<KeyRelease-Down>", lambda e: self.on_down_release())
+        self.root.bind("<KeyPress-s>", lambda e: self.on_down_press())
+        self.root.bind("<KeyRelease-s>", lambda e: self.on_down_release())
+        self.root.bind("<KeyPress-S>", lambda e: self.on_down_press())
+        self.root.bind("<KeyRelease-S>", lambda e: self.on_down_release())
+
+        self.root.bind("<Return>", lambda e: self.on_enter_press())
+        self.root.bind("<KP_Enter>", lambda e: self.on_enter_press())
+        self.root.bind("<BackSpace>", lambda e: self.on_back_press())
         self.root.bind("<x>", lambda e: self.toggle_tuning())
         self.root.bind("<X>", lambda e: self.toggle_tuning())
-        self.root.bind("<Left>", lambda e: self.trigger_nav(NAV_BTN1_SHORT))
-        self.root.bind("<Right>", lambda e: self.trigger_nav(NAV_BTN2_SHORT))
-        self.root.bind("<space>", lambda e: self.toggle_boost())
+        self.root.bind("<Left>", lambda e: self.on_left_press())
+        self.root.bind("<Right>", lambda e: self.on_right_press())
+        self.root.bind("<space>", lambda e: self.on_space_press())
         self.root.bind("<b>", lambda e: self.toggle_boost())
         self.root.bind("<B>", lambda e: self.toggle_boost())
         self.root.bind("<m>", lambda e: self.cycle_mode())
@@ -706,11 +727,79 @@ class DesktopDemoApp:
         self.root.bind("<H>", lambda e: self.toggle_hazard())
         self.root.bind("<t>", lambda e: self.trigger_nav(NAV_SCREEN_STATS))
         self.root.bind("<T>", lambda e: self.trigger_nav(NAV_SCREEN_STATS))
-        self.root.bind("<Escape>", lambda e: self.root.destroy())
+        self.root.bind("<Escape>", lambda e: self.on_esc_press())
 
         self.tk_img = ImageTk.PhotoImage(initial_image)
         self.image_item = self.canvas.create_image(0, 0, image=self.tk_img, anchor=tk.NW)
         self.update_loop()
+
+    def on_up_press(self):
+        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+            self.trigger_nav(NAV_BTN1_SHORT)
+        else:
+            self.set_throttle(100.0)
+
+    def on_up_release(self):
+        if current_telemetry.screen != SCREEN_SETTINGS_MENU:
+            self.set_throttle(0.0)
+
+    def on_down_press(self):
+        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+            self.trigger_nav(NAV_BTN2_SHORT)
+        else:
+            self.set_throttle(0.0)
+            self.set_brake(75.0)
+
+    def on_down_release(self):
+        if current_telemetry.screen != SCREEN_SETTINGS_MENU:
+            self.set_brake(0.0)
+
+    def on_digit_press(self, pct):
+        # Ignore number keys when locked, entering PIN, or in Settings
+        if current_telemetry.is_locked or current_telemetry.screen in (SCREEN_SETTINGS_MENU, SCREEN_PIN_LOCK):
+            return
+        self.set_throttle(pct)
+
+    def on_wheel_scroll(self, direction):
+        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+            if direction > 0:
+                self.trigger_nav(NAV_BTN1_SHORT)
+            else:
+                self.trigger_nav(NAV_BTN2_SHORT)
+        elif not current_telemetry.is_locked and current_telemetry.screen != SCREEN_PIN_LOCK:
+            self.adjust_throttle(5.0 if direction > 0 else -5.0)
+
+    def on_enter_press(self):
+        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+            self.trigger_nav(NAV_BOTH_PRESSED)
+
+    def on_back_press(self):
+        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+            self.trigger_nav(NAV_MENU_BACK)
+
+    def on_left_press(self):
+        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+            self.trigger_nav(NAV_MENU_BACK)
+        else:
+            self.trigger_nav(NAV_BTN1_SHORT)
+
+    def on_right_press(self):
+        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+            self.trigger_nav(NAV_BOTH_PRESSED)
+        else:
+            self.trigger_nav(NAV_BTN2_SHORT)
+
+    def on_space_press(self):
+        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+            self.trigger_nav(NAV_BOTH_PRESSED)
+        else:
+            self.toggle_boost()
+
+    def on_esc_press(self):
+        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+            self.trigger_nav(NAV_SCREEN_DASH)
+        else:
+            self.root.destroy()
 
     def set_throttle(self, val):
         with sim_lock:

@@ -16,6 +16,7 @@ fi
 echo "=== Compiling VESC Display Simulator (800x480) ==="
 g++ -std=c++17 -O2 -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   -Itools/simulator/include \
+  -Itools/simulator \
   -Iinclude \
   -I"$LGFX_SRC_DIR" \
   src/dash_renderer.cpp \
@@ -24,6 +25,10 @@ g++ -std=c++17 -O2 -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   src/buttons.cpp \
   src/mode_manager.cpp \
   src/fault_manager.cpp \
+  src/vesc_uart.cpp \
+  tools/simulator/virtual_vesc/vesc_packet.cpp \
+  tools/simulator/virtual_vesc/virtual_vesc.cpp \
+  tools/simulator/virtual_vesc/vesc_tcp_server.cpp \
   tools/simulator/sim_main.cpp \
   "$LGFX_SRC_DIR/lgfx/v1/LGFXBase.cpp" \
   "$LGFX_SRC_DIR/lgfx/v1/lgfx_fonts.cpp" \
@@ -45,6 +50,7 @@ g++ -std=c++17 -O2 -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
 echo "=== Compiling VESC Display Simulator Library (libdash_sim.so) ==="
 g++ -std=c++17 -O2 -fPIC -shared -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   -Itools/simulator/include \
+  -Itools/simulator \
   -Iinclude \
   -I"$LGFX_SRC_DIR" \
   src/dash_renderer.cpp \
@@ -53,6 +59,10 @@ g++ -std=c++17 -O2 -fPIC -shared -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   src/buttons.cpp \
   src/mode_manager.cpp \
   src/fault_manager.cpp \
+  src/vesc_uart.cpp \
+  tools/simulator/virtual_vesc/vesc_packet.cpp \
+  tools/simulator/virtual_vesc/virtual_vesc.cpp \
+  tools/simulator/virtual_vesc/vesc_tcp_server.cpp \
   tools/simulator/sim_backend.cpp \
   "$LGFX_SRC_DIR/lgfx/v1/LGFXBase.cpp" \
   "$LGFX_SRC_DIR/lgfx/v1/lgfx_fonts.cpp" \
