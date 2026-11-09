@@ -45,7 +45,9 @@ enum NavAction {
     NAV_HAZARD_TOGGLE, // Tap on [ ▲ HAZARD ] button
     NAV_SCREEN_STATS,  // Tap on [ STATS ] button (Open SCREEN_RT_GRAPHS)
     NAV_TUNING_ENABLE, // 4-second continuous hold on km/h number (enable tuning mode)
-    NAV_TUNING_DISABLE // Single tap on km/h number when tuning mode is active (deactivate)
+    NAV_TUNING_DISABLE,// Single tap on km/h number when tuning mode is active (deactivate)
+    NAV_SCREEN_DASH,   // Tap on [< DASH] or [DASH [X]]: return directly to main ride dashboard
+    NAV_MENU_BACK      // Tap on [< MENÜ] / Swipe Right: back to root menu or dash
 };
 
 // Long-Term & Ride Statistics

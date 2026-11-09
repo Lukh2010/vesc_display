@@ -362,11 +362,20 @@ void loop() {
         }
     }
 
+    // SCREEN_SETTINGS_MENU: Interactive Touch & Navigation Handling
+    if (!telemetry.is_locked && telemetry.screen == SCREEN_SETTINGS_MENU) {
+        int16_t tx = -1, ty = -1;
+        if (Buttons.getLastTap(&tx, &ty)) {
+            Renderer.handleSettingsTouch(tx, ty, telemetry);
+            Buttons.clearNavAction(); // Clear any pending action to prevent double-invocation
+        }
+    }
+
     NavAction nav = telemetry.is_locked ? NAV_NONE : Buttons.getNavAction();
 
     if (nav != NAV_NONE) {
         if (Vesc.isBridgeActive()) {
-            if (nav == NAV_BTN2_LONG || nav == NAV_BOTH_PRESSED || nav == NAV_BTN1_LONG || nav == NAV_BTN1_SHORT || nav == NAV_BTN2_SHORT) {
+            if (nav == NAV_BTN2_LONG || nav == NAV_BOTH_PRESSED || nav == NAV_BTN1_LONG || nav == NAV_BTN1_SHORT || nav == NAV_BTN2_SHORT || nav == NAV_SCREEN_DASH) {
                 if (Vesc.isUsbBridgeActive()) Vesc.exitBridgeMode();
                 if (Vesc.isWifiBridgeActive()) Vesc.exitWifiBridgeMode();
                 telemetry.screen = SCREEN_RIDE_DASH;
@@ -377,6 +386,12 @@ void loop() {
             Renderer.handleMenuNav(nav, telemetry);
         } else {
             switch (nav) {
+                case NAV_SCREEN_DASH:
+                    telemetry.screen = SCREEN_RIDE_DASH;
+                    Renderer.markScreenDirty();
+                    Renderer.invalidateCache();
+                    Serial.println("[NAV] Switched to SCREEN_RIDE_DASH (< DASH)");
+                    break;
                 case NAV_BTN1_SHORT: // Previous Screen (Swipe Right / Left Tap)
                     {
                         if (telemetry.screen == SCREEN_RT_GRAPHS) {

@@ -160,6 +160,12 @@ void ButtonHandler::processTouch(uint32_t now) {
                             _pending_action = NAV_BTN1_SHORT; // Top-left < DASH returns to Ride Dash
                         }
                         // All other holds in STATS do NOT exit screen
+                    } else if (_active_screen == SCREEN_SETTINGS_MENU) {
+                        if (_touch_start_y <= 65 && _touch_start_x <= 160) {
+                            _pending_action = NAV_SCREEN_DASH; // Top-left < DASH returns to Ride Dash
+                        } else if (_touch_start_y <= 65 && _touch_start_x >= 640) {
+                            _pending_action = NAV_SCREEN_DASH; // Top-right [X] returns to Ride Dash
+                        }
                     } else if (_touch_start_y > 390 && _touch_start_x < 400) {
                         // Long press on bottom-left status strip -> Reset Trip Odometer
                         // (Touches on x >= 400 are action buttons [ BOOST ] / [ MODE ], prevent accidental reset)
@@ -224,6 +230,14 @@ void ButtonHandler::processTouch(uint32_t now) {
                     // Horizontal Swipe
                     if (_active_screen == SCREEN_RT_GRAPHS) {
                         // In STATS screen: do NOT switch screen on swipe! Only < DASH exits.
+                    } else if (_active_screen == SCREEN_SETTINGS_MENU) {
+                        if (dx > 0) {
+                            // Swipe Right -> Back to Root Menu or Exit to Dash
+                            _pending_action = NAV_MENU_BACK;
+                        } else {
+                            // Swipe Left -> Select / Enter
+                            _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BOTH_PRESSED;
+                        }
                     } else if (dx > 0) {
                         // Swipe Right -> Previous Screen / Value Up
                         _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BTN1_SHORT;
@@ -236,21 +250,26 @@ void ButtonHandler::processTouch(uint32_t now) {
                     if (_active_screen == SCREEN_RT_GRAPHS) {
                         // In STATS screen: do NOT switch screen on swipe! Only < DASH exits.
                     } else if (dy > 0) {
-                        // Swipe Down -> Up in menu
+                        // Swipe Down -> Up in menu (Previous item)
                         _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BTN1_SHORT;
                     } else {
-                        // Swipe Up -> Down in menu
+                        // Swipe Up -> Down in menu (Next item)
                         _pending_action = _in_edit_mode ? NAV_EDIT_DEC : NAV_BTN2_SHORT;
                     }
                 } else {
                     // Clean Tap Detected (Movement was minimal)
+                    // Use initial touch-down coordinate to avoid capacitive liftoff centroid drift
                     _has_tap = true;
-                    _last_tap_x = _touch_curr_x;
-                    _last_tap_y = _touch_curr_y;
+                    _last_tap_x = _touch_start_x;
+                    _last_tap_y = _touch_start_y;
 
                     if (_in_edit_mode) {
                         // In Edit Mode:
-                        if (_last_tap_x < 365) {
+                        if (_last_tap_y <= 65 && _last_tap_x <= 160) {
+                            _pending_action = NAV_SCREEN_DASH; // Top-left < DASH exits directly to Dash
+                        } else if (_last_tap_y <= 65 && _last_tap_x >= 640) {
+                            _pending_action = NAV_SCREEN_DASH; // Top-right [X] exits directly to Dash
+                        } else if (_last_tap_x < 365) {
                             _pending_action = NAV_EDIT_DEC; // Left side: -
                         } else if (_last_tap_x > 580) {
                             _pending_action = NAV_EDIT_INC; // Right side: +
@@ -277,6 +296,16 @@ void ButtonHandler::processTouch(uint32_t now) {
                         }
                         // All other taps (on cards, tiles, empty space, brightness controls)
                         // do NOT exit back to Dash! Only pressing < DASH returns.
+                    } else if (_active_screen == SCREEN_SETTINGS_MENU) {
+                        // On SETTINGS Screen:
+                        if (_last_tap_y <= 65 && _last_tap_x <= 160) {
+                            _pending_action = NAV_SCREEN_DASH; // Top Left -> Return to Ride Dash
+                        } else if (_last_tap_y <= 65 && _last_tap_x >= 640) {
+                            _pending_action = NAV_SCREEN_DASH; // Top Right [X] -> Return to Ride Dash
+                        } else if (_last_tap_y <= 65 && _last_tap_x >= 140 && _last_tap_x <= 280) {
+                            _pending_action = NAV_MENU_BACK;   // Top Submenu [< MENÜ] -> Return to Root Categories
+                        }
+                        // Detailed item selection and value box taps are forwarded to Renderer.handleSettingsTouch via getLastTap()
                     } else {
                         // On SCREEN_RIDE_DASH / Default:
                         // 1. Top Left [ STATS ] Navigation Touch Button -> Open Statistics Screen (SCREEN_RT_GRAPHS)

@@ -576,6 +576,131 @@ void testTouchGestures() {
     assert(actBlDrag == NAV_NONE); // Dragging slider must not exit to Ride Dash
     printf("[PASS] Statistics Screen Horizontal Drag on Backlight Slider does NOT trigger NAV_BTN1_SHORT.\n");
 
+    // 11. Requirement: Settings Menu (SCREEN_SETTINGS_MENU) Touch Hitboxes & Navigation
+    Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
+
+    // 11a. Tap on [< DASH] button (Top-Left: x <= 140, y <= 55) triggers NAV_SCREEN_DASH
+    NavAction actMenuDashTap = simTouchAction(75, 25, 75, 25, 50);
+    assert(actMenuDashTap == NAV_SCREEN_DASH);
+    printf("[PASS] Settings Menu [< DASH] Button Tap triggered NAV_SCREEN_DASH (Direct Return to Dash).\n");
+
+    // 11b. Tap on [DASH [X]] close button (Top-Right: x >= 660, y <= 55) triggers NAV_SCREEN_DASH
+    NavAction actMenuCloseTap = simTouchAction(730, 25, 730, 25, 50);
+    assert(actMenuCloseTap == NAV_SCREEN_DASH);
+    printf("[PASS] Settings Menu [DASH [X]] Button Tap triggered NAV_SCREEN_DASH.\n");
+
+    // 11c. Tap on [< MENU] button (Top-Bar Submenu: x in 140..260, y <= 55) triggers NAV_MENU_BACK
+    NavAction actMenuBackTap = simTouchAction(190, 25, 190, 25, 50);
+    assert(actMenuBackTap == NAV_MENU_BACK);
+    printf("[PASS] Settings Menu [< MENU] Button Tap triggered NAV_MENU_BACK.\n");
+
+    // 11d. Swipe Right in Settings Menu triggers NAV_MENU_BACK (Return to Root/Dash)
+    NavAction actMenuSwipeR = simTouchAction(200, 200, 400, 200, 60);
+    assert(actMenuSwipeR == NAV_MENU_BACK);
+    printf("[PASS] Settings Menu Swipe Right triggered NAV_MENU_BACK.\n");
+
+    // 11e. Swipe Up / Down in Settings Menu navigates items (Next / Prev)
+    NavAction actMenuSwipeDown = simTouchAction(200, 200, 200, 350, 60);
+    assert(actMenuSwipeDown == NAV_BTN1_SHORT);
+    NavAction actMenuSwipeUp = simTouchAction(200, 350, 200, 200, 60);
+    assert(actMenuSwipeUp == NAV_BTN2_SHORT);
+    printf("[PASS] Settings Menu Vertical Swipes triggered item navigation (NAV_BTN1_SHORT / NAV_BTN2_SHORT).\n");
+
+    // 11f. Test DashboardRenderer::handleSettingsTouch integration
+    DashTelemetry tTest;
+    memset(&tTest, 0, sizeof(tTest));
+    tTest.screen = SCREEN_SETTINGS_MENU;
+    Settings.get().max_phase_amps = 45;
+    Renderer.markScreenDirty();
+
+    // Tap on Category 0 (Power Limits) at x=100, y=100 -> Must enter submenu
+    bool touchHandled = Renderer.handleSettingsTouch(100, 100, tTest);
+    assert(touchHandled == true);
+    // Tap on Submenu item 1 (Phase Amps) at x=100, y=175 -> Selects item 1
+    touchHandled = Renderer.handleSettingsTouch(100, 175, tTest);
+    assert(touchHandled == true);
+    // Tap on Value Box at x=500, y=150 -> Activates edit mode
+    touchHandled = Renderer.handleSettingsTouch(500, 150, tTest);
+    assert(touchHandled == true);
+    assert(Renderer.isInEditMode() == true);
+    // In edit mode: Tap [+] Mehr at x=650, y=310
+    int oldPhase = Settings.get().max_phase_amps;
+    touchHandled = Renderer.handleSettingsTouch(650, 310, tTest);
+    assert(touchHandled == true);
+    assert(Settings.get().max_phase_amps == oldPhase + 1);
+    // Tap [SPEICHERN & FERTIG] at x=500, y=380 -> Saves & exits edit mode
+    touchHandled = Renderer.handleSettingsTouch(500, 380, tTest);
+    assert(touchHandled == true);
+    assert(Renderer.isInEditMode() == false);
+    // In submenu: Tap [< MENÜ] at x=190, y=25 -> Returns to root categories
+    touchHandled = Renderer.handleSettingsTouch(190, 25, tTest);
+    assert(touchHandled == true);
+    // In root menu: Tap [< DASH] at x=75, y=25 -> Returns to SCREEN_RIDE_DASH
+    touchHandled = Renderer.handleSettingsTouch(75, 25, tTest);
+    assert(touchHandled == true);
+    assert(tTest.screen == SCREEN_RIDE_DASH);
+    printf("[PASS] DashboardRenderer::handleSettingsTouch: Root -> Submenu -> Edit Mode -> Save -> Back -> Dash verified 100%%!\n");
+
+    // 11g. Test Full Integrated Main Loop settings touch flow (preventing double-dispatch bugs)
+    DashTelemetry tLoop;
+    memset(&tLoop, 0, sizeof(tLoop));
+    tLoop.screen = SCREEN_SETTINGS_MENU;
+    Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
+    Settings.get().max_phase_amps = 50;
+
+    auto runMainLoopTouch = [&](int16_t x, int16_t y) {
+        simAdvanceMs(120); // Allow 100ms debounce cooldown from previous gesture
+        Display.setSimTouch(true, x, y);
+        Buttons.update();
+        simAdvanceMs(50);
+        Display.setSimTouch(false, 0, 0);
+        Buttons.update();
+
+        int16_t tx = -1, ty = -1;
+        if (Buttons.getLastTap(&tx, &ty)) {
+            Renderer.handleSettingsTouch(tx, ty, tLoop);
+            Buttons.clearNavAction();
+        }
+        NavAction n = Buttons.getNavAction();
+        if (n != NAV_NONE) {
+            Renderer.handleMenuNav(n, tLoop);
+        }
+    };
+
+    // 1. Enter Category 0 (Power Limits)
+    runMainLoopTouch(100, 100);
+    assert(Renderer.isInEditMode() == false);
+
+    // 2. Select item 1 (Max Phase Current)
+    runMainLoopTouch(100, 175);
+    // 3. Enter edit mode on item 1 (tap again)
+    runMainLoopTouch(100, 175);
+    assert(Renderer.isInEditMode() == true);
+
+    // 4. Tap [+] MEHR at x=650, y=310 -> Value must increment by EXACTLY 1 (not double incremented to 52!)
+    runMainLoopTouch(650, 310);
+    assert(Settings.get().max_phase_amps == 51);
+    assert(Renderer.isInEditMode() == true); // Must stay in edit mode!
+
+    // 5. Tap [-] WENIGER at x=450, y=310 -> Value must decrement by EXACTLY 1 (not close edit mode!)
+    runMainLoopTouch(450, 310);
+    assert(Settings.get().max_phase_amps == 50);
+    assert(Renderer.isInEditMode() == true); // Must stay in edit mode!
+
+    // 6. Tap [SPEICHERN & FERTIG] at x=500, y=380 -> Must exit edit mode and NOT re-open it!
+    runMainLoopTouch(500, 380);
+    assert(Renderer.isInEditMode() == false);
+    assert(Settings.get().max_phase_amps == 50);
+
+    // 7. In submenu: Tap [< MENÜ] at x=190, y=25 -> Must return to root menu (NOT eject to DASH!)
+    runMainLoopTouch(190, 25);
+    assert(tLoop.screen == SCREEN_SETTINGS_MENU);
+
+    // 8. In root menu: Tap [< DASH] at bottom right pane (x=450, y=400) -> Direct return to DASH!
+    runMainLoopTouch(450, 400);
+    assert(tLoop.screen == SCREEN_RIDE_DASH);
+    printf("[PASS] Integrated Main Loop: Single-step edits, Save & Exit, Menu Back, and Dash Exit verified 100%%!\n");
+
     Buttons.setActiveScreen(SCREEN_RIDE_DASH);
 
     printf("=== All GT911 Capacitive Touch Tests PASSED! ===\n\n");

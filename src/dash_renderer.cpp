@@ -1444,7 +1444,7 @@ static void getSubItemDetails2Lines(uint8_t sub_id, uint8_t item_id,
                     snprintf(title, title_sz, "Max Phase Current");
                     snprintf(val, val_sz, "%d A", s.max_phase_amps);
                     snprintf(d1, d1_sz, "Motor torque limit");
-                    snprintf(d2, d2_sz, "Range: 10A - 70A");
+                    snprintf(d2, d2_sz, "Range: 10A - 300A");
                     break;
                 case 2:
                     snprintf(title, title_sz, "Field Weakening (FW)");
@@ -1616,11 +1616,7 @@ static void getSubItemDetails2Lines(uint8_t sub_id, uint8_t item_id,
 }
 
 void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
-    // Header Bar
-    _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-    _canvas->drawString("SETTINGS & CONFIGURATION", 20, 14, &fonts::Font4);
-
-    _canvas->drawFastHLine(20, 44, 760, COLOR_BORDER);
+    _canvas->drawFastHLine(20, 48, 760, COLOR_BORDER);
 
     // Left Navigation Box (w=310, h=405)
     drawCard(20,  56, 310, 405, COLOR_SURFACE, COLOR_BORDER);
@@ -1642,6 +1638,8 @@ void DashboardRenderer::renderRootMenu() {
             _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
         }
         _canvas->drawString(ROOT_CATEGORIES[i], 38, iy + 22, &fonts::Font4);
+        _canvas->setTextColor(isSel ? COLOR_CYAN : COLOR_MUTED_GRAY, isSel ? COLOR_SURFACE_LIGHT : COLOR_SURFACE);
+        _canvas->drawString(">", 305, iy + 22, &fonts::Font4);
     }
 }
 
@@ -1676,11 +1674,19 @@ void DashboardRenderer::renderSubmenu(uint8_t sub_id, const DashTelemetry &telem
         }
         _canvas->drawString(title, 38, iy + 22, &fonts::Font4);
     }
+
+    // Scrollbar indicator if items exceed display capacity (count > 5)
+    if (count > 5) {
+        _canvas->fillRoundRect(322, 62, 4, 372, 2, 0x18C3);
+        int thumb_h = 372 * 5 / count;
+        int thumb_y = 62 + (372 - thumb_h) * start_idx / (count - 5);
+        _canvas->fillRoundRect(322, thumb_y, 4, thumb_h, 2, COLOR_CYAN);
+    }
 }
 
 void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
-    // 1. Auto-exit edit mode after 3s of inactivity
-    if (_menu_edit_mode && (millis() - _menu_last_activity_ms > 3000)) {
+    // 1. Auto-exit edit mode after 20s of inactivity
+    if (_menu_edit_mode && (millis() - _menu_last_activity_ms > 20000)) {
         _menu_edit_mode = false;
         Buttons.setEditMode(false);
         Settings.save();
@@ -1701,6 +1707,51 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
 
     if (!_menu_dirty) return;
     _menu_dirty = false;
+
+    // Redraw Top Header Bar
+    _canvas->fillRect(0, 0, 800, 48, COLOR_BG);
+    _canvas->drawFastHLine(20, 48, 760, COLOR_BORDER);
+
+    // [< DASH] Back button (Prominent, Always returns to Ride Dash)
+    _canvas->fillRoundRect(20, 6, 115, 36, 18, 0x18C3);
+    _canvas->drawRoundRect(20, 6, 115, 36, 18, 0x39C7);
+    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->drawString("< DASH", 77, 24);
+
+    // If inside a submenu: show [< MENÜ] button to return to Root Categories
+    if (_menu_in_sub) {
+        _canvas->fillRoundRect(145, 6, 105, 36, 18, 0x2124);
+        _canvas->drawRoundRect(145, 6, 105, 36, 18, COLOR_CYAN);
+        _canvas->setTextColor(COLOR_CYAN, 0x2124);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->drawString("< MENU", 197, 24);
+    }
+
+    // Header Title / Breadcrumb
+    _canvas->setTextDatum(textdatum_t::middle_left);
+    _canvas->setFont(&fonts::Font4);
+    if (_menu_edit_mode) {
+        _canvas->setTextColor(COLOR_AMBER, COLOR_BG);
+        _canvas->drawString("WERT BEARBEITEN", _menu_in_sub ? 260 : 145, 24);
+    } else if (_menu_in_sub) {
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+        _canvas->drawString(ROOT_CATEGORIES[_menu_root_idx], 260, 24);
+    } else {
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+        _canvas->drawString("EINSTELLUNGEN", 145, 24);
+    }
+
+    // Top Right [DASH [X]] Close Button
+    _canvas->fillRoundRect(675, 6, 105, 36, 18, 0x30A2);
+    _canvas->drawRoundRect(675, 6, 105, 36, 18, 0x6186);
+    _canvas->setTextColor(COLOR_WHITE, 0x30A2);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->drawString("DASH [X]", 727, 24);
+    _canvas->setTextDatum(textdatum_t::top_left);
 
     // 2. Clear inner card contents
     _canvas->fillRect(22, 58, 306, 401, COLOR_SURFACE);
@@ -1785,13 +1836,25 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
 
         // Navigation Tips
         _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("Tap Category to Open Submenu", 365, 265, &fonts::Font4);
+        _canvas->drawString("Tippe auf Kategorie zum Oeffnen", 365, 265, &fonts::Font4);
         _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-        _canvas->drawString("Tap [Pull VESC] in System to Sync", 365, 305, &fonts::Font4);
-        _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Swipe Right to Exit to Dashboard", 365, 345, &fonts::Font4);
+        _canvas->drawString("Tippe [< DASH] zum Beenden", 365, 305, &fonts::Font4);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Touch LCD 4.3\" - 800x480 GT911", 365, 385, &fonts::Font4);
+        _canvas->drawString("Touch LCD 4.3\" - 800x480 GT911", 365, 340, &fonts::Font4);
+
+        // Bottom Action Buttons: [< DASH] (Exit) and [OEFFNEN >] (Open category)
+        _canvas->fillRoundRect(365, 380, 190, 48, 8, 0x18C3);
+        _canvas->drawRoundRect(365, 380, 190, 48, 8, 0x39C7);
+        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->drawString("< DASH", 365 + 95, 380 + 24);
+
+        _canvas->fillRoundRect(570, 380, 190, 48, 8, 0x18C3);
+        _canvas->drawRoundRect(570, 380, 190, 48, 8, COLOR_CYAN);
+        _canvas->setTextColor(COLOR_CYAN, 0x18C3);
+        _canvas->drawString("OEFFNEN >", 570 + 95, 380 + 24);
+        _canvas->setTextDatum(textdatum_t::top_left);
     } else {
         char val[32], d1[64], d2[64];
         getSubItemDetails2Lines(_menu_root_idx, _menu_sub_idx, curTitle, sizeof(curTitle), val, sizeof(val), d1, sizeof(d1), d2, sizeof(d2), telemetry);
@@ -1824,57 +1887,86 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
 
         // Descriptions
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->drawString(d1, 365, 215, &fonts::Font4);
+        _canvas->drawString(d1, 365, 210, &fonts::Font4);
 
         _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-        _canvas->drawString(d2, 365, 250, &fonts::Font4);
+        _canvas->drawString(d2, 365, 245, &fonts::Font4);
 
-        // Help Hints / Touch Actions
+        // Touch Control Buttons in Right Pane
         if (_menu_edit_mode) {
-            _canvas->fillRoundRect(365, 300, 190, 44, 6, 0x18E3);
+            // [ - WENIGER ] button (x: 365, w: 190, h: 50)
+            _canvas->fillRoundRect(365, 285, 190, 50, 8, 0x18E3);
+            _canvas->drawRoundRect(365, 285, 190, 50, 8, COLOR_AMBER);
             _canvas->setTextColor(COLOR_AMBER, 0x18E3);
-            _canvas->drawCenterString("Tap Left: [ - ]", 365 + 95, 312, &fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->drawString("[ - ] WENIGER", 365 + 95, 285 + 25);
 
-            _canvas->fillRoundRect(570, 300, 190, 44, 6, 0x18E3);
-            _canvas->drawCenterString("Tap Right: [ + ]", 570 + 95, 312, &fonts::Font4);
+            // [ + MEHR ] button (x: 570, w: 190, h: 50)
+            _canvas->fillRoundRect(570, 285, 190, 50, 8, 0x18E3);
+            _canvas->drawRoundRect(570, 285, 190, 50, 8, COLOR_AMBER);
+            _canvas->setTextColor(COLOR_AMBER, 0x18E3);
+            _canvas->drawString("[ + ] MEHR", 570 + 95, 285 + 25);
 
-            _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-            _canvas->drawString("Hold or Tap Center to Save", 365, 365, &fonts::Font4);
+            // [ ✔ SPEICHERN & FERTIG ] button (x: 365, w: 395, h: 48)
+            _canvas->fillRoundRect(365, 350, 395, 48, 8, 0x0A42);
+            _canvas->drawRoundRect(365, 350, 395, 48, 8, COLOR_GREEN);
+            _canvas->setTextColor(COLOR_WHITE, 0x0A42);
+            _canvas->drawString("SPEICHERN & FERTIG", 365 + 395/2, 350 + 24);
+            _canvas->setTextDatum(textdatum_t::top_left);
         } else {
-            _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
+            // Not in edit mode:
+            // Action or Edit Button (x: 365, y: 285, w: 395, h: 50)
+            const char *btnLabel = "WERT BEARBEITEN";
+            uint16_t btnBg = 0x18C3;
+            uint16_t btnBorder = 0x39C7;
+            uint16_t btnTextCol = COLOR_WHITE;
+
             if (_menu_root_idx == 4 && _menu_sub_idx == 0) {
-                _canvas->drawString("Tap Value Box to Pull From VESC", 365, 310, &fonts::Font4);
+                btnLabel = "VOM VESC LADEN";
+                btnBg = 0x2940; btnBorder = COLOR_AMBER; btnTextCol = COLOR_AMBER;
             } else if (_menu_root_idx == 4 && (_menu_sub_idx == 1 || _menu_sub_idx == 2)) {
-                _canvas->drawString("Tap Value Box to Start Bridge", 365, 310, &fonts::Font4);
+                btnLabel = "BRIDGE STARTEN";
+                btnBg = 0x0A42; btnBorder = COLOR_GREEN; btnTextCol = COLOR_GREEN;
             } else if (_menu_root_idx == 4 && (_menu_sub_idx == 3 || _menu_sub_idx == 4)) {
-                _canvas->drawString("Tap Value Box to Confirm Reset", 365, 310, &fonts::Font4);
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 5) {
-                _canvas->drawString("Hardware Status (Info Only)", 365, 310, &fonts::Font4);
+                btnLabel = "ZURUECKSETZEN";
+                btnBg = 0x3000; btnBorder = COLOR_RED; btnTextCol = COLOR_RED;
+            } else if (_menu_root_idx == 4 && _menu_sub_idx == 6) {
+                btnLabel = "PIN LOCK UMSCHALTEN";
+            } else if (_menu_root_idx == 4 && _menu_sub_idx == 8) {
+                btnLabel = "FEHLER-LOG LOESCHEN";
+                btnBg = 0x3000; btnBorder = COLOR_RED; btnTextCol = COLOR_RED;
             } else if (_menu_root_idx == 2 && _menu_sub_idx == 4) {
-                _canvas->drawString("Tap Value Box to Confirm Reset", 365, 310, &fonts::Font4);
-            } else {
-                _canvas->drawString("Tap Value Box to Edit Value", 365, 310, &fonts::Font4);
+                btnLabel = "LERNWERTE ZURUECKSETZEN";
+                btnBg = 0x3000; btnBorder = COLOR_RED; btnTextCol = COLOR_RED;
+            } else if (_menu_root_idx == 4 && _menu_sub_idx == 5) {
+                btnLabel = "HARDWARE-STATUS (INFO)";
+                btnBg = 0x18C3; btnBorder = COLOR_BORDER; btnTextCol = COLOR_LIGHT_GRAY;
             }
-            _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-            _canvas->drawString("Swipe Right or Long Press to Return", 365, 355, &fonts::Font4);
+
+            _canvas->fillRoundRect(365, 285, 395, 50, 8, btnBg);
+            _canvas->drawRoundRect(365, 285, 395, 50, 8, btnBorder);
+            _canvas->setTextColor(btnTextCol, btnBg);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->drawString(btnLabel, 365 + 395/2, 285 + 25);
+
+            // Previous / Next Item Buttons (x: 365, y: 350, h: 48)
+            // [< VORHERIGES]
+            _canvas->fillRoundRect(365, 350, 190, 48, 8, 0x18C3);
+            _canvas->drawRoundRect(365, 350, 190, 48, 8, COLOR_BORDER);
+            _canvas->setTextColor(COLOR_LIGHT_GRAY, 0x18C3);
+            _canvas->drawString("< VORHERIGES", 365 + 95, 350 + 24);
+
+            // [NÄCHSTES >]
+            _canvas->fillRoundRect(570, 350, 190, 48, 8, 0x18C3);
+            _canvas->drawRoundRect(570, 350, 190, 48, 8, COLOR_BORDER);
+            _canvas->setTextColor(COLOR_LIGHT_GRAY, 0x18C3);
+            _canvas->drawString("NAECHSTES >", 570 + 95, 350 + 24);
+
+            _canvas->setTextDatum(textdatum_t::top_left);
         }
     }
-
-    // 5. Header Breadcrumb
-    char topBuf[64];
-    if (_menu_edit_mode) {
-        snprintf(topBuf, sizeof(topBuf), "EDITING VALUE");
-        _canvas->setTextColor(COLOR_AMBER, COLOR_BG);
-    } else if (_menu_in_sub) {
-        snprintf(topBuf, sizeof(topBuf), "%s", curTitle);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
-    } else {
-        snprintf(topBuf, sizeof(topBuf), "SETTINGS");
-        _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_BG);
-    }
-    _canvas->setTextPadding(300);
-    _canvas->drawRightString(topBuf, 770, 14, &fonts::Font4);
-    _canvas->setTextPadding(0);
 }
 
 void DashboardRenderer::adjustCurrentSetting(int direction, DashTelemetry &telemetry) {
@@ -1889,10 +1981,10 @@ void DashboardRenderer::adjustCurrentSetting(int direction, DashTelemetry &telem
                 if (v < 5) v = 5;
                 if (v > 35) v = 35;
                 s.max_battery_amps = v;
-            } else if (_menu_sub_idx == 1) { // max phase amps (10..70)
+            } else if (_menu_sub_idx == 1) { // max phase amps (10..300)
                 int v = (int)s.max_phase_amps + direction;
                 if (v < 10) v = 10;
-                if (v > 70) v = 70;
+                if (v > 300) v = 300;
                 s.max_phase_amps = v;
             } else if (_menu_sub_idx == 2) { // field weakening (0..20)
                 int v = (int)s.field_weak_amps + direction;
@@ -1999,6 +2091,36 @@ void DashboardRenderer::adjustCurrentSetting(int direction, DashTelemetry &telem
 void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry) {
     if (action == NAV_NONE) return;
 
+    if (action == NAV_SCREEN_DASH) {
+        if (_menu_edit_mode) {
+            _menu_edit_mode = false;
+            Buttons.setEditMode(false);
+            Settings.save();
+        }
+        _menu_in_sub = false;
+        telemetry.screen = SCREEN_RIDE_DASH;
+        _screen_dirty = true;
+        _cache.invalidate();
+        return;
+    }
+
+    if (action == NAV_MENU_BACK) {
+        if (_menu_edit_mode) {
+            _menu_edit_mode = false;
+            Buttons.setEditMode(false);
+            Settings.save();
+            _menu_dirty = true;
+        } else if (_menu_in_sub) {
+            _menu_in_sub = false;
+            _menu_dirty = true;
+        } else {
+            telemetry.screen = SCREEN_RIDE_DASH;
+            _screen_dirty = true;
+            _cache.invalidate();
+        }
+        return;
+    }
+
     if (_menu_edit_mode) {
         _menu_last_activity_ms = millis();
         if (action == NAV_EDIT_INC || action == NAV_BTN1_SHORT) {
@@ -2102,6 +2224,162 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
             _cache.invalidate();
         }
     }
+}
+
+bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry) {
+    _menu_last_activity_ms = millis();
+
+    // 1. TOP BAR CLICKS (y <= 65)
+    if (ty <= 65) {
+        // Top Left: [< DASH] (Direct return to Ride Dashboard)
+        // If in root menu: wide hitbox (x <= 260)
+        // If in submenu: x <= 140
+        if ((!_menu_in_sub && tx <= 260) || tx <= 140) {
+            handleMenuNav(NAV_SCREEN_DASH, telemetry);
+            return true;
+        }
+
+        // Top Right: [DASH [X]] (x >= 640)
+        if (tx >= 640) {
+            handleMenuNav(NAV_SCREEN_DASH, telemetry);
+            return true;
+        }
+
+        // Top Submenu Back: [< MENÜ] (x in 140..270)
+        if (_menu_in_sub && tx > 140 && tx <= 270) {
+            handleMenuNav(NAV_MENU_BACK, telemetry);
+            return true;
+        }
+
+        return false;
+    }
+
+    // 2. EDIT MODE INTERACTIONS
+    if (_menu_edit_mode) {
+        // Value Box tap (y: 100..205, x: 345..780): Save & exit edit mode
+        if (tx >= 345 && tx <= 780 && ty >= 100 && ty <= 205) {
+            _menu_edit_mode = false;
+            Buttons.setEditMode(false);
+            Settings.save();
+            _menu_dirty = true;
+            return true;
+        }
+
+        // [-] WENIGER (x: 345..560, y: 270..345)
+        if (tx >= 345 && tx < 560 && ty >= 270 && ty <= 345) {
+            adjustCurrentSetting(-1, telemetry);
+            return true;
+        }
+
+        // [+] MEHR (x: 560..780, y: 270..345)
+        if (tx >= 560 && tx <= 780 && ty >= 270 && ty <= 345) {
+            adjustCurrentSetting(+1, telemetry);
+            return true;
+        }
+
+        // [✔ SPEICHERN & FERTIG] (x: 345..780, y: 345..455)
+        if (tx >= 345 && tx <= 780 && ty >= 345 && ty <= 455) {
+            _menu_edit_mode = false;
+            Buttons.setEditMode(false);
+            Settings.save();
+            _menu_dirty = true;
+            return true;
+        }
+
+        // Left pane items: tap while in edit mode -> save current edit, exit edit mode, and select clicked item
+        if (tx >= 20 && tx <= 340 && ty >= 56 && ty <= 460) {
+            _menu_edit_mode = false;
+            Buttons.setEditMode(false);
+            Settings.save();
+            // Fall through to left pane item selection below
+        } else {
+            // In edit mode: consume any other tap in right pane so it does not trigger wrong actions
+            return true;
+        }
+    }
+
+    // 3. LEFT PANE INTERACTIONS (x: 20..340, y: 56..460)
+    if (tx >= 20 && tx <= 340 && ty >= 56 && ty <= 460) {
+        int k = (ty - 58) / 76;
+        if (k < 0) k = 0;
+        if (k > 4) k = 4;
+
+        if (!_menu_in_sub) {
+            // Root categories: tap selects and enters the submenu
+            _menu_root_idx = k;
+            _menu_in_sub = true;
+            _menu_sub_idx = 0;
+            _menu_dirty = true;
+            return true;
+        } else {
+            // Submenu: select item
+            int count = getSubItemCount(_menu_root_idx);
+            int start_idx = 0;
+            if (count > 5) {
+                if (_menu_sub_idx >= 4) {
+                    start_idx = _menu_sub_idx - 4;
+                    if (start_idx + 5 > count) start_idx = count - 5;
+                }
+            }
+            int j = start_idx + k;
+            if (j < count) {
+                if (_menu_sub_idx == j) {
+                    // Already selected -> trigger edit or action
+                    handleMenuNav(NAV_BOTH_PRESSED, telemetry);
+                } else {
+                    _menu_sub_idx = j;
+                    _menu_dirty = true;
+                }
+            }
+            return true;
+        }
+    }
+
+    // 4. RIGHT PANE INTERACTIONS (x: 345..780, y: 56..460)
+    if (tx >= 345 && tx <= 780 && ty >= 56 && ty <= 460) {
+        if (!_menu_in_sub) {
+            // Root menu bottom buttons:
+            // [< DASH] (Exit): x: 350..560, y: 360..455 -> Direct return to Ride Dash!
+            if (tx >= 350 && tx < 560 && ty >= 360 && ty <= 455) {
+                handleMenuNav(NAV_SCREEN_DASH, telemetry);
+                return true;
+            }
+            // [OEFFNEN >] (Open category) or anywhere else on right card -> enter submenu
+            _menu_in_sub = true;
+            _menu_sub_idx = 0;
+            _menu_dirty = true;
+            return true;
+        } else {
+            // Submenu right pane:
+            // Value Box (y: 100..205) or [WERT BEARBEITEN / AUSFÜHREN] button (y: 270..345)
+            if ((ty >= 100 && ty <= 205) || (ty >= 270 && ty <= 345)) {
+                handleMenuNav(NAV_BOTH_PRESSED, telemetry);
+                return true;
+            }
+
+            // Previous Item Button [< VORHERIGES] (x: 345..560, y: 345..435)
+            if (tx >= 345 && tx < 560 && ty >= 345 && ty <= 435) {
+                int total = getSubItemCount(_menu_root_idx);
+                if (total > 0) {
+                    _menu_sub_idx = (_menu_sub_idx - 1 + total) % total;
+                    _menu_dirty = true;
+                }
+                return true;
+            }
+
+            // Next Item Button [NAECHSTES >] (x: 560..780, y: 345..435)
+            if (tx >= 560 && tx <= 780 && ty >= 345 && ty <= 435) {
+                int total = getSubItemCount(_menu_root_idx);
+                if (total > 0) {
+                    _menu_sub_idx = (_menu_sub_idx + 1) % total;
+                    _menu_dirty = true;
+                }
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 // ==============================================================================
