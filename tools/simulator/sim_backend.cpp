@@ -18,46 +18,15 @@
 #include <string>
 
 
+#include "virtual_vesc/virtual_vesc.h"
+#include "virtual_vesc/vesc_tcp_server.h"
+
 // -------------------------------------------------------------
-// VescHandler Implementation for Simulator
+// Virtual VESC & Loopback Transport for Desktop Simulator
 // -------------------------------------------------------------
-VescHandler::VescHandler()
-    : _bridge_active(false),
-      _bridge_pc_to_vesc(0),
-      _bridge_vesc_to_pc(0),
-      _wifi_bridge_active(false),
-      _wifi_client_connected(false),
-      _bridge_wifi_to_vesc(0),
-      _bridge_vesc_to_wifi(0),
-      _sync_status(SYNC_IDLE),
-      _sync_ms(0),
-      _mcconf_req_ms(0) {
-    _wifi_client_ip[0] = '\0';
-}
-void VescHandler::begin() {}
-void VescHandler::update(DashTelemetry &) {}
-void VescHandler::setSimThrottle(float) {}
-void VescHandler::enterBridgeMode() { _bridge_active = true; }
-void VescHandler::exitBridgeMode() { _bridge_active = false; }
-void VescHandler::enterWifiBridgeMode() {
-    _wifi_bridge_active = true;
-    _wifi_client_connected = true;
-    strncpy(_wifi_client_ip, "192.168.4.2", sizeof(_wifi_client_ip));
-    _bridge_wifi_to_vesc = 1420;
-    _bridge_vesc_to_wifi = 3680;
-}
-void VescHandler::exitWifiBridgeMode() { _wifi_bridge_active = false; _wifi_client_connected = false; }
-void VescHandler::updateBridge() {}
-void VescHandler::updateUsbBridge() {}
-void VescHandler::updateWifiBridge() {}
-void VescHandler::requestMcconf() { _sync_status = SYNC_SUCCESS; }
-void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, float max_battery_amps, float max_phase_amps, float cutoff_start, float cutoff_end) {
-    Settings.get().max_speed_kmh    = (uint8_t)roundf(max_speed_kmh);
-    Settings.get().max_battery_amps = (uint16_t)roundf(max_battery_amps);
-    Settings.get().max_phase_amps   = (uint16_t)roundf(max_phase_amps);
-}
-void VescHandler::sendTerminalCommand(const char *) {}
-VescHandler Vesc;
+static VescLoopbackTransport g_sim_transport;
+static VirtualVesc g_virtual_vesc;
+static VescTcpServer g_tcp_server;
 
 MockSerial Serial;
 DisplayDriver Display;
@@ -65,7 +34,7 @@ extern DashboardRenderer Renderer;
 extern ButtonHandler Buttons;
 
 // -------------------------------------------------------------
-// State Variables
+// State Variables & Simulation Physics
 // -------------------------------------------------------------
 static DashTelemetry g_telemetry;
 static bool g_initialized = false;
@@ -73,6 +42,25 @@ static float g_manual_throttle = 0.0f;
 static float g_manual_brake = 0.0f;
 static uint32_t g_sim_uptime_ms = 0;
 static auto g_last_frame_clock = std::chrono::steady_clock::now();
+
+static float s_sim_speed_kmh = 0.0f;
+static float s_sim_current_amps = 0.0f;
+static float s_sim_phase_amps = 0.0f;
+static float s_sim_duty_cycle_pct = 0.0f;
+static float s_sim_rpm = 0.0f;
+static float s_sim_voltage = 76.7f;
+static float s_sim_power_watts = 0.0f;
+static float s_sim_temp_fet_rear = 60.0f;
+static float s_sim_temp_mot_rear = 75.0f;
+static float s_sim_temp_fet_front = 53.0f;
+static float s_sim_temp_mot_front = 54.0f;
+static float s_sim_trip_km = 0.0f;
+static float s_sim_odo_km = 206.6f;
+static float s_sim_ah_used = 0.0f;
+static float s_sim_ah_charged = 0.0f;
+static float s_sim_wh_used = 0.0f;
+static float s_sim_wh_charged = 0.0f;
+static uint8_t s_sim_fault_code = 0;
 
 #pragma pack(push, 1)
 struct SimTelemetryExport {
@@ -106,6 +94,7 @@ struct SimTelemetryExport {
     float avg_speed_kmh;
     uint32_t ride_time_sec;
     int32_t tuning_mode;
+    int32_t is_locked;
 };
 #pragma pack(pop)
 
@@ -117,6 +106,11 @@ static void runSimulationStep(float dt) {
 
     float sim_t = g_manual_throttle;
     float sim_b = g_manual_brake;
+
+    if (g_virtual_vesc.hasExternalControl()) {
+        sim_t = g_virtual_vesc.getExternalThrottle();
+        sim_b = g_virtual_vesc.getExternalBrake();
+    }
 
     // Boost multiplier
     if (g_telemetry.boost_active) {
@@ -130,28 +124,58 @@ static void runSimulationStep(float dt) {
 
     if (g_telemetry.is_locked) {
         sim_t = 0.0f;
-        g_telemetry.throttle_pct = 0.0f;
-        g_telemetry.speed_kmh = 0.0f;
-        g_telemetry.current_amps = 0.0f;
-        g_telemetry.phase_amps = 0.0f;
-        g_telemetry.power_watts = 0.0f;
-        g_telemetry.duty_cycle_pct = 0.0f;
-        g_telemetry.rpm = 0.0f;
+        s_sim_speed_kmh = 0.0f;
+        s_sim_current_amps = 0.0f;
+        s_sim_phase_amps = 0.0f;
+        s_sim_power_watts = 0.0f;
+        s_sim_duty_cycle_pct = 0.0f;
+        s_sim_rpm = 0.0f;
+
+        VirtualVescTelemetry vt;
+        vt.temp_mos = s_sim_temp_fet_rear;
+        vt.temp_mot = s_sim_temp_mot_rear;
+        vt.current_mot = 0.0f;
+        vt.current_in = 0.0f;
+        vt.duty_cycle_pct = 0.0f;
+        vt.rpm = 0.0f;
+        vt.pole_pairs = Settings.get().motor_pole_pairs;
+        vt.speed_kmh = 0.0f;
+        vt.voltage = s_sim_voltage;
+        vt.battery_pct = Battery.getFusedSocPct();
+        vt.amphours_used = s_sim_ah_used;
+        vt.amphours_charged = s_sim_ah_charged;
+        vt.watthours_used = s_sim_wh_used;
+        vt.watthours_charged = s_sim_wh_charged;
+        vt.trip_km = s_sim_trip_km;
+        vt.odo_km = s_sim_odo_km;
+        vt.fault_code = s_sim_fault_code;
+        vt.throttle_pct = 0.0f;
+        vt.brake_pct = 0.0f;
+        g_virtual_vesc.setPhysicsTelemetry(vt);
         return;
     }
 
-    g_telemetry.throttle_pct = sim_t;
+    // 1. Target Speed and Power by Ride Mode & Tuning State from Virtual VESC Controller Limits
+    const VirtualVescLimits &lim = g_virtual_vesc.getLimits();
 
-    // 1. Target Speed and Power by Ride Mode & Tuning State
-    ModeLimits lim = ModeManager::instance().getActiveLimits();
-    float max_possible_speed = lim.max_speed_kmh;
+    int pole_pairs = Settings.get().motor_pole_pairs;
+    if (pole_pairs < 2) pole_pairs = 15;
+    float wheel_diam_in = Settings.get().wheel_diameter_in;
+    if (wheel_diam_in < 5.0f) wheel_diam_in = 26.0f;
+    float wheel_circ_m = (wheel_diam_in * 0.0254f) * M_PI;
+    float gear_ratio = Settings.get().gear_ratio;
+    if (gear_ratio < 0.1f) gear_ratio = 1.0f;
+
+    float mech_rpm = (float)lim.max_erpm / (float)pole_pairs;
+    float max_possible_speed = (mech_rpm / gear_ratio) * wheel_circ_m * 60.0f / 1000.0f;
+    if (max_possible_speed > 120.0f) max_possible_speed = 120.0f;
+
     float max_bat_a = lim.max_battery_amps;
     float max_pha_a = lim.max_phase_amps;
     float accel_rate = 22.0f;
 
     if (!g_telemetry.tuning_mode) {
         // Legal Modes: ECO (15 km/h), SPORT (20 km/h), RACE (22 km/h)
-        // 1000W pull acceleration, 500W continuous at cruising speed
         switch (g_telemetry.ride_mode) {
             case MODE_ECO:   accel_rate = 18.0f; break;
             case MODE_SPORT: accel_rate = 24.0f; break;
@@ -160,15 +184,9 @@ static void runSimulationStep(float dt) {
         }
     } else {
         switch (g_telemetry.ride_mode) {
-            case MODE_ECO:
-                accel_rate = 32.0f;
-                break;
-            case MODE_SPORT:
-                accel_rate = 46.0f;
-                break;
-            case MODE_RACE:
-                accel_rate = 68.0f;
-                break;
+            case MODE_ECO:   accel_rate = 32.0f; break;
+            case MODE_SPORT: accel_rate = 46.0f; break;
+            case MODE_RACE:  accel_rate = 68.0f; break;
             default: break;
         }
         if (g_telemetry.boost_active) {
@@ -182,161 +200,235 @@ static void runSimulationStep(float dt) {
     // 2. Realistic Speed & Dynamic Powertrain Physics
     if (sim_b > 1.0f) {
         // Active Braking: strong regenerative decelerating force
+        g_manual_throttle = 0.0f; // Safety throttle cutoff upon braking
         float brake_norm = sim_b / 100.0f;
         float decel = (6.0f + 28.0f * brake_norm) * dt;
-        g_telemetry.speed_kmh -= decel;
-        if (g_telemetry.speed_kmh < 0.0f) g_telemetry.speed_kmh = 0.0f;
+        s_sim_speed_kmh -= decel;
+        if (s_sim_speed_kmh < 0.2f) s_sim_speed_kmh = 0.0f;
 
-        // Regen current back to battery (shown in Emerald Green)
-        float target_regen_amps = (g_telemetry.speed_kmh > 2.0f) ? (-38.0f * brake_norm) : 0.0f;
-        g_telemetry.current_amps += (target_regen_amps - g_telemetry.current_amps) * (dt * 6.5f);
-        if (g_telemetry.speed_kmh < 0.2f) g_telemetry.current_amps = 0.0f;
+        // Regen braking: motor generates phase current
+        float target_regen_phase = (s_sim_speed_kmh > 2.0f) ? (max_pha_a * 0.75f * brake_norm) : 0.0f;
+        s_sim_phase_amps += (target_regen_phase - s_sim_phase_amps) * (dt * 6.5f);
+        if (s_sim_speed_kmh < 0.2f) s_sim_phase_amps = 0.0f;
+
+        // Battery regen current is bounded by duty and max battery regen limit
+        float duty_ratio = s_sim_duty_cycle_pct / 100.0f;
+        if (duty_ratio > 0.95f) duty_ratio = 0.95f;
+        if (duty_ratio < 0.25f) duty_ratio = 0.25f;
+        float target_regen_bat = - (s_sim_phase_amps * duty_ratio);
+        float max_regen_bat = fabsf(lim.min_battery_amps) > 1.0f ? fabsf(lim.min_battery_amps) : (max_bat_a * 0.6f);
+        if (-target_regen_bat > max_regen_bat) target_regen_bat = -max_regen_bat;
+        s_sim_current_amps += (target_regen_bat - s_sim_current_amps) * (dt * 6.5f);
+        if (s_sim_speed_kmh < 0.2f) s_sim_current_amps = 0.0f;
 
     } else if (sim_t > 0.0f) {
-        // Active Throttle: snappy, punchy electric vehicle acceleration
+        // Active Throttle: electric vehicle acceleration
         float target_speed = (sim_t >= 90.0f) ? max_possible_speed : ((sim_t / 100.0f) * max_possible_speed);
-        if (g_telemetry.speed_kmh < target_speed) {
-            float speed_diff = target_speed - g_telemetry.speed_kmh;
+        if (s_sim_speed_kmh < target_speed) {
+            float speed_diff = target_speed - s_sim_speed_kmh;
             float step = (sim_t / 100.0f) * (accel_rate * dt + speed_diff * (dt * 3.5f));
-            g_telemetry.speed_kmh += step;
-            if (g_telemetry.speed_kmh > target_speed) g_telemetry.speed_kmh = target_speed;
+            s_sim_speed_kmh += step;
+            if (s_sim_speed_kmh > target_speed) s_sim_speed_kmh = target_speed;
         } else {
             // Smooth settling onto target speed
-            g_telemetry.speed_kmh += (target_speed - g_telemetry.speed_kmh) * (dt * 3.5f);
+            s_sim_speed_kmh += (target_speed - s_sim_speed_kmh) * (dt * 3.5f);
         }
 
-        // Positive battery current ramps smoothly with throttle
-        float target_bat_amps = (sim_t / 100.0f) * max_bat_a;
-        g_telemetry.current_amps += (target_bat_amps - g_telemetry.current_amps) * (dt * 6.5f);
-        if (g_telemetry.current_amps < 0.0f) g_telemetry.current_amps = 0.0f;
+        // Throttle commands target Motor Phase Amps directly (Torque control)
+        float target_phase = (sim_t / 100.0f) * max_pha_a;
+        if (g_virtual_vesc.hasExternalCurrentControl()) {
+            target_phase = fabsf(g_virtual_vesc.getExternalTargetCurrent());
+            if (target_phase > max_pha_a) target_phase = max_pha_a;
+        }
+        s_sim_phase_amps += (target_phase - s_sim_phase_amps) * (dt * 6.5f);
+        if (s_sim_phase_amps < 0.0f) s_sim_phase_amps = 0.0f;
+
+        // Battery current = Phase current * effective duty, bounded by max_bat_a
+        float duty_ratio = s_sim_duty_cycle_pct / 100.0f;
+        if (duty_ratio > 0.95f) duty_ratio = 0.95f;
+        if (duty_ratio < 0.20f) duty_ratio = 0.20f;
+        float target_bat = s_sim_phase_amps * duty_ratio;
+        if (target_bat > max_bat_a) {
+            target_bat = max_bat_a;
+            float clamped_phase = target_bat / duty_ratio;
+            if (s_sim_phase_amps > clamped_phase) {
+                s_sim_phase_amps = clamped_phase;
+            }
+        }
+        s_sim_current_amps += (target_bat - s_sim_current_amps) * (dt * 6.5f);
+        if (s_sim_current_amps < 0.0f) s_sim_current_amps = 0.0f;
 
     } else {
         // Coasting / Ausrollen: Throttle released, vehicle freewheels
-        // Aerodynamic drag (v^2) + rolling resistance (tires/bearings)
-        float v = g_telemetry.speed_kmh;
+        float v = s_sim_speed_kmh;
         if (v > 0.0f) {
             float drag_decel = (0.75f + (v / 100.0f) * (v / 100.0f) * 4.5f + v * 0.028f) * dt;
-            g_telemetry.speed_kmh -= drag_decel;
-            if (g_telemetry.speed_kmh < 0.2f) g_telemetry.speed_kmh = 0.0f;
+            s_sim_speed_kmh -= drag_decel;
+            if (s_sim_speed_kmh < 0.2f) s_sim_speed_kmh = 0.0f;
 
-            // Passive drag regen (mild back-EMF recuperation: -150W to -320W in Emerald Green)
+            // Passive drag regen (mild back-EMF recuperation)
             float coast_target_a = - (1.2f + (v / 100.0f) * 3.2f);
-            g_telemetry.current_amps += (coast_target_a - g_telemetry.current_amps) * (dt * 3.8f);
+            s_sim_current_amps += (coast_target_a - s_sim_current_amps) * (dt * 3.8f);
+            float coast_phase = fabsf(s_sim_current_amps) * 1.25f;
+            s_sim_phase_amps += (coast_phase - s_sim_phase_amps) * (dt * 3.8f);
         } else {
-            g_telemetry.speed_kmh = 0.0f;
-            g_telemetry.current_amps += (0.0f - g_telemetry.current_amps) * (dt * 8.0f);
-            if (fabsf(g_telemetry.current_amps) < 0.1f) g_telemetry.current_amps = 0.0f;
+            s_sim_speed_kmh = 0.0f;
+            s_sim_current_amps += (0.0f - s_sim_current_amps) * (dt * 8.0f);
+            s_sim_phase_amps += (0.0f - s_sim_phase_amps) * (dt * 8.0f);
+            if (fabsf(s_sim_current_amps) < 0.1f) s_sim_current_amps = 0.0f;
+            if (s_sim_phase_amps < 0.1f) s_sim_phase_amps = 0.0f;
         }
     }
 
     // 3. Realistic Duty Cycle
-    float base_duty = (g_telemetry.speed_kmh / 48.0f) * 92.0f;
-    if (sim_t > 85.0f && g_telemetry.speed_kmh > 46.0f) {
+    float base_duty = (s_sim_speed_kmh / 48.0f) * 92.0f;
+    if (sim_t > 85.0f && s_sim_speed_kmh > 46.0f) {
         float fw_extra = ((sim_t - 85.0f) / 15.0f) * 18.0f;
-        g_telemetry.duty_cycle_pct = 96.0f + fw_extra;
+        s_sim_duty_cycle_pct = 96.0f + fw_extra;
     } else {
-        g_telemetry.duty_cycle_pct = base_duty;
+        s_sim_duty_cycle_pct = base_duty;
     }
     if (sim_t == 0.0f && sim_b <= 1.0f) {
-        g_telemetry.duty_cycle_pct = (g_telemetry.speed_kmh / 52.0f) * 85.0f;
+        s_sim_duty_cycle_pct = (s_sim_speed_kmh / 52.0f) * 85.0f;
     }
-    if (g_telemetry.duty_cycle_pct > 118.0f) g_telemetry.duty_cycle_pct = 118.0f;
-    if (g_telemetry.duty_cycle_pct < 0.0f) g_telemetry.duty_cycle_pct = 0.0f;
+    if (s_sim_duty_cycle_pct > 118.0f) s_sim_duty_cycle_pct = 118.0f;
+    if (s_sim_duty_cycle_pct < 0.0f) s_sim_duty_cycle_pct = 0.0f;
 
-    g_telemetry.rpm = (g_telemetry.speed_kmh / 45.0f) * 130.0f * 35.0f;
+    s_sim_rpm = (s_sim_speed_kmh / 45.0f) * 130.0f * 35.0f;
 
-    // 4. Phase Amps
-    float duty_fraction = g_telemetry.duty_cycle_pct / 100.0f;
-    if (duty_fraction < 0.35f) duty_fraction = 0.35f;
-    float calculated_phase = fabsf(g_telemetry.current_amps) / duty_fraction;
-    if (calculated_phase > max_pha_a) calculated_phase = max_pha_a;
-    g_telemetry.phase_amps = calculated_phase;
+    // 4. Physical Invariant: Phase (motor) current must ALWAYS be >= |Battery current|
+    if (s_sim_phase_amps < fabsf(s_sim_current_amps)) {
+        s_sim_phase_amps = fabsf(s_sim_current_amps);
+    }
+    if (s_sim_phase_amps > max_pha_a) {
+        s_sim_phase_amps = max_pha_a;
+    }
 
     // 5. Battery Voltage & Power (Nominal 72V pack: sag on load, rise on regen)
-    g_telemetry.voltage = 76.7f - (g_telemetry.current_amps * 0.038f);
-    g_telemetry.power_watts = g_telemetry.voltage * g_telemetry.current_amps;
+    s_sim_voltage = 76.7f - (s_sim_current_amps * 0.038f);
+    s_sim_power_watts = s_sim_voltage * s_sim_current_amps;
 
-    // Dynamic Power Limiting: Peak acceleration pull power up to max_pull_watts (e.g. 1000W),
-    // and settling smoothly to max_power_watts (500W continuous at cruising speed).
-    if (g_telemetry.current_amps > 0.0f) {
-        float effective_power_cap = lim.max_pull_watts;
-        if (max_possible_speed > 0.0f && g_telemetry.speed_kmh >= max_possible_speed * 0.88f) {
-            float blend = (g_telemetry.speed_kmh - max_possible_speed * 0.88f) / (max_possible_speed * 0.12f);
-            if (blend > 1.0f) blend = 1.0f;
-            effective_power_cap = lim.max_pull_watts - blend * (lim.max_pull_watts - lim.max_power_watts);
-        }
-        if (g_telemetry.power_watts > effective_power_cap) {
-            g_telemetry.power_watts = effective_power_cap;
-            if (g_telemetry.voltage > 10.0f) {
-                g_telemetry.current_amps = g_telemetry.power_watts / g_telemetry.voltage;
-                calculated_phase = fabsf(g_telemetry.current_amps) / duty_fraction;
-                if (calculated_phase > max_pha_a) calculated_phase = max_pha_a;
-                g_telemetry.phase_amps = calculated_phase;
-            }
-        }
+    // Overvoltage fault detection (72V nominal pack peak is 84.0V)
+    if (s_sim_voltage >= 84.5f) {
+        s_sim_fault_code = 1; // FAULT_CODE_OVER_VOLTAGE
+    } else if (s_sim_fault_code == 1 && s_sim_voltage < 83.5f) {
+        s_sim_fault_code = 0;
     }
 
-    // 5. Battery Manager
-    Battery.update(g_telemetry, dt);
+    // Dynamic Power Limiting governed by Virtual VESC watt limit
+    float effective_power_cap = lim.max_watt;
+    if (s_sim_current_amps > 0.0f && s_sim_power_watts > effective_power_cap) {
+        s_sim_power_watts = effective_power_cap;
+        if (s_sim_voltage > 10.0f) {
+            s_sim_current_amps = s_sim_power_watts / s_sim_voltage;
+        }
+    }
+    if (s_sim_phase_amps < fabsf(s_sim_current_amps)) {
+        s_sim_phase_amps = fabsf(s_sim_current_amps);
+    }
 
     // 6. Dual Thermals (Rear & Front)
-    if (g_telemetry.phase_amps > 30.0f) {
-        g_telemetry.temp_fet_rear  += 0.35f * dt;
-        g_telemetry.temp_mot_rear  += 0.45f * dt;
-        g_telemetry.temp_fet_front += 0.28f * dt;
-        g_telemetry.temp_mot_front += 0.36f * dt;
+    if (s_sim_phase_amps > 30.0f) {
+        s_sim_temp_fet_rear  += 0.35f * dt;
+        s_sim_temp_mot_rear  += 0.45f * dt;
+        s_sim_temp_fet_front += 0.28f * dt;
+        s_sim_temp_mot_front += 0.36f * dt;
     } else {
-        g_telemetry.temp_fet_rear  -= 0.08f * dt;
-        g_telemetry.temp_mot_rear  -= 0.08f * dt;
-        g_telemetry.temp_fet_front -= 0.08f * dt;
-        g_telemetry.temp_mot_front -= 0.08f * dt;
+        s_sim_temp_fet_rear  -= 0.08f * dt;
+        s_sim_temp_mot_rear  -= 0.08f * dt;
+        s_sim_temp_fet_front -= 0.08f * dt;
+        s_sim_temp_mot_front -= 0.08f * dt;
     }
-    if (g_telemetry.temp_fet_rear < 45.0f)  g_telemetry.temp_fet_rear = 45.0f;
-    if (g_telemetry.temp_mot_rear < 58.0f)  g_telemetry.temp_mot_rear = 58.0f;
-    if (g_telemetry.temp_fet_front < 39.0f) g_telemetry.temp_fet_front = 39.0f;
-    if (g_telemetry.temp_mot_front < 54.0f) g_telemetry.temp_mot_front = 54.0f;
-    g_telemetry.temp_esc = g_telemetry.temp_fet_rear;
-    g_telemetry.temp_motor = g_telemetry.temp_mot_rear;
+    if (s_sim_temp_fet_rear < 45.0f)  s_sim_temp_fet_rear = 45.0f;
+    if (s_sim_temp_mot_rear < 58.0f)  s_sim_temp_mot_rear = 58.0f;
+    if (s_sim_temp_fet_front < 39.0f) s_sim_temp_fet_front = 39.0f;
+    if (s_sim_temp_mot_front < 54.0f) s_sim_temp_mot_front = 54.0f;
 
-    // 7. Odometry & Trip
-    float distance_delta = (g_telemetry.speed_kmh / 3600.0f) * dt;
-    g_telemetry.trip_km += distance_delta;
-    g_telemetry.odo_km  += distance_delta;
+    // 7. Distance & Odometry
+    float distance_delta = (s_sim_speed_kmh / 3600.0f) * dt;
+    s_sim_trip_km += distance_delta;
+    s_sim_odo_km  += distance_delta;
 
-    // 8. Statistics
-    if (g_telemetry.current_amps > g_telemetry.stats.peak_current_amps) g_telemetry.stats.peak_current_amps = g_telemetry.current_amps;
-    if (g_telemetry.phase_amps > g_telemetry.stats.peak_phase_amps) g_telemetry.stats.peak_phase_amps = g_telemetry.phase_amps;
-    if (g_telemetry.power_watts > g_telemetry.stats.peak_power_watts) g_telemetry.stats.peak_power_watts = g_telemetry.power_watts;
-    if (g_telemetry.speed_kmh > g_telemetry.stats.max_speed_kmh) g_telemetry.stats.max_speed_kmh = g_telemetry.speed_kmh;
-    if (g_telemetry.temp_motor > g_telemetry.stats.max_temp_motor) g_telemetry.stats.max_temp_motor = g_telemetry.temp_motor;
-    if (g_telemetry.temp_esc > g_telemetry.stats.max_temp_esc) g_telemetry.stats.max_temp_esc = g_telemetry.temp_esc;
-    
+    // Energy integration
+    if (s_sim_current_amps > 0.0f) {
+        s_sim_ah_used += (s_sim_current_amps / 3600.0f) * dt;
+        s_sim_wh_used += (s_sim_power_watts / 3600.0f) * dt;
+    } else {
+        s_sim_ah_charged += (-s_sim_current_amps / 3600.0f) * dt;
+        s_sim_wh_charged += (-s_sim_power_watts / 3600.0f) * dt;
+    }
+
+    // Dynamic Statistics Tracking for the current run
+    if (s_sim_power_watts > g_telemetry.stats.peak_power_watts) {
+        g_telemetry.stats.peak_power_watts = s_sim_power_watts;
+    }
+    if (fabsf(s_sim_current_amps) > g_telemetry.stats.peak_current_amps) {
+        g_telemetry.stats.peak_current_amps = fabsf(s_sim_current_amps);
+    }
+    if (s_sim_phase_amps > g_telemetry.stats.peak_phase_amps) {
+        g_telemetry.stats.peak_phase_amps = s_sim_phase_amps;
+    }
+    if (s_sim_speed_kmh > g_telemetry.stats.max_speed_kmh) {
+        g_telemetry.stats.max_speed_kmh = s_sim_speed_kmh;
+    }
+    if (s_sim_temp_mot_rear > g_telemetry.stats.max_temp_motor) {
+        g_telemetry.stats.max_temp_motor = s_sim_temp_mot_rear;
+    }
+    if (s_sim_temp_fet_rear > g_telemetry.stats.max_temp_esc) {
+        g_telemetry.stats.max_temp_esc = s_sim_temp_fet_rear;
+    }
+    if (s_sim_voltage > 10.0f) {
+        if (g_telemetry.stats.min_voltage <= 0.0f || s_sim_voltage < g_telemetry.stats.min_voltage) {
+            g_telemetry.stats.min_voltage = s_sim_voltage;
+        }
+        if (s_sim_voltage > g_telemetry.stats.max_voltage) {
+            g_telemetry.stats.max_voltage = s_sim_voltage;
+        }
+    }
+
     static float s_sim_ride_time_accum = 0.0f;
-    if (g_telemetry.stats.ride_time_sec == 0 && g_telemetry.trip_km == 0.0f) {
+    if (g_telemetry.stats.ride_time_sec == 0 && s_sim_trip_km == 0.0f) {
         s_sim_ride_time_accum = 0.0f;
     }
-    if (g_telemetry.speed_kmh > 1.2f || g_telemetry.screen == SCREEN_RT_GRAPHS) {
+    if (s_sim_speed_kmh > 1.2f) {
         s_sim_ride_time_accum += dt;
         while (s_sim_ride_time_accum >= 1.0f) {
             g_telemetry.stats.ride_time_sec += 1;
             s_sim_ride_time_accum -= 1.0f;
         }
     }
-    if (g_telemetry.stats.ride_time_sec > 2 && g_telemetry.trip_km > 0.01f) {
-        g_telemetry.stats.avg_speed_kmh = g_telemetry.trip_km / (g_telemetry.stats.ride_time_sec / 3600.0f);
+    if (g_telemetry.stats.ride_time_sec > 2 && s_sim_trip_km > 0.01f) {
+        g_telemetry.stats.avg_speed_kmh = s_sim_trip_km / (g_telemetry.stats.ride_time_sec / 3600.0f);
     }
-    g_telemetry.vesc_connected = true;
+    g_telemetry.stats.trip_wh = s_sim_wh_used;
+    if (s_sim_trip_km > 0.05f) {
+        g_telemetry.stats.trip_wh_km = s_sim_wh_used / s_sim_trip_km;
+    }
 
-    // 9. Update Waveform History every 1000ms
-    if (g_sim_uptime_ms - g_telemetry.last_history_sample_ms >= 1000) {
-        g_telemetry.last_history_sample_ms = g_sim_uptime_ms;
-        for (int i = 0; i < WAVE_HISTORY_LEN - 1; i++) {
-            g_telemetry.speed_history[i] = g_telemetry.speed_history[i + 1];
-            g_telemetry.power_history[i] = g_telemetry.power_history[i + 1];
-        }
-        g_telemetry.speed_history[WAVE_HISTORY_LEN - 1] = g_telemetry.speed_kmh;
-        g_telemetry.power_history[WAVE_HISTORY_LEN - 1] = g_telemetry.power_watts;
-    }
+    // 8. Feed physics state directly into Virtual VESC emulator
+    VirtualVescTelemetry vt;
+    vt.temp_mos = s_sim_temp_fet_rear;
+    vt.temp_mot = s_sim_temp_mot_rear;
+    vt.current_mot = s_sim_phase_amps;
+    vt.current_in = s_sim_current_amps;
+    vt.duty_cycle_pct = s_sim_duty_cycle_pct;
+    vt.rpm = s_sim_rpm;
+    vt.pole_pairs = pole_pairs;
+    vt.speed_kmh = s_sim_speed_kmh;
+    vt.voltage = s_sim_voltage;
+    vt.battery_pct = Battery.getFusedSocPct();
+    vt.amphours_used = s_sim_ah_used;
+    vt.amphours_charged = s_sim_ah_charged;
+    vt.watthours_used = s_sim_wh_used;
+    vt.watthours_charged = s_sim_wh_charged;
+    vt.tachometer = (int32_t)(s_sim_trip_km * 1000.0f / wheel_circ_m * pole_pairs * 6);
+    vt.tachometer_abs = vt.tachometer;
+    vt.trip_km = s_sim_trip_km;
+    vt.odo_km = s_sim_odo_km;
+    vt.fault_code = s_sim_fault_code;
+    vt.throttle_pct = sim_t;
+    vt.brake_pct = sim_b;
+    g_virtual_vesc.setPhysicsTelemetry(vt);
 }
 
 // -------------------------------------------------------------
@@ -354,7 +446,16 @@ void sim_init() {
     Settings.begin();
     Battery.begin();
     Buttons.begin();
+
+    // Connect Virtual VESC loopback transport
+    Vesc.setTransport(&g_sim_transport.getSideA());
+    g_virtual_vesc.setTransport(&g_sim_transport.getSideB());
+    Vesc.begin();
+    g_virtual_vesc.begin();
+    g_tcp_server.start(6510);
+
     ModeManager::instance().begin();
+    g_virtual_vesc.process(); // Process initial limits dispatched by ModeManager
     Display.init();
 
     Settings.get().dash_style = STYLE_HYPER_35KW;
@@ -395,14 +496,12 @@ void sim_init() {
     g_telemetry.last_history_sample_ms = 1000;
 
     g_telemetry.stats.reset();
-    g_telemetry.stats.trip_wh = 275.4f;
-    g_telemetry.stats.trip_wh_km = 19.4f;
-    g_telemetry.stats.peak_power_watts = 10380.0f;
-    g_telemetry.stats.peak_current_amps = 85.0f;
-    g_telemetry.stats.peak_phase_amps = 230.0f;
-    g_telemetry.stats.max_speed_kmh = 0.0f;
-    g_telemetry.stats.avg_speed_kmh = 28.4f;
-    g_telemetry.stats.ride_time_sec = 2538;
+    s_sim_trip_km = 0.0f;
+    s_sim_wh_used = 0.0f;
+    s_sim_ah_used = 0.0f;
+    s_sim_ah_charged = 0.0f;
+    s_sim_wh_charged = 0.0f;
+    g_telemetry.trip_km = 0.0f;
 
     g_last_frame_clock = std::chrono::steady_clock::now();
     g_sim_uptime_ms = 1000;
@@ -503,6 +602,9 @@ void sim_step(uint32_t step_ms) {
                         g_telemetry.is_locked = false;
                         g_telemetry.pin_error = false;
                         g_telemetry.pin_entry[0] = '\0';
+                        g_manual_throttle = 0.0f;
+                        g_manual_brake = 0.0f;
+                        s_sim_speed_kmh = 0.0f;
                         ModeManager::instance().setLocked(false);
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
@@ -528,6 +630,9 @@ void sim_step(uint32_t step_ms) {
                                 g_telemetry.is_locked = false;
                                 g_telemetry.pin_error = false;
                                 g_telemetry.pin_entry[0] = '\0';
+                                g_manual_throttle = 0.0f;
+                                g_manual_brake = 0.0f;
+                                s_sim_speed_kmh = 0.0f;
                                 ModeManager::instance().setLocked(false);
                                 Renderer.markScreenDirty();
                                 Renderer.invalidateCache();
@@ -727,9 +832,54 @@ void sim_step(uint32_t step_ms) {
         }
     }
 
-    // 2. Physics & Motor Telemetry update
+    // 2. Network & Loopback packet dispatch before physics
+    g_tcp_server.update(g_virtual_vesc);
+    g_virtual_vesc.process();
+
+    // Physics & Motor Telemetry update
     float dt = step_ms / 1000.0f;
     runSimulationStep(dt);
+
+    // End-to-end VESC protocol communication:
+    // Process incoming commands on Virtual VESC
+    g_virtual_vesc.process();
+    g_tcp_server.update(g_virtual_vesc);
+
+    // Dashboard polls Virtual VESC, receives response packets, validates CRC, parses telemetry
+    Vesc.update(g_telemetry);
+    g_virtual_vesc.process();
+    g_tcp_server.update(g_virtual_vesc);
+    Vesc.update(g_telemetry);
+
+    // Multi-ESC dual thermals sync
+    g_telemetry.temp_fet_rear  = g_telemetry.temp_esc;
+    g_telemetry.temp_mot_rear  = g_telemetry.temp_motor;
+    g_telemetry.temp_fet_front = s_sim_temp_fet_front;
+    g_telemetry.temp_mot_front = s_sim_temp_mot_front;
+
+    // Dual controller active limits for RT waveform screens
+    const VirtualVescLimits &lim1 = g_virtual_vesc.getLimits();
+    const VirtualVescLimits &lim2 = g_virtual_vesc.getCanLimits(1);
+    g_telemetry.vesc1_max_power = lim1.max_watt;
+    g_telemetry.vesc1_max_phase = lim1.max_phase_amps;
+    float sim_wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
+    int sim_pole_pairs = Settings.get().motor_pole_pairs > 1 ? Settings.get().motor_pole_pairs : 15;
+    float sim_gear = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
+    g_telemetry.vesc1_max_speed = (lim1.max_erpm / (float)sim_pole_pairs / sim_gear) * sim_wheel_circ_m * 60.0f / 1000.0f;
+    g_telemetry.vesc2_max_power = lim2.max_watt;
+    g_telemetry.vesc2_max_phase = lim2.max_phase_amps;
+    g_telemetry.vesc2_max_speed = g_telemetry.vesc1_max_speed;
+
+    // Update Waveform History every 1000ms
+    if (g_sim_uptime_ms - g_telemetry.last_history_sample_ms >= 1000) {
+        g_telemetry.last_history_sample_ms = g_sim_uptime_ms;
+        for (int i = 0; i < WAVE_HISTORY_LEN - 1; i++) {
+            g_telemetry.speed_history[i] = g_telemetry.speed_history[i + 1];
+            g_telemetry.power_history[i] = g_telemetry.power_history[i + 1];
+        }
+        g_telemetry.speed_history[WAVE_HISTORY_LEN - 1] = g_telemetry.speed_kmh;
+        g_telemetry.power_history[WAVE_HISTORY_LEN - 1] = g_telemetry.power_watts;
+    }
 
     // 3. Render frame to sprite
     Renderer.render(g_telemetry);
@@ -790,6 +940,9 @@ void sim_touch_event(int is_down, int x, int y) {
                         g_telemetry.is_locked = false;
                         g_telemetry.pin_error = false;
                         g_telemetry.pin_entry[0] = '\0';
+                        g_manual_throttle = 0.0f;
+                        g_manual_brake = 0.0f;
+                        s_sim_speed_kmh = 0.0f;
                         ModeManager::instance().setLocked(false);
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
@@ -815,6 +968,9 @@ void sim_touch_event(int is_down, int x, int y) {
                                 g_telemetry.is_locked = false;
                                 g_telemetry.pin_error = false;
                                 g_telemetry.pin_entry[0] = '\0';
+                                g_manual_throttle = 0.0f;
+                                g_manual_brake = 0.0f;
+                                s_sim_speed_kmh = 0.0f;
                                 ModeManager::instance().setLocked(false);
                                 Renderer.markScreenDirty();
                                 Renderer.invalidateCache();
@@ -887,8 +1043,14 @@ void sim_touch_event(int is_down, int x, int y) {
                 return;
             } else if (x >= 600 && y <= 65) {
                 // Top Right [RESET TRIP] button
+                s_sim_trip_km = 0.0f;
+                s_sim_wh_used = 0.0f;
+                s_sim_ah_used = 0.0f;
+                s_sim_ah_charged = 0.0f;
+                s_sim_wh_charged = 0.0f;
                 g_telemetry.trip_km = 0.0f;
                 g_telemetry.stats.reset();
+                Battery.resetTrip();
                 Renderer.markScreenDirty();
                 Display.setSimTouch(false, -1, -1);
                 return;
@@ -1002,8 +1164,15 @@ void sim_trigger_nav(int nav_action) {
                 g_telemetry.screen = SCREEN_SETTINGS_MENU;
                 break;
             case NAV_BTN2_LONG:
+                s_sim_trip_km = 0.0f;
+                s_sim_wh_used = 0.0f;
+                s_sim_ah_used = 0.0f;
+                s_sim_ah_charged = 0.0f;
+                s_sim_wh_charged = 0.0f;
                 g_telemetry.trip_km = 0.0f;
                 g_telemetry.stats.reset();
+                Battery.resetTrip();
+                Renderer.markScreenDirty();
                 break;
             case NAV_BOOST_TOGGLE:
                 g_telemetry.boost_active = !g_telemetry.boost_active;
@@ -1101,15 +1270,21 @@ void sim_toggle_auto_mode() {
 }
 
 void sim_set_manual_throttle(float throttle_pct) {
+    if (g_telemetry.is_locked) {
+        g_manual_throttle = 0.0f;
+        return;
+    }
     if (throttle_pct < 0.0f) throttle_pct = 0.0f;
     if (throttle_pct > 100.0f) throttle_pct = 100.0f;
     g_manual_throttle = throttle_pct;
+    g_virtual_vesc.resetExternalControl();
 }
 
 void sim_set_manual_brake(float brake_pct) {
     if (brake_pct < 0.0f) brake_pct = 0.0f;
     if (brake_pct > 100.0f) brake_pct = 100.0f;
     g_manual_brake = brake_pct;
+    g_virtual_vesc.resetExternalControl();
 }
 
 void sim_set_dash_style(int style) {
@@ -1176,6 +1351,7 @@ void sim_get_telemetry(SimTelemetryExport *out) {
     out->avg_speed_kmh = g_telemetry.stats.avg_speed_kmh;
     out->ride_time_sec = g_telemetry.stats.ride_time_sec;
     out->tuning_mode = g_telemetry.tuning_mode ? 1 : 0;
+    out->is_locked = g_telemetry.is_locked ? 1 : 0;
 }
 
 void sim_get_config_json(char *out_buf, int max_len) {

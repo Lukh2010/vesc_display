@@ -298,14 +298,14 @@ void ButtonHandler::processTouch(uint32_t now) {
                         // do NOT exit back to Dash! Only pressing < DASH returns.
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
                         // On SETTINGS Screen:
-                        if (_last_tap_y <= 65 && _last_tap_x <= 160) {
-                            _pending_action = NAV_SCREEN_DASH; // Top Left -> Return to Ride Dash
+                        if (_last_tap_y <= 65 && _last_tap_x <= 140) {
+                            _pending_action = NAV_SCREEN_DASH; // Top Left -> Return to Ride Dash (fallback if not consumed)
                         } else if (_last_tap_y <= 65 && _last_tap_x >= 640) {
                             _pending_action = NAV_SCREEN_DASH; // Top Right [X] -> Return to Ride Dash
-                        } else if (_last_tap_y <= 65 && _last_tap_x >= 140 && _last_tap_x <= 280) {
+                        } else if (_last_tap_y <= 65 && _last_tap_x > 140 && _last_tap_x <= 280) {
                             _pending_action = NAV_MENU_BACK;   // Top Submenu [< MENÜ] -> Return to Root Categories
                         }
-                        // Detailed item selection and value box taps are forwarded to Renderer.handleSettingsTouch via getLastTap()
+                        // Detailed item selection, scrollbar, and value box taps are forwarded to Renderer.handleSettingsTouch via getLastTap()
                     } else {
                         // On SCREEN_RIDE_DASH / Default:
                         // 1. Top Left [ STATS ] Navigation Touch Button -> Open Statistics Screen (SCREEN_RT_GRAPHS)

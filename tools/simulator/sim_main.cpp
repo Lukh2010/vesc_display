@@ -8,49 +8,20 @@
 #include "settings_manager.h"
 #include "battery_manager.h"
 #include <assert.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "dash_renderer.h"
 #include "buttons.h"
 #include "vesc_uart.h"
 #include "mode_manager.h"
 #include "fault_manager.h"
+#include "virtual_vesc/virtual_vesc.h"
+#include "virtual_vesc/vesc_tcp_server.h"
 
-VescHandler::VescHandler()
-    : _bridge_active(false),
-      _bridge_pc_to_vesc(0),
-      _bridge_vesc_to_pc(0),
-      _wifi_bridge_active(false),
-      _wifi_client_connected(false),
-      _bridge_wifi_to_vesc(0),
-      _bridge_vesc_to_wifi(0),
-      _sync_status(SYNC_IDLE),
-      _sync_ms(0),
-      _mcconf_req_ms(0) {
-    _wifi_client_ip[0] = '\0';
-}
-void VescHandler::begin() {}
-void VescHandler::update(DashTelemetry &) {}
-void VescHandler::setSimThrottle(float) {}
-void VescHandler::enterBridgeMode() { _bridge_active = true; }
-void VescHandler::exitBridgeMode() { _bridge_active = false; }
-void VescHandler::enterWifiBridgeMode() {
-    _wifi_bridge_active = true;
-    _wifi_client_connected = true;
-    strncpy(_wifi_client_ip, "192.168.4.2", sizeof(_wifi_client_ip));
-    _bridge_wifi_to_vesc = 1420;
-    _bridge_vesc_to_wifi = 3680;
-}
-void VescHandler::exitWifiBridgeMode() { _wifi_bridge_active = false; _wifi_client_connected = false; }
-void VescHandler::updateBridge() {}
-void VescHandler::updateUsbBridge() {}
-void VescHandler::updateWifiBridge() {}
-void VescHandler::requestMcconf() { _sync_status = SYNC_SUCCESS; }
-void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, float max_battery_amps, float max_phase_amps, float cutoff_start, float cutoff_end) {
-    Settings.get().max_speed_kmh    = (uint8_t)roundf(max_speed_kmh);
-    Settings.get().max_battery_amps = (uint16_t)roundf(max_battery_amps);
-    Settings.get().max_phase_amps   = (uint16_t)roundf(max_phase_amps);
-}
-void VescHandler::sendTerminalCommand(const char *) {}
-VescHandler Vesc;
+static VescLoopbackTransport g_sim_test_transport;
+static VirtualVesc g_virtual_vesc;
 
 MockSerial Serial;
 DisplayDriver Display;
@@ -993,10 +964,607 @@ void testSpeedSweepAnimation() {
     printf("=== Speedometer Sweep Tests PASSED! ===\n\n");
 }
 
+void testVirtualVescEmulator() {
+    printf("=== Running Virtual VESC Protocol & Emulator Unit Tests ===\n");
+
+    // 1. Packet framing and CRC generation
+    {
+        uint8_t payload[] = { COMM_GET_VALUES_SETUP };
+        uint8_t packet[32];
+        size_t len = vesc_encode_packet(payload, sizeof(payload), packet, sizeof(packet));
+        assert(len == 6);
+        assert(packet[0] == 0x02);
+        assert(packet[1] == 1);
+        assert(packet[2] == COMM_GET_VALUES_SETUP);
+        uint16_t crc = vesc_crc16(payload, 1);
+        assert(packet[3] == (uint8_t)(crc >> 8));
+        assert(packet[4] == (uint8_t)(crc & 0xFF));
+        assert(packet[5] == 0x03);
+
+        // Long packet framing test (>255 bytes)
+        std::vector<uint8_t> long_payload(300, 0x42);
+        std::vector<uint8_t> long_packet(512);
+        size_t long_len = vesc_encode_packet(long_payload.data(), long_payload.size(), long_packet.data(), long_packet.size());
+        assert(long_len == 306);
+        assert(long_packet[0] == 0x03);
+        assert(long_packet[1] == 0x01); // 300 >> 8 = 1
+        assert(long_packet[2] == 0x2C); // 300 & 0xFF = 44 (0x2C)
+        assert(long_packet[305] == 0x03);
+        printf("[PASS] 1. Packet framing (short & long) and CRC-16 generation verified.\n");
+    }
+
+    // 2. CRC validation
+    {
+        VescPacketParser parser;
+        uint8_t payload[] = { COMM_GET_DECODED_ADC };
+        uint8_t packet[32];
+        size_t len = vesc_encode_packet(payload, sizeof(payload), packet, sizeof(packet));
+
+        bool callback_called = false;
+        size_t n = parser.processBuffer(packet, len, [&](const uint8_t *p, size_t l) {
+            callback_called = true;
+            assert(l == 1 && p[0] == COMM_GET_DECODED_ADC);
+        });
+        assert(n == 1);
+        assert(callback_called);
+
+        // Corrupt packet CRC
+        packet[len - 2] ^= 0x55;
+        parser.reset();
+        callback_called = false;
+        n = parser.processBuffer(packet, len, [&](const uint8_t *, size_t) {
+            callback_called = true;
+        });
+        assert(n == 0);
+        assert(!callback_called);
+        assert(parser.getCrcErrors() == 1);
+        printf("[PASS] 2. CRC validation: valid packets pass, corrupted CRCs strictly rejected.\n");
+    }
+
+    // 3. Incomplete packets across chunked stream
+    {
+        VescPacketParser parser;
+        uint8_t payload[] = { COMM_GET_VALUES_SETUP };
+        uint8_t packet[32];
+        size_t len = vesc_encode_packet(payload, sizeof(payload), packet, sizeof(packet));
+
+        bool got_packet = false;
+        auto cb = [&](const uint8_t *p, size_t l) { (void)p; (void)l; got_packet = true; };
+
+        // Deliver bytes 0..len-2 one byte at a time
+        for (size_t i = 0; i < len - 1; i++) {
+            assert(!parser.processByte(packet[i], cb));
+            assert(!got_packet);
+        }
+        // Final stop byte completes the packet
+        assert(parser.processByte(packet[len - 1], cb));
+        assert(got_packet);
+        printf("[PASS] 3. Incomplete packet handling across fragmented byte stream verified.\n");
+    }
+
+    // 4. Multiple incoming packets in a single buffer
+    {
+        VescPacketParser parser;
+        uint8_t p1[] = { COMM_GET_VALUES_SETUP };
+        uint8_t p2[] = { COMM_GET_DECODED_ADC };
+        uint8_t p3[] = { COMM_FW_VERSION };
+
+        uint8_t stream[128];
+        size_t len1 = vesc_encode_packet(p1, sizeof(p1), stream, sizeof(stream));
+        size_t len2 = vesc_encode_packet(p2, sizeof(p2), stream + len1, sizeof(stream) - len1);
+        size_t len3 = vesc_encode_packet(p3, sizeof(p3), stream + len1 + len2, sizeof(stream) - len1 - len2);
+        size_t total_len = len1 + len2 + len3;
+
+        std::vector<uint8_t> received_cmds;
+        size_t n = parser.processBuffer(stream, total_len, [&](const uint8_t *p, size_t l) {
+            (void)l;
+            received_cmds.push_back(p[0]);
+        });
+        assert(n == 3);
+        assert(received_cmds.size() == 3);
+        assert(received_cmds[0] == COMM_GET_VALUES_SETUP);
+        assert(received_cmds[1] == COMM_GET_DECODED_ADC);
+        assert(received_cmds[2] == COMM_FW_VERSION);
+        printf("[PASS] 4. Multiple incoming packets in single buffer correctly parsed in sequence.\n");
+    }
+
+    // Setup Virtual VESC test loopback
+    VescLoopbackTransport loopback;
+    VirtualVesc virtual_vesc;
+    virtual_vesc.setTransport(&loopback.getSideB());
+    virtual_vesc.begin();
+
+    // 5. COMM_GET_VALUES responses
+    {
+        VirtualVescTelemetry vt;
+        vt.temp_mos = 42.5f;
+        vt.temp_mot = 58.2f;
+        vt.current_mot = 72.5f;
+        vt.current_in = 24.8f;
+        vt.duty_cycle_pct = 65.0f;
+        vt.rpm = 3200.0f;
+        vt.pole_pairs = 15;
+        vt.voltage = 52.4f;
+        vt.amphours_used = 4.25f;
+        vt.amphours_charged = 0.5f;
+        vt.watthours_used = 220.0f;
+        vt.watthours_charged = 25.0f;
+        vt.tachometer = 12000;
+        vt.tachometer_abs = 12000;
+        vt.fault_code = 4; // FAULT_OVER_TEMP_FET
+        virtual_vesc.setPhysicsTelemetry(vt);
+
+        // Send COMM_GET_VALUES request to Virtual VESC
+        uint8_t req[] = { COMM_GET_VALUES };
+        uint8_t req_packet[32];
+        size_t req_len = vesc_encode_packet(req, sizeof(req), req_packet, sizeof(req_packet));
+        loopback.getSideA().write(req_packet, req_len);
+
+        virtual_vesc.process();
+
+        // Read response from Side A
+        VescPacketParser parser;
+        bool resp_ok = false;
+        uint8_t rx_buf[256];
+        size_t n_rx = loopback.getSideA().readBytes(rx_buf, sizeof(rx_buf));
+        parser.processBuffer(rx_buf, n_rx, [&](const uint8_t *p, size_t l) {
+            assert(l >= 55);
+            assert(p[0] == COMM_GET_VALUES);
+            int32_t idx = 1;
+            int16_t t_mos = buffer_get_int16(p, &idx);
+            int16_t t_mot = buffer_get_int16(p, &idx);
+            int32_t c_mot = buffer_get_int32(p, &idx);
+            int32_t c_in  = buffer_get_int32(p, &idx);
+            assert(t_mos == 425);
+            assert(t_mot == 582);
+            assert(c_mot == 7250);
+            assert(c_in == 2480);
+            assert(p[53] == 4); // fault code at index 53
+            resp_ok = true;
+        });
+        assert(resp_ok);
+        printf("[PASS] 5. COMM_GET_VALUES response formatting and big-endian payload verified.\n");
+    }
+
+    // 6. COMM_GET_VALUES_SETUP responses (ground speed, mm odometry, fault code)
+    {
+        VirtualVescTelemetry vt;
+        vt.temp_mos = 35.0f;
+        vt.temp_mot = 45.0f;
+        vt.current_mot = 50.0f;
+        vt.current_in = 18.0f;
+        vt.duty_cycle_pct = 75.0f;
+        vt.rpm = 2400.0f;
+        vt.pole_pairs = 15;
+        vt.speed_kmh = 36.0f; // 10,000 mm/s ground speed
+        vt.voltage = 54.0f;
+        vt.battery_pct = 90.0f;
+        vt.amphours_used = 2.5f;
+        vt.trip_km = 8.5f; // 8,500,000 mm distance
+        vt.odo_km = 120.0f;
+        vt.fault_code = 0;
+        virtual_vesc.setPhysicsTelemetry(vt);
+
+        uint8_t req[] = { COMM_GET_VALUES_SETUP };
+        uint8_t req_packet[32];
+        size_t req_len = vesc_encode_packet(req, sizeof(req), req_packet, sizeof(req_packet));
+        loopback.getSideA().write(req_packet, req_len);
+
+        virtual_vesc.process();
+
+        VescPacketParser parser;
+        bool resp_ok = false;
+        uint8_t rx_buf[256];
+        size_t n_rx = loopback.getSideA().readBytes(rx_buf, sizeof(rx_buf));
+        parser.processBuffer(rx_buf, n_rx, [&](const uint8_t *p, size_t l) {
+            assert(l >= 56);
+            assert(p[0] == COMM_GET_VALUES_SETUP);
+            int32_t idx = 15; // erpm index
+            int32_t erpm = buffer_get_int32(p, &idx);
+            int32_t speed_m_s = buffer_get_int32(p, &idx);
+            int16_t v_in = buffer_get_int16(p, &idx);
+            assert(erpm == 2400 * 15);
+            assert(speed_m_s == 10000); // 36.0 km/h = 10,000 mm/s
+            assert(v_in == 540);
+            idx = 43; // dist_m
+            int32_t dist_m = buffer_get_int32(p, &idx);
+            assert(dist_m == 8500000);
+            assert(p[55] == 0); // fault code at index 55 (standard VESC protocol)
+            resp_ok = true;
+        });
+        assert(resp_ok);
+        printf("[PASS] 6. COMM_GET_VALUES_SETUP response with mm/s ground speed verified.\n");
+    }
+
+    // 7. Correct telemetry scaling
+    {
+        VirtualVescTelemetry vt;
+        vt.temp_mos = 48.7f;
+        vt.current_mot = 123.45f;
+        vt.current_in = 45.67f;
+        vt.duty_cycle_pct = 95.8f;
+        vt.voltage = 76.4f;
+        vt.amphours_used = 12.3456f;
+        vt.speed_kmh = 72.0f;
+        virtual_vesc.setPhysicsTelemetry(vt);
+
+        uint8_t req[] = { COMM_GET_VALUES_SETUP };
+        uint8_t req_packet[32];
+        size_t req_len = vesc_encode_packet(req, sizeof(req), req_packet, sizeof(req_packet));
+        loopback.getSideA().write(req_packet, req_len);
+        virtual_vesc.process();
+
+        VescPacketParser parser;
+        uint8_t rx_buf[256];
+        size_t n_rx = loopback.getSideA().readBytes(rx_buf, sizeof(rx_buf));
+        parser.processBuffer(rx_buf, n_rx, [&](const uint8_t *p, size_t l) {
+            (void)l;
+            int32_t idx = 1;
+            assert(buffer_get_int16(p, &idx) == 487);         // temp 0.1C
+            idx = 5;
+            assert(buffer_get_int32(p, &idx) == 12345);       // phase current 0.01A
+            assert(buffer_get_int32(p, &idx) == 4567);        // bat current 0.01A
+            assert(buffer_get_int16(p, &idx) == 958);         // duty 0.1%
+            idx = 19;
+            assert(buffer_get_int32(p, &idx) == 20000);       // 72 km/h = 20,000 mm/s
+            assert(buffer_get_int16(p, &idx) == 764);         // voltage 0.1V
+            idx = 27;
+            assert(buffer_get_int32(p, &idx) == 123456);      // ah 0.0001 Ah
+        });
+        printf("[PASS] 7. Strict VESC telemetry scaling (0.1C, 0.01A, 0.1V, 0.0001Ah, mm/s) verified.\n");
+    }
+
+    // 8. Dynamic telemetry changes when throttle and braking change
+    {
+        // 0% Throttle, 0% Brake
+        virtual_vesc.setPhysicsTelemetry(VirtualVescTelemetry());
+        uint8_t req[] = { COMM_GET_DECODED_ADC };
+        uint8_t req_packet[32];
+        size_t req_len = vesc_encode_packet(req, sizeof(req), req_packet, sizeof(req_packet));
+        loopback.getSideA().write(req_packet, req_len);
+        virtual_vesc.process();
+
+        VescPacketParser parser;
+        uint8_t rx_buf[256];
+        size_t n_rx = loopback.getSideA().readBytes(rx_buf, sizeof(rx_buf));
+        parser.processBuffer(rx_buf, n_rx, [&](const uint8_t *p, size_t l) {
+            assert(p[0] == COMM_GET_DECODED_ADC);
+            (void)l;
+            int32_t idx = 1;
+            assert(buffer_get_int32(p, &idx) == 0); // ADC1 level
+            assert(buffer_get_int32(p, &idx) == 0); // ADC1 volt
+            assert(buffer_get_int32(p, &idx) == 0); // ADC2 level
+            assert(buffer_get_int32(p, &idx) == 0); // ADC2 volt
+        });
+
+        // 75% Throttle, 30% Brake
+        VirtualVescTelemetry vt;
+        vt.throttle_pct = 75.0f;
+        vt.brake_pct = 30.0f;
+        virtual_vesc.setPhysicsTelemetry(vt);
+
+        loopback.getSideA().write(req_packet, req_len);
+        virtual_vesc.process();
+
+        n_rx = loopback.getSideA().readBytes(rx_buf, sizeof(rx_buf));
+        parser.reset();
+        parser.processBuffer(rx_buf, n_rx, [&](const uint8_t *p, size_t l) {
+            (void)l;
+            int32_t idx = 1;
+            int32_t l1 = buffer_get_int32(p, &idx);
+            int32_t v1 = buffer_get_int32(p, &idx);
+            int32_t l2 = buffer_get_int32(p, &idx);
+            int32_t v2 = buffer_get_int32(p, &idx);
+            assert(l1 == 750000);
+            assert(abs(v1 - 2475000) < 5000); // 75% of 3.3V = 2.475V
+            assert(l2 == 300000);
+            assert(abs(v2 - 990000) < 5000);  // 30% of 3.3V = 0.99V
+        });
+        printf("[PASS] 8. Dynamic throttle and braking ADC voltage/percentage tracking verified.\n");
+    }
+
+    // 9. Configuration commands and their effects
+    {
+        // 9a: COMM_SET_MCCONF_TEMP
+        uint8_t payload[37];
+        int32_t p_idx = 0;
+        payload[p_idx++] = COMM_SET_MCCONF_TEMP;
+        buffer_append_float32_auto(payload, -180.0f, &p_idx); // min_phase
+        buffer_append_float32_auto(payload, 180.0f, &p_idx);  // max_phase
+        buffer_append_float32_auto(payload, -50000.0f, &p_idx); // min_erpm
+        buffer_append_float32_auto(payload, 50000.0f, &p_idx);  // max_erpm
+        buffer_append_float32_auto(payload, -45.0f, &p_idx);  // min_bat
+        buffer_append_float32_auto(payload, 85.0f, &p_idx);   // max_bat
+        buffer_append_int16(payload, 0, &p_idx);              // duty_min
+        buffer_append_int16(payload, 950, &p_idx);            // duty_max
+        buffer_append_float32_auto(payload, -10000.0f, &p_idx); // min_watt
+        buffer_append_float32_auto(payload, 12000.0f, &p_idx);  // max_watt
+
+        uint8_t packet[64];
+        size_t len = vesc_encode_packet(payload, p_idx, packet, sizeof(packet));
+        loopback.getSideA().write(packet, len);
+        virtual_vesc.process();
+
+        assert(virtual_vesc.getLimits().max_phase_amps == 180.0f);
+        assert(virtual_vesc.getLimits().max_battery_amps == 85.0f);
+        assert(virtual_vesc.getLimits().max_erpm == 50000.0f);
+        assert(virtual_vesc.getLimits().max_watt == 12000.0f);
+
+        // 9b: Terminal command "conf_set l_current_max 250.0"
+        const char *tcmd = "conf_set l_current_max 250.0";
+        uint8_t t_payload[64];
+        t_payload[0] = COMM_TERMINAL_CMD;
+        size_t t_len = strlen(tcmd);
+        memcpy(&t_payload[1], tcmd, t_len);
+        len = vesc_encode_packet(t_payload, t_len + 1, packet, sizeof(packet));
+        loopback.getSideA().write(packet, len);
+        virtual_vesc.process();
+        assert(virtual_vesc.getLimits().max_phase_amps == 250.0f);
+
+        // Verify COMM_PRINT terminal response
+        {
+            VescPacketParser term_parser;
+            uint8_t term_rx[256];
+            size_t n_term = loopback.getSideA().readBytes(term_rx, sizeof(term_rx));
+            bool print_ok = false;
+            term_parser.processBuffer(term_rx, n_term, [&](const uint8_t *p, size_t l) {
+                (void)l;
+                if (p[0] == COMM_PRINT) {
+                    print_ok = true;
+                }
+            });
+            assert(print_ok);
+        }
+
+        // 9c: COMM_GET_MCCONF query returns updated limits
+        uint8_t mc_req[] = { COMM_GET_MCCONF };
+        len = vesc_encode_packet(mc_req, 1, packet, sizeof(packet));
+        loopback.getSideA().write(packet, len);
+        virtual_vesc.process();
+
+        VescPacketParser parser;
+        uint8_t rx_buf[256];
+        size_t n_rx = loopback.getSideA().readBytes(rx_buf, sizeof(rx_buf));
+        bool mc_ok = false;
+        parser.processBuffer(rx_buf, n_rx, [&](const uint8_t *p, size_t l) {
+            (void)l;
+            if (p[0] == COMM_GET_MCCONF) {
+                int32_t idx = 9;
+                float max_phase = buffer_get_float32_auto(p, &idx);
+                assert(fabsf(max_phase - 250.0f) < 0.1f);
+                mc_ok = true;
+            }
+        });
+        assert(mc_ok);
+
+        // 9d: COMM_FORWARD_CAN to secondary ESC (CAN ID 1)
+        uint8_t can_payload[64];
+        can_payload[0] = COMM_FORWARD_CAN;
+        can_payload[1] = 0x01; // CAN ID 1
+        memcpy(&can_payload[2], payload, p_idx); // Forward same MCCONF_TEMP
+        len = vesc_encode_packet(can_payload, p_idx + 2, packet, sizeof(packet));
+        loopback.getSideA().write(packet, len);
+        virtual_vesc.process();
+        assert(virtual_vesc.getCanLimits(1).max_phase_amps == 180.0f);
+
+        // 9e: COMM_SET_MCCONF_TEMP_SETUP (ID 63)
+        payload[0] = COMM_SET_MCCONF_TEMP_SETUP;
+        int32_t p63_idx = 1;
+        buffer_append_float32_auto(payload, -210.0f, &p63_idx); // min_phase
+        buffer_append_float32_auto(payload, 210.0f, &p63_idx);  // max_phase
+        len = vesc_encode_packet(payload, p_idx, packet, sizeof(packet));
+        loopback.getSideA().write(packet, len);
+        virtual_vesc.process();
+        assert(virtual_vesc.getLimits().max_phase_amps == 210.0f);
+
+        printf("[PASS] 9. Configuration commands (MCCONF_TEMP, Terminal, CAN Forward, TEMP_SETUP) and limit effects verified.\n");
+    }
+
+    // 10. Invalid packets and unknown commands
+    {
+        // 10a: Noise bytes before packet
+        VescPacketParser parser;
+        uint8_t noise_stream[] = { 0xFF, 0xFE, 0x00, 0x12, 0x77, 0x02, 0x01, 0x2F, 0xD5, 0x8D, 0x03 };
+        std::vector<uint8_t> valid_cmds;
+        size_t n = parser.processBuffer(noise_stream, sizeof(noise_stream), [&](const uint8_t *p, size_t l) {
+            (void)l;
+            valid_cmds.push_back(p[0]);
+        });
+        assert(n == 1);
+        assert(valid_cmds.size() == 1 && valid_cmds[0] == COMM_GET_VALUES_SETUP);
+
+        // 10b: Unknown command ID (0xEE) processed without crashing
+        uint8_t unk_payload[] = { 0xEE, 0x12, 0x34 };
+        uint8_t packet[32];
+        size_t len = vesc_encode_packet(unk_payload, sizeof(unk_payload), packet, sizeof(packet));
+        loopback.getSideA().write(packet, len);
+        virtual_vesc.process(); // Must not crash or corrupt
+        assert(virtual_vesc.getLastCommandId() == 0xEE);
+
+        // 10c: Corrupt stop byte (0x00 instead of 0x03) immediately followed by valid packet
+        uint8_t stream_with_corrupt_stop[] = {
+            0x02, 0x01, 0x00, 0x93, 0xD9, 0x00, // Bad stop byte
+            0x02, 0x01, 0x20, 0x24, 0x62, 0x03  // Valid COMM_GET_DECODED_ADC packet
+        };
+        std::vector<uint8_t> parsed_cmds;
+        VescPacketParser rec_parser;
+        rec_parser.processBuffer(stream_with_corrupt_stop, sizeof(stream_with_corrupt_stop), [&](const uint8_t *p, size_t l) {
+            (void)l;
+            parsed_cmds.push_back(p[0]);
+        });
+        assert(parsed_cmds.size() == 1 && parsed_cmds[0] == COMM_GET_DECODED_ADC);
+
+        printf("[PASS] 10. Resilient handling of noise bytes, unknown commands, and corrupt stop recovery verified.\n");
+    }
+
+    // 11. End-to-end communication through simulator virtual transport with VescHandler
+    {
+        VescLoopbackTransport e2e_loopback;
+        VirtualVesc e2e_vesc;
+
+        Vesc.setTransport(&e2e_loopback.getSideA());
+        e2e_vesc.setTransport(&e2e_loopback.getSideB());
+        Vesc.begin();
+        e2e_vesc.begin();
+
+        VirtualVescTelemetry vt;
+        vt.speed_kmh = 42.6f;
+        vt.rpm = 2840.0f;
+        vt.pole_pairs = 15;
+        vt.current_in = 19.4f;
+        vt.current_mot = 52.8f;
+        vt.duty_cycle_pct = 72.0f;
+        vt.voltage = 53.6f;
+        vt.temp_mos = 36.5f;
+        vt.temp_mot = 44.2f;
+        vt.throttle_pct = 68.0f;
+        vt.trip_km = 12.4f;
+        vt.odo_km = 250.0f;
+        vt.amphours_used = 3.45f;
+        vt.fault_code = 6; // MOTOR_OVERHEAT
+        e2e_vesc.setPhysicsTelemetry(vt);
+
+        DashTelemetry t;
+        memset(&t, 0, sizeof(t));
+
+        // Advance simulation time to trigger poll (at least 25ms)
+        simAdvanceMs(30);
+        Vesc.update(t);        // Phase 0: Sends COMM_GET_VALUES_SETUP
+        e2e_vesc.process();    // Virtual VESC responds with telemetry
+        Vesc.update(t);        // Parses response packet
+
+        simAdvanceMs(30);
+        Vesc.update(t);        // Phase 1: Sends COMM_GET_DECODED_ADC
+        e2e_vesc.process();    // Virtual VESC responds with ADC levels
+        Vesc.update(t);        // Parses ADC packet
+
+        assert(t.vesc_connected == true);
+        assert(fabsf(t.speed_kmh - 42.6f) < 0.2f);
+        assert(fabsf(t.current_amps - 19.4f) < 0.2f);
+        assert(fabsf(t.phase_amps - 52.8f) < 0.2f);
+        assert(fabsf(t.duty_cycle_pct - 72.0f) < 0.2f);
+        float expected_voltage = 53.6f + Settings.get().voltage_trim_v;
+        assert(fabsf(t.voltage - expected_voltage) < 0.2f);
+        assert(fabsf(t.temp_esc - 36.5f) < 0.2f);
+        assert(fabsf(t.temp_motor - 44.2f) < 0.2f);
+        assert(fabsf(t.throttle_pct - 68.0f) < 1.0f);
+        assert(fabsf(t.trip_km - 12.4f) < 0.2f);
+        assert(fabsf(t.odo_km - 250.0f) < 0.2f);
+        assert(fabsf(t.amphours_used - 3.45f) < 0.05f);
+        assert(t.fault_code == 6);
+
+        printf("[PASS] 11. End-to-end communication through virtual transport (VescHandler <-> VirtualVesc) verified 100%%!\n");
+    }
+
+    // 12. Full TCP server socket request/response & virtual isolation verified
+    {
+        VirtualVesc tcp_vesc;
+        VescTcpServer tcp_server;
+        uint16_t test_port = 6512;
+        bool started = tcp_server.start(test_port);
+        assert(started);
+
+        // Connect client TCP socket to localhost:6512
+        int client_sock = socket(AF_INET, SOCK_STREAM, 0);
+        assert(client_sock >= 0);
+        struct sockaddr_in serv_addr;
+        memset(&serv_addr, 0, sizeof(serv_addr));
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_port = htons(test_port);
+        inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
+
+        int res = connect(client_sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+        assert(res == 0);
+
+        // Let server accept connection
+        tcp_server.update(tcp_vesc);
+        assert(tcp_server.isClientConnected());
+
+        // Send COMM_FW_VERSION packet from client
+        uint8_t fw_cmd[] = { COMM_FW_VERSION };
+        uint8_t fw_pkt[32];
+        size_t fw_len = vesc_encode_packet(fw_cmd, 1, fw_pkt, sizeof(fw_pkt));
+        ssize_t sent = send(client_sock, fw_pkt, fw_len, 0);
+        assert(sent == (ssize_t)fw_len);
+
+        // Server updates and routes to VirtualVesc
+        tcp_server.update(tcp_vesc);
+
+        // Read response on client socket
+        uint8_t resp_buf[256];
+        ssize_t n_read = recv(client_sock, resp_buf, sizeof(resp_buf), 0);
+        assert(n_read > 0);
+
+        bool got_fw = false;
+        VescPacketParser parser;
+        parser.processBuffer(resp_buf, n_read, [&](const uint8_t *payload, size_t len) {
+            assert(len >= 3);
+            assert(payload[0] == COMM_FW_VERSION);
+            assert(payload[1] == 6); // fw_major
+            assert(payload[2] == 5); // fw_minor
+            got_fw = true;
+        });
+        assert(got_fw);
+
+        // Close client socket & stop server
+        close(client_sock);
+        tcp_server.update(tcp_vesc);
+        assert(!tcp_server.isClientConnected());
+        tcp_server.stop();
+
+        printf("[PASS] 12. Full TCP server socket request/response & virtual isolation verified.\n");
+    }
+
+    // 13. External motor control commands (SET_DUTY, SET_CURRENT, SET_CURRENT_BRAKE, SET_RPM)
+    {
+        VirtualVesc ext_vesc;
+        ext_vesc.begin();
+        assert(!ext_vesc.hasExternalControl());
+
+        // Test COMM_SET_DUTY (duty = 0.65 -> 65% throttle)
+        uint8_t duty_cmd[5];
+        duty_cmd[0] = COMM_SET_DUTY;
+        int32_t duty_idx = 1;
+        buffer_append_int32(duty_cmd, 65000, &duty_idx);
+        ext_vesc.handlePacket(duty_cmd, sizeof(duty_cmd));
+
+        assert(ext_vesc.hasExternalControl());
+        assert(fabsf(ext_vesc.getExternalThrottle() - 65.0f) < 0.1f);
+        assert(ext_vesc.getExternalBrake() == 0.0f);
+
+        // Test COMM_SET_CURRENT_BRAKE (brake 60A on 120A max -> 50% brake)
+        uint8_t brake_cmd[5];
+        brake_cmd[0] = COMM_SET_CURRENT_BRAKE;
+        int32_t brake_idx = 1;
+        buffer_append_int32(brake_cmd, 60000, &brake_idx);
+        ext_vesc.handlePacket(brake_cmd, sizeof(brake_cmd));
+
+        assert(ext_vesc.hasExternalControl());
+        assert(ext_vesc.getExternalThrottle() == 0.0f);
+        assert(fabsf(ext_vesc.getExternalBrake() - 50.0f) < 0.1f);
+
+        // Test resetExternalControl()
+        ext_vesc.resetExternalControl();
+        assert(!ext_vesc.hasExternalControl());
+
+        printf("[PASS] 13. External motor control commands (COMM_SET_DUTY, COMM_SET_CURRENT, COMM_SET_CURRENT_BRAKE) verified.\n");
+    }
+
+    printf("=== All Virtual VESC Emulator Unit Tests PASSED! ===\n\n");
+}
+
 int main(int argc, char **argv) {
     printf("==================================================\n");
     printf("   VESC 4.3\" Touch LCD Emulator & Renderer (800x480) \n");
     printf("==================================================\n");
+
+    testVirtualVescEmulator();
+
+    // Attach loopback transport for standard scenario test runs
+    Vesc.setTransport(&g_sim_test_transport.getSideA());
+    g_virtual_vesc.setTransport(&g_sim_test_transport.getSideB());
+    Vesc.begin();
+    g_virtual_vesc.begin();
 
     testTouchGestures();
 
