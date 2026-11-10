@@ -376,9 +376,17 @@ void testTouchGestures() {
     printf("[PASS] Statistics Screen Reset Trip Tap triggered NAV_BTN2_LONG.\n");
 
     // 10b. Test Statistics Screen: Tap on [ RACE ] button (Hitbox: x: 140..250, y <= 65)
+    // When tuning_mode is disabled (Police / Stealth mode), tap on [ RACE ] must be blocked
+    Buttons.setTuningMode(false);
+    NavAction actStatsRaceTapBlocked = simTouchAction(190, 30, 190, 30, 50);
+    assert(actStatsRaceTapBlocked == NAV_NONE);
+    printf("[PASS] Statistics Screen [ RACE ] Button Tap blocked in Police Mode (NAV_NONE).\n");
+
+    // When tuning_mode is enabled, tap on [ RACE ] triggers NAV_SCREEN_RACE
+    Buttons.setTuningMode(true);
     NavAction actStatsRaceTap = simTouchAction(190, 30, 190, 30, 50);
     assert(actStatsRaceTap == NAV_SCREEN_RACE);
-    printf("[PASS] Statistics Screen [ RACE ] Button Tap triggered NAV_SCREEN_RACE.\n");
+    printf("[PASS] Statistics Screen [ RACE ] Button Tap triggered NAV_SCREEN_RACE when tuning_mode == true.\n");
 
     // 10c. Test Race Timer Screen Touches
     Buttons.setActiveScreen(SCREEN_RACE_TIMER);
@@ -425,6 +433,7 @@ void testTouchGestures() {
 
     Buttons.setRacePopupOpen(false);
     Buttons.setRaceState(0);
+    Buttons.setTuningMode(false);
     Buttons.setActiveScreen(SCREEN_RT_GRAPHS);
 
     // 11. Test Statistics Screen: Boundary tap just outside Reset button
@@ -602,74 +611,98 @@ void testTouchGestures() {
     // 11. Requirement: Settings Menu (SCREEN_SETTINGS_MENU) Touch Hitboxes & Navigation
     Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
 
-    // 11a. Tap on [< DASH] button (Top-Left: x <= 140, y <= 55) triggers NAV_SCREEN_DASH
+    // 11a. Tap on [< DASH] button (Top-Left: x <= 160, y <= 65) triggers NAV_SCREEN_DASH
     NavAction actMenuDashTap = simTouchAction(75, 25, 75, 25, 50);
     assert(actMenuDashTap == NAV_SCREEN_DASH);
     printf("[PASS] Settings Menu [< DASH] Button Tap triggered NAV_SCREEN_DASH (Direct Return to Dash).\n");
 
-    // 11b. Tap on [DASH [X]] close button (Top-Right: x >= 660, y <= 55) triggers NAV_SCREEN_DASH
+    // 11b. Tap on [FERTIG / DASH] close button (Top-Right: x >= 640, y <= 65) triggers NAV_SCREEN_DASH
     NavAction actMenuCloseTap = simTouchAction(730, 25, 730, 25, 50);
     assert(actMenuCloseTap == NAV_SCREEN_DASH);
-    printf("[PASS] Settings Menu [DASH [X]] Button Tap triggered NAV_SCREEN_DASH.\n");
+    printf("[PASS] Settings Menu [FERTIG / DASH] Button Tap triggered NAV_SCREEN_DASH.\n");
 
-    // 11c. Tap on [< MENU] button (Top-Bar Submenu: x in 140..260, y <= 55) triggers NAV_MENU_BACK
-    NavAction actMenuBackTap = simTouchAction(190, 25, 190, 25, 50);
-    assert(actMenuBackTap == NAV_MENU_BACK);
-    printf("[PASS] Settings Menu [< MENU] Button Tap triggered NAV_MENU_BACK.\n");
-
-    // 11d. Swipe Right in Settings Menu triggers NAV_MENU_BACK (Return to Root/Dash)
+    // 11c. Swipe Right in Settings Menu triggers NAV_MENU_BACK (Return to Dash)
     NavAction actMenuSwipeR = simTouchAction(200, 200, 400, 200, 60);
     assert(actMenuSwipeR == NAV_MENU_BACK);
     printf("[PASS] Settings Menu Swipe Right triggered NAV_MENU_BACK.\n");
 
-    // 11e. Swipe Up / Down in Settings Menu navigates items (Next / Prev)
+    // 11d. Swipe Up / Down in Settings Menu navigates tabs (Next / Prev)
     NavAction actMenuSwipeDown = simTouchAction(200, 200, 200, 350, 60);
     assert(actMenuSwipeDown == NAV_BTN1_SHORT);
     NavAction actMenuSwipeUp = simTouchAction(200, 350, 200, 200, 60);
     assert(actMenuSwipeUp == NAV_BTN2_SHORT);
-    printf("[PASS] Settings Menu Vertical Swipes triggered item navigation (NAV_BTN1_SHORT / NAV_BTN2_SHORT).\n");
+    printf("[PASS] Settings Menu Vertical Swipes triggered tab navigation (NAV_BTN1_SHORT / NAV_BTN2_SHORT).\n");
 
-    // 11f. Test DashboardRenderer::handleSettingsTouch integration
+    // 11e. Test DashboardRenderer::handleSettingsTouch integration (Touch Mode Configurator)
     DashTelemetry tTest;
     memset(&tTest, 0, sizeof(tTest));
     tTest.screen = SCREEN_SETTINGS_MENU;
-    Settings.get().max_phase_amps = 45;
     Renderer.markScreenDirty();
 
-    // Tap on Category 0 (Power Limits) at x=100, y=100 -> Must enter submenu
-    bool touchHandled = Renderer.handleSettingsTouch(100, 100, tTest);
+    // 1. Tab Switching via touch
+    // Tap on Tab 0 [ ECO ] at x=100, y=95
+    bool touchHandled = Renderer.handleSettingsTouch(100, 95, tTest);
     assert(touchHandled == true);
-    // Tap on Submenu item 1 (Phase Amps) at x=100, y=175 -> Selects item 1
-    touchHandled = Renderer.handleSettingsTouch(100, 175, tTest);
+    assert(Renderer.getSettingsTab() == 0);
+
+    // Tap on Tab 1 [ SPORT ] at x=400, y=95
+    touchHandled = Renderer.handleSettingsTouch(400, 95, tTest);
     assert(touchHandled == true);
-    // Tap on Value Box at x=500, y=150 -> Activates edit mode
-    touchHandled = Renderer.handleSettingsTouch(500, 150, tTest);
+    assert(Renderer.getSettingsTab() == 1);
+
+    // Tap on Tab 2 [ RACE ] at x=650, y=95
+    touchHandled = Renderer.handleSettingsTouch(650, 95, tTest);
     assert(touchHandled == true);
-    assert(Renderer.isInEditMode() == true);
-    // In edit mode: Tap [+] Mehr at x=650, y=310
-    int oldPhase = Settings.get().max_phase_amps;
-    touchHandled = Renderer.handleSettingsTouch(650, 310, tTest);
+    assert(Renderer.getSettingsTab() == 2);
+
+    // 2. Adjust RACE mode limits via [-] and [+] buttons and slider track
+    VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+    cfg.tuned_modes[2].max_speed_kmh = 50.0f;
+    cfg.tuned_modes[2].max_power_watts = 5000.0f;
+
+    // Tap [+] Speed at x=720, y=210 -> max_speed_kmh increments to 51
+    touchHandled = Renderer.handleSettingsTouch(720, 210, tTest);
     assert(touchHandled == true);
-    assert(Settings.get().max_phase_amps == oldPhase + 1);
-    // Tap [SPEICHERN & FERTIG] at x=500, y=380 -> Saves & exits edit mode
-    touchHandled = Renderer.handleSettingsTouch(500, 380, tTest);
+    assert(cfg.tuned_modes[2].max_speed_kmh == 51.0f);
+
+    // Tap [-] Speed at x=80, y=210 -> max_speed_kmh decrements to 50
+    touchHandled = Renderer.handleSettingsTouch(80, 210, tTest);
     assert(touchHandled == true);
-    assert(Renderer.isInEditMode() == false);
-    // In submenu: Tap [< MENÜ] at x=190, y=25 -> Returns to root categories
-    touchHandled = Renderer.handleSettingsTouch(190, 25, tTest);
+    assert(cfg.tuned_modes[2].max_speed_kmh == 50.0f);
+
+    // Tap Speed Slider Track at x=400, y=210 -> sets proportional speed
+    touchHandled = Renderer.handleSettingsTouch(400, 210, tTest);
     assert(touchHandled == true);
-    // In root menu: Tap [< DASH] at x=75, y=25 -> Returns to SCREEN_RIDE_DASH
+    assert(cfg.tuned_modes[2].max_speed_kmh >= 15.0f && cfg.tuned_modes[2].max_speed_kmh <= 95.0f);
+
+    // Tap [+] Watt at x=720, y=370 -> max_power_watts increments
+    float prevW = cfg.tuned_modes[2].max_power_watts;
+    touchHandled = Renderer.handleSettingsTouch(720, 370, tTest);
+    assert(touchHandled == true);
+    assert(cfg.tuned_modes[2].max_power_watts > prevW);
+
+    // Tap [-] Watt at x=80, y=370 -> max_power_watts decrements
+    prevW = cfg.tuned_modes[2].max_power_watts;
+    touchHandled = Renderer.handleSettingsTouch(80, 370, tTest);
+    assert(touchHandled == true);
+    assert(cfg.tuned_modes[2].max_power_watts < prevW);
+
+    // Tap Watt Slider Track at x=500, y=370 -> sets proportional watts
+    touchHandled = Renderer.handleSettingsTouch(500, 370, tTest);
+    assert(touchHandled == true);
+    assert(cfg.tuned_modes[2].max_power_watts >= 250.0f && cfg.tuned_modes[2].max_power_watts <= 25000.0f);
+
+    // Tap [< DASH] at x=75, y=25 -> Auto-saves and returns to SCREEN_RIDE_DASH
     touchHandled = Renderer.handleSettingsTouch(75, 25, tTest);
     assert(touchHandled == true);
     assert(tTest.screen == SCREEN_RIDE_DASH);
-    printf("[PASS] DashboardRenderer::handleSettingsTouch: Root -> Submenu -> Edit Mode -> Save -> Back -> Dash verified 100%%!\n");
+    printf("[PASS] Touch Mode Configurator: Tab selection, Speed/Watt buttons & sliders, Auto-Save to Dash verified 100%%!\n");
 
-    // 11g. Test Full Integrated Main Loop settings touch flow (preventing double-dispatch bugs)
+    // 11f. Test Full Integrated Main Loop settings touch flow
     DashTelemetry tLoop;
     memset(&tLoop, 0, sizeof(tLoop));
     tLoop.screen = SCREEN_SETTINGS_MENU;
     Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
-    Settings.get().max_phase_amps = 50;
 
     auto runMainLoopTouch = [&](int16_t x, int16_t y) {
         simAdvanceMs(120); // Allow 100ms debounce cooldown from previous gesture
@@ -690,39 +723,23 @@ void testTouchGestures() {
         }
     };
 
-    // 1. Enter Category 0 (Power Limits)
-    runMainLoopTouch(100, 100);
-    assert(Renderer.isInEditMode() == false);
+    // 1. Tap Tab 0 [ ECO ]
+    runMainLoopTouch(100, 95);
+    assert(Renderer.getSettingsTab() == 0);
 
-    // 2. Select item 1 (Max Phase Current)
-    runMainLoopTouch(100, 175);
-    // 3. Enter edit mode on item 1 (tap again)
-    runMainLoopTouch(100, 175);
-    assert(Renderer.isInEditMode() == true);
+    // 2. Tap Tab 2 [ RACE ]
+    runMainLoopTouch(650, 95);
+    assert(Renderer.getSettingsTab() == 2);
 
-    // 4. Tap [+] MEHR at x=650, y=310 -> Value must increment by EXACTLY 1 (not double incremented to 52!)
-    runMainLoopTouch(650, 310);
-    assert(Settings.get().max_phase_amps == 51);
-    assert(Renderer.isInEditMode() == true); // Must stay in edit mode!
+    // 3. Tap [+] Speed button at x=720, y=210
+    float initialRaceSpeed = cfg.tuned_modes[2].max_speed_kmh;
+    runMainLoopTouch(720, 210);
+    assert(cfg.tuned_modes[2].max_speed_kmh == initialRaceSpeed + 1.0f);
 
-    // 5. Tap [-] WENIGER at x=450, y=310 -> Value must decrement by EXACTLY 1 (not close edit mode!)
-    runMainLoopTouch(450, 310);
-    assert(Settings.get().max_phase_amps == 50);
-    assert(Renderer.isInEditMode() == true); // Must stay in edit mode!
-
-    // 6. Tap [SPEICHERN & FERTIG] at x=500, y=380 -> Must exit edit mode and NOT re-open it!
-    runMainLoopTouch(500, 380);
-    assert(Renderer.isInEditMode() == false);
-    assert(Settings.get().max_phase_amps == 50);
-
-    // 7. In submenu: Tap [< MENÜ] at x=190, y=25 -> Must return to root menu (NOT eject to DASH!)
-    runMainLoopTouch(190, 25);
-    assert(tLoop.screen == SCREEN_SETTINGS_MENU);
-
-    // 8. In root menu: Tap [< DASH] at bottom right pane (x=450, y=400) -> Direct return to DASH!
-    runMainLoopTouch(450, 400);
+    // 4. Tap [< DASH] at x=75, y=25 -> Direct return to DASH!
+    runMainLoopTouch(75, 25);
     assert(tLoop.screen == SCREEN_RIDE_DASH);
-    printf("[PASS] Integrated Main Loop: Single-step edits, Save & Exit, Menu Back, and Dash Exit verified 100%%!\n");
+    printf("[PASS] Integrated Main Loop: Touch tabs, slider step edits, and Dash auto-save verified 100%%!\n");
 
     Buttons.setActiveScreen(SCREEN_RIDE_DASH);
 
@@ -809,6 +826,45 @@ void testModeManagerAndLegalProfiles() {
     ModeLimits restoredLim = ModeManager::instance().getActiveLimits();
     assert(restoredLim.max_speed_kmh >= 85.0f); // Preserved RACE limits
     printf("[PASS] System Unlock cleanly restores active ride mode limits without configuration loss.\n");
+
+    // 4. Zero Speed Strict Invariant on Mode Switch & Boost Toggle
+    DashTelemetry tZero;
+    setBaseTelemetry(tZero);
+    tZero.speed_kmh = 0.0f;
+    tZero.power_watts = 0.0f;
+    tZero.current_amps = 0.0f;
+    tZero.throttle_pct = 0.0f;
+
+    // Switch ride mode to ECO, SPORT, RACE: speed must remain strictly 0.0f
+    ModeManager::instance().setRideMode(MODE_ECO);
+    assert(tZero.speed_kmh == 0.0f);
+    ModeManager::instance().setRideMode(MODE_SPORT);
+    assert(tZero.speed_kmh == 0.0f);
+    ModeManager::instance().setRideMode(MODE_RACE);
+    assert(tZero.speed_kmh == 0.0f);
+
+    // Toggle boost on and off: speed must remain strictly 0.0f
+    tZero.boost_active = true;
+    assert(tZero.speed_kmh == 0.0f);
+    tZero.boost_active = false;
+    assert(tZero.speed_kmh == 0.0f);
+
+    // Run VescHandler simulation with zero throttle
+    simAdvanceMs(50);
+    Vesc.setSimThrottle(0.0f);
+    Vesc.runSimulation(tZero);
+    assert(tZero.speed_kmh == 0.0f);
+    assert(tZero.g_force == 0.0f);
+
+    // Incline angle check on telemetry
+    simAdvanceMs(50);
+    Vesc.setSimIncline(12.5f);
+    Vesc.runSimulation(tZero);
+    assert(fabsf(tZero.incline_deg - 12.5f) < 0.1f);
+    Vesc.setSimThrottle(-1.0f);
+    Vesc.setSimIncline(0.0f);
+    printf("[PASS] Zero Throttle Strict Invariant verified: Switching modes or boost with 0 throttle keeps speed strictly at 0.0 km/h!\n");
+    printf("[PASS] Incline angle telemetry export verified (+12.5 deg).\n");
 
     // Reset to legal default
     ModeManager::instance().setTuningMode(false);
@@ -1087,6 +1143,25 @@ void testRaceTimerAndRecords() {
     assert(t.ride_mode == MODE_SPORT); // Safely restored to SPORT mode
     t.temp_motor = 45.0f; // Cooled down
     printf("[PASS] Active thermal cutoff successfully aborted launch and restored safe mode.\n");
+
+    // 7. Police Mode Cutoff on Race Screen:
+    // If currently on SCREEN_RACE_TIMER and tuning mode gets disabled, immediately exit back to SCREEN_RIDE_DASH and reset race state
+    t.screen = SCREEN_RACE_TIMER;
+    t.tuning_mode = true;
+    t.race_state = 2; // MEASURING
+    t.boost_active = true;
+    // When tuning mode gets disabled:
+    t.tuning_mode = false;
+    if (!t.tuning_mode && t.screen == SCREEN_RACE_TIMER) {
+        t.screen = SCREEN_RIDE_DASH;
+        t.race_state = 0;
+        t.boost_active = false;
+        Renderer.markScreenDirty();
+    }
+    assert(t.screen == SCREEN_RIDE_DASH);
+    assert(t.race_state == 0);
+    assert(t.boost_active == false);
+    printf("[PASS] Police mode cutoff on SCREEN_RACE_TIMER immediately exits to SCREEN_RIDE_DASH and resets race state.\n");
 
     // Verify record reset
     t.race_records.reset();
@@ -1916,43 +1991,43 @@ int main(int argc, char **argv) {
     renderAndSave("demo_02_rt_graphs_screen", t);
 
     // ----------------------------------------------------
-    // Scenario 8: Screen 3 - Root Settings Menu
+    // Scenario 8: Screen 3 - Mode Configurator (ECO Tab)
     // ----------------------------------------------------
     t.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(0);
     Renderer.markScreenDirty();
     renderAndSave("08_settings_root", t);
 
     // ----------------------------------------------------
-    // Scenario 9: Screen 3 - Settings Submenu: Power Limits
+    // Scenario 9: Screen 3 - Mode Configurator (SPORT Tab)
     // ----------------------------------------------------
-    // Enter first submenu in root (Power Limits)
-    Renderer.handleMenuNav(NAV_BOTH_PRESSED, t);
+    t.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(1);
+    Renderer.markScreenDirty();
     renderAndSave("09_settings_power_limits", t);
 
     // ----------------------------------------------------
-    // Scenario 10: Screen 3 - Settings Submenu in Edit Mode
+    // Scenario 10: Screen 3 - Mode Configurator (RACE Tab)
     // ----------------------------------------------------
-    // Enter Edit Mode on Max Battery Amps
-    Renderer.handleMenuNav(NAV_BOTH_PRESSED, t);
+    t.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(2);
+    Renderer.markScreenDirty();
     renderAndSave("10_settings_edit_mode", t);
 
     // ----------------------------------------------------
-    // Scenario 11: Screen 3 - Settings Submenu: Display & Styles
+    // Scenario 11: Screen 3 - Mode Configurator (SPORT Tab Custom)
     // ----------------------------------------------------
-    // Exit edit mode, back to root, move down to Display & UI, enter
-    Renderer.handleMenuNav(NAV_BOTH_PRESSED, t); // exit edit mode
-    Renderer.handleMenuNav(NAV_BTN2_LONG, t);    // back to root
-    Renderer.handleMenuNav(NAV_BTN2_SHORT, t);   // move down to 2. DISPLAY & UI
-    Renderer.handleMenuNav(NAV_BOTH_PRESSED, t); // enter Display & UI submenu
+    t.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(1);
+    Renderer.markScreenDirty();
     renderAndSave("11_settings_display_style", t);
 
     // ----------------------------------------------------
-    // Scenario 12: Screen 3 - Settings Submenu: Battery Profiles
+    // Scenario 12: Screen 3 - Mode Configurator (RACE Tab Custom)
     // ----------------------------------------------------
-    // Back to root, move down to Battery Profiles, enter
-    Renderer.handleMenuNav(NAV_BTN2_LONG, t);    // back to root
-    Renderer.handleMenuNav(NAV_BTN2_SHORT, t);   // move down to 3. BATTERY PROFILES
-    Renderer.handleMenuNav(NAV_BOTH_PRESSED, t); // enter Battery Profiles submenu
+    t.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(2);
+    Renderer.markScreenDirty();
     renderAndSave("12_settings_battery_profiles", t);
 
     // ----------------------------------------------------

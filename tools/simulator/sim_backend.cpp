@@ -101,12 +101,34 @@ struct SimTelemetryExport {
     float race_split_0_50;
     float race_split_0_70;
     float g_force;
+    float incline_deg;
 };
 #pragma pack(pop)
 
 // -------------------------------------------------------------
 // Simulation Logic
 // -------------------------------------------------------------
+static float s_sim_incline_deg = 0.0f;
+
+static void ensureZeroSpeedIfIdle() {
+    bool has_ext = g_virtual_vesc.hasExternalControl() && g_virtual_vesc.getExternalThrottle() > 0.01f;
+    if (g_manual_throttle <= 0.01f && !has_ext) {
+        s_sim_speed_kmh = 0.0f;
+        s_sim_current_amps = 0.0f;
+        s_sim_phase_amps = 0.0f;
+        s_sim_power_watts = 0.0f;
+        s_sim_duty_cycle_pct = 0.0f;
+        s_sim_rpm = 0.0f;
+        g_telemetry.speed_kmh = 0.0f;
+        g_telemetry.power_watts = 0.0f;
+        g_telemetry.current_amps = 0.0f;
+        g_telemetry.phase_amps = 0.0f;
+        g_telemetry.duty_cycle_pct = 0.0f;
+        g_telemetry.rpm = 0.0f;
+        g_telemetry.g_force = 0.0f;
+    }
+}
+
 static void runSimulationStep(float dt) {
     if (dt <= 0.0002f) return;
 
@@ -118,10 +140,19 @@ static void runSimulationStep(float dt) {
         sim_b = g_virtual_vesc.getExternalBrake();
     }
 
-    // Boost multiplier
+    if (sim_t <= 0.01f) {
+        sim_t = 0.0f;
+    }
+    if (sim_b <= 0.01f) {
+        sim_b = 0.0f;
+    }
+
+    // Boost multiplier (only when positive throttle applied)
     if (g_telemetry.boost_active) {
-        sim_t *= 1.25f;
-        if (sim_t > 100.0f) sim_t = 100.0f;
+        if (sim_t > 0.0f) {
+            sim_t *= 1.25f;
+            if (sim_t > 100.0f) sim_t = 100.0f;
+        }
         if (g_telemetry.screen != SCREEN_RACE_TIMER && g_sim_uptime_ms > g_telemetry.boost_end_ms) {
             g_telemetry.boost_active = false;
             Renderer.markScreenDirty();
@@ -265,9 +296,23 @@ static void runSimulationStep(float dt) {
         if (s_sim_current_amps < 0.0f) s_sim_current_amps = 0.0f;
 
     } else {
-        // Coasting / Ausrollen: Throttle released, vehicle freewheels
-        float v = s_sim_speed_kmh;
-        if (v > 0.0f) {
+        // Coasting / Ausrollen: Throttle released (sim_t == 0.0f)
+        if (s_sim_speed_kmh <= 0.2f) {
+            s_sim_speed_kmh = 0.0f;
+            s_sim_current_amps = 0.0f;
+            s_sim_phase_amps = 0.0f;
+            s_sim_power_watts = 0.0f;
+            s_sim_duty_cycle_pct = 0.0f;
+            s_sim_rpm = 0.0f;
+            g_telemetry.speed_kmh = 0.0f;
+            g_telemetry.power_watts = 0.0f;
+            g_telemetry.current_amps = 0.0f;
+            g_telemetry.phase_amps = 0.0f;
+            g_telemetry.duty_cycle_pct = 0.0f;
+            g_telemetry.rpm = 0.0f;
+            g_telemetry.g_force = 0.0f;
+        } else {
+            float v = s_sim_speed_kmh;
             float drag_decel = (0.75f + (v / 100.0f) * (v / 100.0f) * 4.5f + v * 0.028f) * dt;
             s_sim_speed_kmh -= drag_decel;
             if (s_sim_speed_kmh < 0.2f) s_sim_speed_kmh = 0.0f;
@@ -277,12 +322,6 @@ static void runSimulationStep(float dt) {
             s_sim_current_amps += (coast_target_a - s_sim_current_amps) * (dt * 3.8f);
             float coast_phase = fabsf(s_sim_current_amps) * 1.25f;
             s_sim_phase_amps += (coast_phase - s_sim_phase_amps) * (dt * 3.8f);
-        } else {
-            s_sim_speed_kmh = 0.0f;
-            s_sim_current_amps += (0.0f - s_sim_current_amps) * (dt * 8.0f);
-            s_sim_phase_amps += (0.0f - s_sim_phase_amps) * (dt * 8.0f);
-            if (fabsf(s_sim_current_amps) < 0.1f) s_sim_current_amps = 0.0f;
-            if (s_sim_phase_amps < 0.1f) s_sim_phase_amps = 0.0f;
         }
     }
 
@@ -435,6 +474,8 @@ static void runSimulationStep(float dt) {
     vt.throttle_pct = sim_t;
     vt.brake_pct = sim_b;
     g_virtual_vesc.setPhysicsTelemetry(vt);
+    g_telemetry.incline_deg = s_sim_incline_deg;
+    ensureZeroSpeedIfIdle();
 }
 
 // -------------------------------------------------------------
@@ -517,6 +558,21 @@ void sim_init() {
     s_sim_ah_used = 0.0f;
     s_sim_ah_charged = 0.0f;
     s_sim_wh_charged = 0.0f;
+    s_sim_speed_kmh = 0.0f;
+    s_sim_current_amps = 0.0f;
+    s_sim_phase_amps = 0.0f;
+    s_sim_power_watts = 0.0f;
+    s_sim_duty_cycle_pct = 0.0f;
+    s_sim_rpm = 0.0f;
+    g_manual_throttle = 0.0f;
+    g_manual_brake = 0.0f;
+    g_telemetry.speed_kmh = 0.0f;
+    g_telemetry.power_watts = 0.0f;
+    g_telemetry.current_amps = 0.0f;
+    g_telemetry.phase_amps = 0.0f;
+    g_telemetry.duty_cycle_pct = 0.0f;
+    g_telemetry.rpm = 0.0f;
+    g_telemetry.g_force = 0.0f;
     g_telemetry.trip_km = 0.0f;
 
     g_last_frame_clock = std::chrono::steady_clock::now();
@@ -748,6 +804,12 @@ void sim_step(uint32_t step_ms) {
         if (Buttons.getLastTap(&tx, &ty)) {
             Renderer.handleSettingsTouch(tx, ty, g_telemetry);
             Buttons.clearNavAction(); // Clear any pending action to prevent double-invocation
+        } else if (Buttons.isTouching()) {
+            int16_t cx = Buttons.getTouchX();
+            int16_t cy = Buttons.getTouchY();
+            if (cx >= 120 && cx <= 680 && ((cy >= 135 && cy <= 285) || (cy >= 295 && cy <= 445))) {
+                Renderer.handleSettingsTouch(cx, cy, g_telemetry);
+            }
         }
     }
 
@@ -835,6 +897,9 @@ void sim_step(uint32_t step_ms) {
                     Renderer.markScreenDirty();
                     break;
                 case NAV_SCREEN_RACE:
+                    if (!g_telemetry.tuning_mode) {
+                        break;
+                    }
                     if (g_telemetry.screen != SCREEN_RACE_TIMER) {
                         g_telemetry.saved_ride_mode = g_telemetry.ride_mode;
                     }
@@ -915,6 +980,7 @@ void sim_step(uint32_t step_ms) {
                     if (g_telemetry.boost_active) {
                         g_telemetry.boost_end_ms = g_sim_uptime_ms + 10000;
                     }
+                    ensureZeroSpeedIfIdle();
                     Renderer.markScreenDirty();
                     break;
                 case NAV_TUNING_ENABLE:
@@ -922,6 +988,7 @@ void sim_step(uint32_t step_ms) {
                     Buttons.setTuningMode(true);
                     ModeManager::instance().setTuningMode(true);
                     g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                    ensureZeroSpeedIfIdle();
                     Renderer.markScreenDirty();
                     break;
                 case NAV_TUNING_DISABLE:
@@ -929,12 +996,27 @@ void sim_step(uint32_t step_ms) {
                     Buttons.setTuningMode(false);
                     ModeManager::instance().setTuningMode(false);
                     g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                    if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                        g_telemetry.screen = SCREEN_RIDE_DASH;
+                        g_telemetry.race_state = 0;
+                        g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                        ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                        g_telemetry.boost_active = false;
+                        g_telemetry.race_popup_open = false;
+                        Buttons.setRaceState(0);
+                        Buttons.setRacePopupOpen(false);
+                        Renderer.invalidateCache();
+                    }
+                    ensureZeroSpeedIfIdle();
                     Renderer.markScreenDirty();
                     break;
                 case NAV_MODE_CYCLE:
                     g_telemetry.ride_mode = (RideMode)(((int)g_telemetry.ride_mode + 1) % MODE_COUNT);
                     ModeManager::instance().setRideMode(g_telemetry.ride_mode);
                     g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                    ensureZeroSpeedIfIdle();
+                    Renderer.markScreenDirty();
+                    break;
                     Renderer.markScreenDirty();
                     break;
                 case NAV_HAZARD_TOGGLE:
@@ -1235,6 +1317,7 @@ void sim_touch_event(int is_down, int x, int y) {
     Buttons.setActiveScreen(g_telemetry.screen);
     Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
     Buttons.setRaceState(g_telemetry.race_state);
+    Buttons.setTuningMode(g_telemetry.tuning_mode);
     Display.setSimTouch(is_down != 0, (int16_t)x, (int16_t)y);
     Buttons.update();
     Renderer.updateRaceTimer(g_telemetry, g_sim_uptime_ms);
@@ -1309,6 +1392,9 @@ void sim_trigger_nav(int nav_action) {
                 g_telemetry.screen = SCREEN_RT_GRAPHS;
                 break;
             case NAV_SCREEN_RACE:
+                if (!g_telemetry.tuning_mode) {
+                    break;
+                }
                 if (g_telemetry.screen != SCREEN_RACE_TIMER) {
                     g_telemetry.saved_ride_mode = g_telemetry.ride_mode;
                 }
@@ -1407,23 +1493,38 @@ void sim_trigger_nav(int nav_action) {
                 if (g_telemetry.boost_active) {
                     g_telemetry.boost_end_ms = g_sim_uptime_ms + 10000;
                 }
+                ensureZeroSpeedIfIdle();
                 break;
             case NAV_TUNING_ENABLE:
                 g_telemetry.tuning_mode = true;
                 Buttons.setTuningMode(true);
                 ModeManager::instance().setTuningMode(true);
                 g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                ensureZeroSpeedIfIdle();
                 break;
             case NAV_TUNING_DISABLE:
                 g_telemetry.tuning_mode = false;
                 Buttons.setTuningMode(false);
                 ModeManager::instance().setTuningMode(false);
                 g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                    g_telemetry.screen = SCREEN_RIDE_DASH;
+                    g_telemetry.race_state = 0;
+                    g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                    ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                    g_telemetry.boost_active = false;
+                    g_telemetry.race_popup_open = false;
+                    Buttons.setRaceState(0);
+                    Buttons.setRacePopupOpen(false);
+                    Renderer.invalidateCache();
+                }
+                ensureZeroSpeedIfIdle();
                 break;
             case NAV_MODE_CYCLE:
                 g_telemetry.ride_mode = (RideMode)(((int)g_telemetry.ride_mode + 1) % MODE_COUNT);
                 ModeManager::instance().setRideMode(g_telemetry.ride_mode);
                 g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                ensureZeroSpeedIfIdle();
                 break;
             case NAV_HAZARD_TOGGLE:
                 g_telemetry.hazard_active = !g_telemetry.hazard_active;
@@ -1440,6 +1541,7 @@ void sim_toggle_boost() {
     if (g_telemetry.boost_active) {
         g_telemetry.boost_end_ms = g_sim_uptime_ms + 10000;
     }
+    ensureZeroSpeedIfIdle();
     Renderer.markScreenDirty();
 }
 
@@ -1447,6 +1549,7 @@ void sim_cycle_mode() {
     g_telemetry.ride_mode = (RideMode)(((int)g_telemetry.ride_mode + 1) % MODE_COUNT);
     ModeManager::instance().setRideMode(g_telemetry.ride_mode);
     g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+    ensureZeroSpeedIfIdle();
     Renderer.markScreenDirty();
 }
 
@@ -1455,6 +1558,7 @@ void sim_set_ride_mode(int mode) {
         g_telemetry.ride_mode = (RideMode)mode;
         ModeManager::instance().setRideMode(g_telemetry.ride_mode);
         g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+        ensureZeroSpeedIfIdle();
         Renderer.markScreenDirty();
     }
 }
@@ -1480,6 +1584,18 @@ void sim_set_tuning_mode(int enable) {
     g_telemetry.tuning_mode = (enable != 0);
     Buttons.setTuningMode(g_telemetry.tuning_mode);
     ModeManager::instance().setTuningMode(g_telemetry.tuning_mode);
+    if (!g_telemetry.tuning_mode && g_telemetry.screen == SCREEN_RACE_TIMER) {
+        g_telemetry.screen = SCREEN_RIDE_DASH;
+        g_telemetry.race_state = 0;
+        g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+        ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+        g_telemetry.boost_active = false;
+        g_telemetry.race_popup_open = false;
+        Buttons.setRaceState(0);
+        Buttons.setRacePopupOpen(false);
+        Renderer.invalidateCache();
+    }
+    ensureZeroSpeedIfIdle();
     Renderer.markScreenDirty();
 }
 
@@ -1487,6 +1603,24 @@ void sim_toggle_tuning_mode() {
     g_telemetry.tuning_mode = !g_telemetry.tuning_mode;
     Buttons.setTuningMode(g_telemetry.tuning_mode);
     ModeManager::instance().setTuningMode(g_telemetry.tuning_mode);
+    if (!g_telemetry.tuning_mode && g_telemetry.screen == SCREEN_RACE_TIMER) {
+        g_telemetry.screen = SCREEN_RIDE_DASH;
+        g_telemetry.race_state = 0;
+        g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+        ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+        g_telemetry.boost_active = false;
+        g_telemetry.race_popup_open = false;
+        Buttons.setRaceState(0);
+        Buttons.setRacePopupOpen(false);
+        Renderer.invalidateCache();
+    }
+    ensureZeroSpeedIfIdle();
+    Renderer.markScreenDirty();
+}
+
+void sim_set_incline(float deg) {
+    s_sim_incline_deg = deg;
+    g_telemetry.incline_deg = deg;
     Renderer.markScreenDirty();
 }
 
@@ -1502,10 +1636,11 @@ void sim_set_manual_throttle(float throttle_pct) {
         g_manual_throttle = 0.0f;
         return;
     }
-    if (throttle_pct < 0.0f) throttle_pct = 0.0f;
+    if (throttle_pct <= 0.01f) throttle_pct = 0.0f;
     if (throttle_pct > 100.0f) throttle_pct = 100.0f;
     g_manual_throttle = throttle_pct;
     g_virtual_vesc.resetExternalControl();
+    ensureZeroSpeedIfIdle();
 }
 
 void sim_set_manual_brake(float brake_pct) {
@@ -1586,6 +1721,7 @@ void sim_get_telemetry(SimTelemetryExport *out) {
     out->race_split_0_50 = g_telemetry.race_split_0_50;
     out->race_split_0_70 = g_telemetry.race_split_0_70;
     out->g_force = g_telemetry.g_force;
+    out->incline_deg = g_telemetry.incline_deg;
 }
 
 void sim_get_config_json(char *out_buf, int max_len) {

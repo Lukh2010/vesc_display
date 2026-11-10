@@ -90,11 +90,7 @@ DashboardRenderer::DashboardRenderer()
       _active_style(STYLE_HYPER_35KW),
       _screen_dirty(true),
       _mode_banner_active(false),
-      _menu_in_sub(false),
-      _menu_root_idx(0),
-      _menu_sub_idx(0),
-      _menu_edit_mode(false),
-      _menu_last_activity_ms(0),
+      _settings_tab_idx(1),
       _menu_dirty(true),
       _is_sweeping(false),
       _sweep_phase(0),
@@ -356,6 +352,45 @@ static void drawGForceBadge(LovyanGFX *canvas, float g_force, int cx, int cy, in
     canvas->setTextSize(1);
     canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
     canvas->drawString("G-FORCE", cx, cy + 13);
+}
+
+static void drawInclineBadge(LovyanGFX *canvas, float incline_deg, int cx, int cy, int r) {
+    canvas->fillCircle(cx, cy, r, COLOR_BG);
+    uint16_t ringCol = COLOR_BORDER;
+    if (incline_deg > 15.0f) {
+        ringCol = COLOR_CYAN;
+    } else if (incline_deg < -15.0f) {
+        ringCol = COLOR_AMBER;
+    }
+    canvas->fillCircle(cx, cy, r - 2, COLOR_SURFACE);
+    canvas->drawCircle(cx, cy, r, ringCol);
+    canvas->drawCircle(cx, cy, r - 1, ringCol);
+
+    canvas->setFont(&fonts::Font2);
+    canvas->setTextSize(1);
+    int inc = (int)roundf(incline_deg);
+    char valBuf[12];
+    if (inc > 0) {
+        snprintf(valBuf, sizeof(valBuf), "+%d", inc);
+    } else if (inc < 0) {
+        snprintf(valBuf, sizeof(valBuf), "%d", inc);
+    } else {
+        snprintf(valBuf, sizeof(valBuf), "0");
+    }
+
+    int valW = canvas->textWidth(valBuf);
+    int totalW = valW + 7;
+    int startX = cx - (totalW / 2);
+    canvas->setTextDatum(textdatum_t::middle_left);
+    canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+    canvas->drawString(valBuf, startX, cy - 5);
+    canvas->drawCircle(startX + valW + 3, cy - 8, 2, COLOR_WHITE);
+
+    canvas->setFont(&fonts::Font0);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(textdatum_t::middle_center);
+    canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    canvas->drawString("NEIGUNG", cx, cy + 13);
 }
 
 static void drawThermalsWithDegrees(LovyanGFX *canvas, const char *prefix, float fet, float mot, int x, int y, bool centered = false) {
@@ -850,6 +885,13 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         drawGForceBadge(_canvas, telemetry.g_force, 52, 416, 26);
     }
 
+    // 9b. Bottom Left: Incline Badge (Only on Standard Dashboard!)
+    int cur_inc_x10 = (int)roundf(telemetry.incline_deg * 10.0f);
+    if (!_hyper_inited || cur_inc_x10 != _cache.incline_deg) {
+        _cache.incline_deg = cur_inc_x10;
+        drawInclineBadge(_canvas, telemetry.incline_deg, 112, 416, 26);
+    }
+
     _hyper_inited = true;
 }
 
@@ -993,12 +1035,14 @@ void DashboardRenderer::initRtGraphsScreen(const DashTelemetry &telemetry) {
     _canvas->setFont(&fonts::Font2);
     _canvas->drawString("< DASH", 75, 30);
 
-    // Styled [ RACE ] touch button
-    _canvas->fillRoundRect(140, 12, 100, 36, 18, 0x9000);
-    _canvas->drawRoundRect(140, 12, 100, 36, 18, COLOR_RED);
-    _canvas->setTextColor(COLOR_WHITE, 0x9000);
-    _canvas->setFont(&fonts::Font2);
-    _canvas->drawString("RACE", 190, 30);
+    // Styled [ RACE ] touch button (only visible when tuning mode is active)
+    if (telemetry.tuning_mode) {
+        _canvas->fillRoundRect(140, 12, 100, 36, 18, 0x9000);
+        _canvas->drawRoundRect(140, 12, 100, 36, 18, COLOR_RED);
+        _canvas->setTextColor(COLOR_WHITE, 0x9000);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->drawString("RACE", 190, 30);
+    }
 
     _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
     _canvas->setFont(&fonts::Font4);
@@ -1489,1018 +1533,344 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
 }
 
 // ==============================================================================
-// SCREEN 3: INTERACTIVE SETTINGS MENU SYSTEM (800x480 Optimized)
+// SCREEN 3: TOUCH RIDE MODE CONFIGURATOR (800x480 Optimized)
 // ==============================================================================
-static const char *ROOT_CATEGORIES[5] = {
-    "1. POWER & DRIVE",
-    "2. DISPLAY & UI",
-    "3. BATTERY PROFILES",
-    "4. BIKE SETUP",
-    "5. SYSTEM & DIAG"
-};
-
-static int getSubItemCount(uint8_t sub_id) {
-    switch (sub_id) {
-        case 0: return 6;
-        case 1: return 1;
-        case 2: return 5;
-        case 3: return 3;
-        case 4: return 9;
-        default: return 0;
-    }
-}
-
-static void getSubItemDetails2Lines(uint8_t sub_id, uint8_t item_id,
-                                    char *title, size_t title_sz,
-                                    char *val, size_t val_sz,
-                                    char *d1, size_t d1_sz,
-                                    char *d2, size_t d2_sz,
-                                    const DashTelemetry &telemetry) {
-    DashSettings &s = Settings.get();
-    title[0] = 0; val[0] = 0; d1[0] = 0; d2[0] = 0;
-
-    switch (sub_id) {
-        case 0: // POWER & DRIVE
-            switch (item_id) {
-                case 0:
-                    snprintf(title, title_sz, "Max Battery Current");
-                    snprintf(val, val_sz, "%d A", s.max_battery_amps);
-                    snprintf(d1, d1_sz, "Pack current limit");
-                    snprintf(d2, d2_sz, "Range: 5A - 35A");
-                    break;
-                case 1:
-                    snprintf(title, title_sz, "Max Phase Current");
-                    snprintf(val, val_sz, "%d A", s.max_phase_amps);
-                    snprintf(d1, d1_sz, "Motor torque limit");
-                    snprintf(d2, d2_sz, "Range: 10A - 300A");
-                    break;
-                case 2:
-                    snprintf(title, title_sz, "Field Weakening (FW)");
-                    snprintf(val, val_sz, "%d A", s.field_weak_amps);
-                    snprintf(d1, d1_sz, "Top speed boost");
-                    snprintf(d2, d2_sz, "Redline: 0A - 20A");
-                    break;
-                case 3:
-                    snprintf(title, title_sz, "Speed Limit");
-                    if (s.max_speed_kmh == 0) {
-                        snprintf(val, val_sz, "OFF (Unlimited)");
-                    } else {
-                        snprintf(val, val_sz, "%d km/h", s.max_speed_kmh);
-                    }
-                    snprintf(d1, d1_sz, "Motor cutoff speed");
-                    snprintf(d2, d2_sz, "Presets: OFF, 25, 32, 45, 60");
-                    break;
-                case 4:
-                    snprintf(title, title_sz, "Throttle Ramp Time");
-                    snprintf(val, val_sz, "%.2f s", s.throttle_ramp_sec);
-                    snprintf(d1, d1_sz, "Throttle response filter");
-                    snprintf(d2, d2_sz, "Smooth: 0.10s - 1.00s");
-                    break;
-                case 5:
-                    snprintf(title, title_sz, "Throttle ADC Channel");
-                    snprintf(val, val_sz, (s.throttle_adc_channel == 0) ? "ADC1" : "ADC2");
-                    snprintf(d1, d1_sz, "VESC throttle input port");
-                    snprintf(d2, d2_sz, "Select ADC1 or ADC2");
-                    break;
-            }
-            break;
-
-        case 1: // DISPLAY & UI
-            switch (item_id) {
-                case 0:
-                    snprintf(title, title_sz, "Screen Brightness");
-                    snprintf(val, val_sz, "%d %%", s.brightness_pct);
-                    snprintf(d1, d1_sz, "Backlight brightness level");
-                    snprintf(d2, d2_sz, "Range: 20%% to 100%%");
-                    break;
-            }
-            break;
-
-        case 2: // BATTERY PROFILES
-            switch (item_id) {
-                case 0:
-                    snprintf(title, title_sz, "Active Profile");
-                    snprintf(val, val_sz, (s.active_battery_profile == 0) ? "Profile 1 (Fresh)" : "Profile 2 (Daily)");
-                    snprintf(d1, d1_sz, "Switch battery pack");
-                    snprintf(d2, d2_sz, "Profile 1 or 2");
-                    break;
-                case 1:
-                    snprintf(title, title_sz, "Profile 1 Nominal Wh");
-                    snprintf(val, val_sz, "%.0f Wh", Battery.getProfile(0).nominal_wh);
-                    snprintf(d1, d1_sz, "Pack 1 full energy");
-                    snprintf(d2, d2_sz, "500Wh to 2500Wh");
-                    break;
-                case 2:
-                    snprintf(title, title_sz, "Profile 2 Nominal Wh");
-                    snprintf(val, val_sz, "%.0f Wh", Battery.getProfile(1).nominal_wh);
-                    snprintf(d1, d1_sz, "Pack 2 full energy");
-                    snprintf(d2, d2_sz, "500Wh to 2500Wh");
-                    break;
-                case 3:
-                    snprintf(title, title_sz, "Pack Voltage Trim");
-                    snprintf(val, val_sz, "%+.1f V", s.voltage_trim_v);
-                    snprintf(d1, d1_sz, "Calibrate pack voltage");
-                    snprintf(d2, d2_sz, "-2.0V to +2.0V");
-                    break;
-                case 4:
-                    snprintf(title, title_sz, "Reset SoH Learning");
-                    snprintf(val, val_sz, "RESET LEARNING");
-                    snprintf(d1, d1_sz, "Reset capacity learning");
-                    snprintf(d2, d2_sz, "Tap to reset learned SoH");
-                    break;
-            }
-            break;
-
-        case 3: // BIKE SETUP
-            switch (item_id) {
-                case 0:
-                    snprintf(title, title_sz, "Wheel Diameter");
-                    snprintf(val, val_sz, "%.1f in", s.wheel_diameter_in);
-                    snprintf(d1, d1_sz, "Tire outer diameter");
-                    snprintf(d2, d2_sz, "10.0 to 29.0 inches");
-                    break;
-                case 1:
-                    snprintf(title, title_sz, "Motor Pole Pairs");
-                    snprintf(val, val_sz, "%d", s.motor_pole_pairs);
-                    snprintf(d1, d1_sz, "Motor pole pairs (ERPM divisor)");
-                    snprintf(d2, d2_sz, "Scooter hub motor: 15");
-                    break;
-                case 2:
-                    snprintf(title, title_sz, "Internal Gear Ratio");
-                    snprintf(val, val_sz, "%.2f : 1", s.gear_ratio);
-                    snprintf(d1, d1_sz, "Motor transmission ratio");
-                    snprintf(d2, d2_sz, "Hub motor: 1.00 : 1");
-                    break;
-            }
-            break;
-
-        case 4: // SYSTEM & DIAGNOSTICS
-            switch (item_id) {
-                case 0:
-                    snprintf(title, title_sz, "Sync VESC Settings");
-                    if (Vesc.getSyncStatus() == SYNC_REQUESTED) {
-                        snprintf(val, val_sz, "PULLING...");
-                    } else if (Vesc.getSyncStatus() == SYNC_SUCCESS) {
-                        snprintf(val, val_sz, "SYNC OK!");
-                    } else if (Vesc.getSyncStatus() == SYNC_FAILED) {
-                        snprintf(val, val_sz, "FAILED");
-                    } else {
-                        snprintf(val, val_sz, "PULL FROM VESC");
-                    }
-                    snprintf(d1, d1_sz, "Read VESC motor limits");
-                    snprintf(d2, d2_sz, "Saves to flash memory");
-                    break;
-                case 1:
-                    snprintf(title, title_sz, "VESC USB Bridge");
-                    snprintf(val, val_sz, "START USB BRIDGE");
-                    snprintf(d1, d1_sz, "PC VESC Tool Bridge");
-                    snprintf(d2, d2_sz, "Tap to start CDC passthrough");
-                    break;
-                case 2:
-                    snprintf(title, title_sz, "VESC Wi-Fi Bridge");
-                    snprintf(val, val_sz, "START WI-FI BRIDGE");
-                    snprintf(d1, d1_sz, "Wireless TCP Bridge");
-                    snprintf(d2, d2_sz, "AP: 192.168.4.1:6510");
-                    break;
-                case 3:
-                    snprintf(title, title_sz, "Reset Trip Statistics");
-                    snprintf(val, val_sz, "RESET TRIP STATS");
-                    snprintf(d1, d1_sz, "Clear trip distance & peaks");
-                    snprintf(d2, d2_sz, "Tap to reset trip to 0.0");
-                    break;
-                case 4:
-                    snprintf(title, title_sz, "Factory Reset");
-                    snprintf(val, val_sz, "RESTORE DEFAULTS");
-                    snprintf(d1, d1_sz, "Restore default settings");
-                    snprintf(d2, d2_sz, "Tap to restore factory config");
-                    break;
-                case 5:
-                    snprintf(title, title_sz, "VESC Hardware Link");
-                    snprintf(val, val_sz, telemetry.vesc_connected ? "COMM HEALTHY" : "OFFLINE");
-                    snprintf(d1, d1_sz, "Waveshare 4.3\" UART");
-                    snprintf(d2, d2_sz, "TX:43 RX:44 (115200 baud)");
-                    break;
-                case 6:
-                    snprintf(title, title_sz, "Boot PIN Lockscreen");
-                    snprintf(val, val_sz, s.pin_lock_enabled ? "ENABLED" : "DISABLED");
-                    snprintf(d1, d1_sz, "Lock system on startup");
-                    snprintf(d2, d2_sz, "Tap to toggle enabled state");
-                    break;
-                case 7:
-                    snprintf(title, title_sz, "PIN Code");
-                    snprintf(val, val_sz, "%s", s.pin_code);
-                    snprintf(d1, d1_sz, "4-digit unlock code");
-                    snprintf(d2, d2_sz, "Tap to cycle PIN presets");
-                    break;
-                case 8:
-                    snprintf(title, title_sz, "VESC Fault Blackbox");
-                    snprintf(val, val_sz, "%d FAULTS LOGGED", FaultManager::instance().getFaultCount());
-                    snprintf(d1, d1_sz, "Last: %s", FaultManager::instance().getFaultCount() > 0 ? FaultManager::getFaultTitleDe(FaultManager::instance().getFault(0).code) : "Keiner");
-                    snprintf(d2, d2_sz, "Tap to clear fault log");
-                    break;
-            }
-            break;
-    }
-}
-
 void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
-    _canvas->drawFastHLine(20, 48, 760, COLOR_BORDER);
-
-    // Left Navigation Box (w=310, h=405)
-    drawCard(20,  56, 310, 405, COLOR_SURFACE, COLOR_BORDER);
-
-    // Right Content Box (w=435, h=405)
-    drawCard(345, 56, 435, 405, COLOR_SURFACE, COLOR_BORDER);
-}
-
-void DashboardRenderer::renderRootMenu() {
-    for (int i = 0; i < 5; i++) {
-        int iy = 62 + i * 76;
-        bool isSel = (i == _menu_root_idx);
-        if (isSel) {
-            _canvas->fillRoundRect(24, iy, 302, 68, 8, COLOR_SURFACE_LIGHT);
-            _canvas->fillRoundRect(24, iy, 6, 68, 2, COLOR_CYAN);
-            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE_LIGHT);
-        } else {
-            _canvas->fillRoundRect(24, iy, 302, 68, 8, COLOR_SURFACE);
-            _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-        }
-        _canvas->drawString(ROOT_CATEGORIES[i], 38, iy + 22, &fonts::Font4);
-        _canvas->setTextColor(isSel ? COLOR_CYAN : COLOR_MUTED_GRAY, isSel ? COLOR_SURFACE_LIGHT : COLOR_SURFACE);
-        _canvas->drawString(">", 305, iy + 22, &fonts::Font4);
+    _canvas->fillScreen(COLOR_BG);
+    if (_settings_tab_idx >= 3) {
+        _settings_tab_idx = (uint8_t)telemetry.ride_mode;
+        if (_settings_tab_idx >= 3) _settings_tab_idx = 1;
     }
-}
-
-void DashboardRenderer::renderSubmenu(uint8_t sub_id, const DashTelemetry &telemetry) {
-    int count = getSubItemCount(sub_id);
-    int start_idx = 0;
-    if (count > 5) {
-        if (_menu_sub_idx >= 3) {
-            start_idx = _menu_sub_idx - 2;
-        }
-        if (start_idx + 5 > count) start_idx = count - 5;
-        if (start_idx < 0) start_idx = 0;
-    }
-    int display_count = (count > 5) ? 5 : count;
-
-    for (int k = 0; k < display_count; k++) {
-        int j = start_idx + k;
-        int iy = 62 + k * 76;
-        bool isSel = (j == _menu_sub_idx);
-
-        char title[48], val[32], d1[64], d2[64];
-        getSubItemDetails2Lines(sub_id, j, title, sizeof(title), val, sizeof(val), d1, sizeof(d1), d2, sizeof(d2), telemetry);
-
-        if (isSel) {
-            uint16_t bgCol = _menu_edit_mode ? 0x3186 : COLOR_SURFACE_LIGHT;
-            uint16_t barCol = _menu_edit_mode ? COLOR_AMBER : COLOR_CYAN;
-            _canvas->fillRoundRect(24, iy, 302, 68, 8, bgCol);
-            _canvas->fillRoundRect(24, iy, 6, 68, 2, barCol);
-            _canvas->setTextColor(COLOR_WHITE, bgCol);
-        } else {
-            _canvas->fillRoundRect(24, iy, 302, 68, 8, COLOR_SURFACE);
-            _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-        }
-        _canvas->drawString(title, 38, iy + 22, &fonts::Font4);
-    }
-
-    // Scrollbar indicator if items exceed display capacity (count > 5)
-    if (count > 5) {
-        _canvas->fillRoundRect(322, 75, 4, 345, 2, 0x18C3);
-        int thumb_h = 345 * 5 / count;
-        if (thumb_h < 24) thumb_h = 24;
-        int thumb_y = 75 + (345 - thumb_h) * start_idx / (count - 5);
-        _canvas->fillRoundRect(322, thumb_y, 4, thumb_h, 2, COLOR_CYAN);
-
-        // Visual scroll indicators
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setTextColor(start_idx > 0 ? COLOR_CYAN : 0x2965, COLOR_SURFACE);
-        _canvas->drawString("^", 324, 66);
-        _canvas->setTextColor(start_idx + 5 < count ? COLOR_CYAN : 0x2965, COLOR_SURFACE);
-        _canvas->drawString("v", 324, 430);
-    }
+    _menu_dirty = true;
 }
 
 void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
-    // 1. Auto-exit edit mode after 20s of inactivity
-    if (_menu_edit_mode && (millis() - _menu_last_activity_ms > 20000)) {
-        _menu_edit_mode = false;
-        Buttons.setEditMode(false);
-        Settings.save();
-        _menu_dirty = true;
-    }
-
-    // Check VESC Sync status transitions
-    VescSyncStatus cur_sync = Vesc.getSyncStatus();
-    static VescSyncStatus last_sync_status = SYNC_IDLE;
-    if (cur_sync != last_sync_status) {
-        last_sync_status = cur_sync;
-        _menu_dirty = true;
-    }
-    if (cur_sync != SYNC_IDLE && cur_sync != SYNC_REQUESTED && (millis() - Vesc.getSyncTimeMs() > 4000)) {
-        Vesc.resetSyncStatus();
-        _menu_dirty = true;
-    }
-
     if (!_menu_dirty) return;
     _menu_dirty = false;
 
-    // Redraw Top Header Bar
-    _canvas->fillRect(0, 0, 800, 48, COLOR_BG);
-    _canvas->drawFastHLine(20, 48, 760, COLOR_BORDER);
+    _canvas->fillScreen(COLOR_BG);
 
-    // Top Left Back button: In Submenu -> [< ZURUECK] to Root; In Root -> [< DASH] to Dash
-    if (_menu_in_sub) {
-        _canvas->fillRoundRect(20, 6, 125, 36, 18, 0x2124);
-        _canvas->drawRoundRect(20, 6, 125, 36, 18, COLOR_CYAN);
-        _canvas->setTextColor(COLOR_CYAN, 0x2124);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->drawString("< ZURUECK", 82, 24);
-
-        // Header Title / Breadcrumb
-        _canvas->setTextDatum(textdatum_t::middle_left);
-        _canvas->setFont(&fonts::Font4);
-        if (_menu_edit_mode) {
-            _canvas->setTextColor(COLOR_AMBER, COLOR_BG);
-            _canvas->drawString("WERT BEARBEITEN", 165, 24);
-        } else {
-            _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-            char bc[64];
-            snprintf(bc, sizeof(bc), "MENU > %s", ROOT_CATEGORIES[_menu_root_idx]);
-            _canvas->drawString(bc, 165, 24);
-        }
-    } else {
-        _canvas->fillRoundRect(20, 6, 115, 36, 18, 0x18C3);
-        _canvas->drawRoundRect(20, 6, 115, 36, 18, 0x39C7);
-        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->drawString("< DASH", 77, 24);
-
-        // Header Title
-        _canvas->setTextDatum(textdatum_t::middle_left);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-        _canvas->drawString("EINSTELLUNGEN", 150, 24);
-    }
-
-    // Top Right [DASH [X]] Close Button
-    _canvas->fillRoundRect(675, 6, 105, 36, 18, 0x30A2);
-    _canvas->drawRoundRect(675, 6, 105, 36, 18, 0x6186);
-    _canvas->setTextColor(COLOR_WHITE, 0x30A2);
+    // 1. Header Bar: [< DASH], Title, [FERTIG]
+    _canvas->fillRoundRect(20, 12, 110, 36, 18, 0x18C3);
+    _canvas->drawRoundRect(20, 12, 110, 36, 18, 0x39C7);
+    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
     _canvas->setTextDatum(textdatum_t::middle_center);
     _canvas->setFont(&fonts::Font2);
-    _canvas->drawString("DASH [X]", 727, 24);
-    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->drawString("< DASH", 75, 30);
 
-    // 2. Clear inner card contents
-    _canvas->fillRect(22, 58, 306, 401, COLOR_SURFACE);
-    _canvas->fillRect(347, 58, 431, 401, COLOR_SURFACE);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+    _canvas->drawString("MODUS KONFIGURATION", 400, 30);
 
-    // 3. Render Left Pane
-    if (!_menu_in_sub) {
-        renderRootMenu();
-    } else {
-        renderSubmenu(_menu_root_idx, telemetry);
-    }
+    _canvas->fillRoundRect(670, 12, 110, 36, 18, 0x18C3);
+    _canvas->drawRoundRect(670, 12, 110, 36, 18, 0x39C7);
+    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->drawString("FERTIG", 725, 30);
 
-    // 4. Render Right Pane
-    char curTitle[48] = {0};
-    if (!_menu_in_sub) {
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString(ROOT_CATEGORIES[_menu_root_idx], 365, 75, &fonts::Font4);
+    // 2. Mode Selection Touch Tabs: [ ECO ] | [ SPORT ] | [ RACE ]
+    const char *tabNames[3] = { "ECO", "SPORT", "RACE" };
+    const char *tabSub[3]   = { "Sparsam", "Dynamisch", "Unlimited 35kW+" };
+    uint16_t tabCols[3]     = { COLOR_GREEN, COLOR_CYAN, COLOR_RACE };
+    uint16_t tabBgCols[3]   = { 0x0200, 0x0188, 0x4002 };
 
-        char d1[64] = {0};
-        char d2[64] = {0};
-        DashSettings &s = Settings.get();
+    int tabX[3] = { 20, 280, 540 };
+    int tabW = 240;
+    int tabH = 54;
+    int tabY = 62;
 
-        switch (_menu_root_idx) {
-            case 0: // POWER & DRIVE
-                snprintf(d1, sizeof(d1), "Battery: %dA | Phase: %dA", s.max_battery_amps, s.max_phase_amps);
-                if (s.max_speed_kmh == 0) {
-                    snprintf(d2, sizeof(d2), "FW Boost: %dA | Limit: Off", s.field_weak_amps);
-                } else {
-                    snprintf(d2, sizeof(d2), "FW Boost: %dA | Limit: %d km/h", s.field_weak_amps, s.max_speed_kmh);
-                }
-                break;
+    for (int i = 0; i < 3; i++) {
+        bool isSel = (i == _settings_tab_idx);
+        uint16_t borderCol = isSel ? tabCols[i] : COLOR_BORDER;
+        uint16_t bgCol     = isSel ? tabBgCols[i] : COLOR_SURFACE;
+        uint16_t txtCol    = isSel ? tabCols[i] : COLOR_MUTED_GRAY;
 
-            case 1: // DISPLAY & UI
-                snprintf(d1, sizeof(d1), "Style: Hyper 35kW+ (Pro)");
-                snprintf(d2, sizeof(d2), "Brightness: %d%%", s.brightness_pct);
-                break;
-
-            case 2: // BATTERY PROFILES
-                {
-                    uint8_t pid = s.active_battery_profile;
-                    snprintf(d1, sizeof(d1), "Active: P%d (%s)", pid + 1, Battery.getProfile(pid).name);
-                    snprintf(d2, sizeof(d2), "Trim: %+.1fV | Learned: %.0fWh", s.voltage_trim_v, Battery.getProfile(pid).nominal_wh);
-                }
-                break;
-
-            case 3: // BIKE SETUP
-                snprintf(d1, sizeof(d1), "Wheel: %.1f\" | Poles: %d", s.wheel_diameter_in, s.motor_pole_pairs);
-                snprintf(d2, sizeof(d2), "Gear Ratio: %.2f : 1", s.gear_ratio);
-                break;
-
-            case 4: // SYSTEM & DIAG
-                snprintf(d1, sizeof(d1), "VESC: %s", telemetry.vesc_connected ? "Link Online (115200)" : "Link Offline");
-                snprintf(d2, sizeof(d2), "Trip: %.1f km | USB / Wi-Fi Bridge", telemetry.trip_km);
-                break;
-
-            default:
-                break;
+        _canvas->fillRoundRect(tabX[i], tabY, tabW, tabH, 10, bgCol);
+        _canvas->drawRoundRect(tabX[i], tabY, tabW, tabH, 10, borderCol);
+        if (isSel) {
+            _canvas->drawRoundRect(tabX[i] + 1, tabY + 1, tabW - 2, tabH - 2, 9, borderCol);
         }
 
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->drawString(d1, 365, 125, &fonts::Font4);
-
-        _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-        _canvas->drawString(d2, 365, 165, &fonts::Font4);
-
-        // Live VESC Sync Banner if active
-        if (cur_sync == SYNC_REQUESTED) {
-            _canvas->fillRoundRect(365, 210, 395, 36, 6, 0x2940);
-            _canvas->setTextColor(COLOR_AMBER, 0x2940);
-            _canvas->drawCenterString("PULLING VESC CONFIG...", 365 + 395/2, 218, &fonts::Font4);
-        } else if (cur_sync == SYNC_SUCCESS) {
-            _canvas->fillRoundRect(365, 210, 395, 36, 6, 0x0A42);
-            _canvas->setTextColor(COLOR_GREEN, 0x0A42);
-            char okBuf[48];
-            snprintf(okBuf, sizeof(okBuf), "SYNC OK: Bat %dA | Phase %dA", s.max_battery_amps, s.max_phase_amps);
-            _canvas->drawCenterString(okBuf, 365 + 395/2, 218, &fonts::Font4);
-        } else if (cur_sync == SYNC_FAILED) {
-            _canvas->fillRoundRect(365, 210, 395, 36, 6, 0x3000);
-            _canvas->setTextColor(COLOR_RED, 0x3000);
-            _canvas->drawCenterString("SYNC FAILED: NO VESC LINK", 365 + 395/2, 218, &fonts::Font4);
-        }
-
-        // Navigation Tips
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("Tippe auf Kategorie zum Oeffnen", 365, 265, &fonts::Font4);
-        _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-        _canvas->drawString("Tippe [< DASH] zum Beenden", 365, 305, &fonts::Font4);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Touch LCD 4.3\" - 800x480 GT911", 365, 340, &fonts::Font4);
-
-        // Bottom Action Buttons: [< DASH] (Exit) and [OEFFNEN >] (Open category)
-        _canvas->fillRoundRect(365, 380, 190, 48, 8, 0x18C3);
-        _canvas->drawRoundRect(365, 380, 190, 48, 8, 0x39C7);
-        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
-        _canvas->drawString("< DASH", 365 + 95, 380 + 24);
+        _canvas->setTextColor(txtCol, bgCol);
+        _canvas->drawString(tabNames[i], tabX[i] + tabW / 2, tabY + 20);
 
-        _canvas->fillRoundRect(570, 380, 190, 48, 8, 0x18C3);
-        _canvas->drawRoundRect(570, 380, 190, 48, 8, COLOR_CYAN);
-        _canvas->setTextColor(COLOR_CYAN, 0x18C3);
-        _canvas->drawString("OEFFNEN >", 570 + 95, 380 + 24);
-        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setFont(&fonts::Font0);
+        _canvas->setTextColor(isSel ? COLOR_WHITE : 0x52AA, bgCol);
+        _canvas->drawString(tabSub[i], tabX[i] + tabW / 2, tabY + 41);
+    }
+
+    // 3. Current Mode Configuration Data
+    VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+    uint8_t m = (_settings_tab_idx < 3) ? _settings_tab_idx : 1;
+    ModeLimits &lim = cfg.tuned_modes[m];
+    uint16_t activeCol = tabCols[m];
+
+    // Ensure bounds
+    if (lim.max_speed_kmh < 15.0f) lim.max_speed_kmh = 15.0f;
+    if (lim.max_speed_kmh > 95.0f) lim.max_speed_kmh = 95.0f;
+    if (lim.max_power_watts < 250.0f) lim.max_power_watts = 250.0f;
+    if (lim.max_power_watts > 25000.0f) lim.max_power_watts = 25000.0f;
+
+    // 4. Card 1: Max Speed (km/h) (y: 130..280)
+    drawCard(20, 130, 760, 150, COLOR_SURFACE, COLOR_BORDER);
+
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    _canvas->drawString("MAXIMALE GESCHWINDIGKEIT", 40, 145);
+
+    char spdStr[32];
+    snprintf(spdStr, sizeof(spdStr), "%.0f km/h", lim.max_speed_kmh);
+    _canvas->setTextDatum(textdatum_t::top_right);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(activeCol, COLOR_SURFACE);
+    _canvas->drawString(spdStr, 740, 142);
+
+    // Button [-]
+    _canvas->fillRoundRect(40, 182, 65, 54, 10, 0x18C3);
+    _canvas->drawRoundRect(40, 182, 65, 54, 10, 0x39C7);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+    _canvas->drawString("-", 72, 209);
+
+    // Button [+]
+    _canvas->fillRoundRect(695, 182, 65, 54, 10, 0x18C3);
+    _canvas->drawRoundRect(695, 182, 65, 54, 10, 0x39C7);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+    _canvas->drawString("+", 727, 209);
+
+    // Slider track
+    _canvas->fillRoundRect(125, 196, 550, 26, 8, 0x1084);
+    _canvas->drawRoundRect(125, 196, 550, 26, 8, 0x2965);
+    float fracSpd = (lim.max_speed_kmh - 15.0f) / (95.0f - 15.0f);
+    if (fracSpd < 0.0f) fracSpd = 0.0f;
+    if (fracSpd > 1.0f) fracSpd = 1.0f;
+    int fillWSpd = (int)(fracSpd * 546.0f);
+    if (fillWSpd > 4) {
+        _canvas->fillRoundRect(127, 198, fillWSpd, 22, 6, activeCol);
+    }
+    int knobX = 127 + fillWSpd;
+    _canvas->fillCircle(knobX, 209, 14, COLOR_WHITE);
+    _canvas->drawCircle(knobX, 209, 14, activeCol);
+
+    _canvas->setFont(&fonts::Font0);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->drawString("15 km/h", 125, 230);
+    _canvas->setTextDatum(textdatum_t::top_right);
+    _canvas->drawString("95 km/h", 675, 230);
+
+    // 5. Card 2: Max Watt (y: 295..445)
+    drawCard(20, 295, 760, 150, COLOR_SURFACE, COLOR_BORDER);
+
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    _canvas->drawString("MAXIMALE LEISTUNG (WATT)", 40, 310);
+
+    char wattStr[32];
+    if (lim.max_power_watts >= 1000.0f) {
+        snprintf(wattStr, sizeof(wattStr), "%.1f kW (%.0f W)", lim.max_power_watts / 1000.0f, lim.max_power_watts);
     } else {
-        char val[32], d1[64], d2[64];
-        getSubItemDetails2Lines(_menu_root_idx, _menu_sub_idx, curTitle, sizeof(curTitle), val, sizeof(val), d1, sizeof(d1), d2, sizeof(d2), telemetry);
-
-        // Setting Title
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString(curTitle, 365, 75, &fonts::Font4);
-
-        // Big Value Box (w=395, h=80)
-        int boxY = 115, boxH = 80;
-        uint16_t vBg = _menu_edit_mode ? 0x2124 : COLOR_SURFACE;
-        uint16_t vBorder = _menu_edit_mode ? COLOR_AMBER : COLOR_BORDER;
-        uint16_t vColor = _menu_edit_mode ? COLOR_AMBER : COLOR_WHITE;
-
-        _canvas->fillRoundRect(365, boxY, 395, boxH, 8, vBg);
-        _canvas->drawRoundRect(365, boxY, 395, boxH, 8, vBorder);
-
-        bool hasLetters = false;
-        for (int k = 0; val[k] != '\0'; k++) {
-            if ((val[k] >= 'a' && val[k] <= 'z') || (val[k] >= 'A' && val[k] <= 'Z')) {
-                hasLetters = true;
-                break;
-            }
-        }
-        const lgfx::IFont *vFont = hasLetters ? &fonts::Font4 : &fonts::Font6;
-        int textY = hasLetters ? (boxY + 26) : (boxY + 16);
-
-        _canvas->setTextColor(vColor, vBg);
-        _canvas->drawCenterString(val, 365 + (395 / 2), textY, vFont);
-
-        // Descriptions
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->drawString(d1, 365, 210, &fonts::Font4);
-
-        _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-        _canvas->drawString(d2, 365, 245, &fonts::Font4);
-
-        // Touch Control Buttons in Right Pane
-        if (_menu_edit_mode) {
-            // [ - WENIGER ] button (x: 365, w: 190, h: 50)
-            _canvas->fillRoundRect(365, 285, 190, 50, 8, 0x18E3);
-            _canvas->drawRoundRect(365, 285, 190, 50, 8, COLOR_AMBER);
-            _canvas->setTextColor(COLOR_AMBER, 0x18E3);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->drawString("[ - ] WENIGER", 365 + 95, 285 + 25);
-
-            // [ + MEHR ] button (x: 570, w: 190, h: 50)
-            _canvas->fillRoundRect(570, 285, 190, 50, 8, 0x18E3);
-            _canvas->drawRoundRect(570, 285, 190, 50, 8, COLOR_AMBER);
-            _canvas->setTextColor(COLOR_AMBER, 0x18E3);
-            _canvas->drawString("[ + ] MEHR", 570 + 95, 285 + 25);
-
-            // [ ✔ SPEICHERN & FERTIG ] button (x: 365, w: 395, h: 48)
-            _canvas->fillRoundRect(365, 350, 395, 48, 8, 0x0A42);
-            _canvas->drawRoundRect(365, 350, 395, 48, 8, COLOR_GREEN);
-            _canvas->setTextColor(COLOR_WHITE, 0x0A42);
-            _canvas->drawString("SPEICHERN & FERTIG", 365 + 395/2, 350 + 24);
-            _canvas->setTextDatum(textdatum_t::top_left);
-        } else {
-            // Not in edit mode:
-            // Action or Edit Button (x: 365, y: 285, w: 395, h: 50)
-            const char *btnLabel = "WERT BEARBEITEN";
-            uint16_t btnBg = 0x18C3;
-            uint16_t btnBorder = 0x39C7;
-            uint16_t btnTextCol = COLOR_WHITE;
-
-            if (_menu_root_idx == 4 && _menu_sub_idx == 0) {
-                btnLabel = "VOM VESC LADEN";
-                btnBg = 0x2940; btnBorder = COLOR_AMBER; btnTextCol = COLOR_AMBER;
-            } else if (_menu_root_idx == 4 && (_menu_sub_idx == 1 || _menu_sub_idx == 2)) {
-                btnLabel = "BRIDGE STARTEN";
-                btnBg = 0x0A42; btnBorder = COLOR_GREEN; btnTextCol = COLOR_GREEN;
-            } else if (_menu_root_idx == 4 && (_menu_sub_idx == 3 || _menu_sub_idx == 4)) {
-                btnLabel = "ZURUECKSETZEN";
-                btnBg = 0x3000; btnBorder = COLOR_RED; btnTextCol = COLOR_RED;
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 6) {
-                btnLabel = "PIN LOCK UMSCHALTEN";
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 8) {
-                btnLabel = "FEHLER-LOG LOESCHEN";
-                btnBg = 0x3000; btnBorder = COLOR_RED; btnTextCol = COLOR_RED;
-            } else if (_menu_root_idx == 2 && _menu_sub_idx == 4) {
-                btnLabel = "LERNWERTE ZURUECKSETZEN";
-                btnBg = 0x3000; btnBorder = COLOR_RED; btnTextCol = COLOR_RED;
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 5) {
-                btnLabel = "HARDWARE-STATUS (INFO)";
-                btnBg = 0x18C3; btnBorder = COLOR_BORDER; btnTextCol = COLOR_LIGHT_GRAY;
-            }
-
-            _canvas->fillRoundRect(365, 285, 395, 50, 8, btnBg);
-            _canvas->drawRoundRect(365, 285, 395, 50, 8, btnBorder);
-            _canvas->setTextColor(btnTextCol, btnBg);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->drawString(btnLabel, 365 + 395/2, 285 + 25);
-
-            // Previous / Next Item Buttons (x: 365, y: 350, h: 48)
-            // [< VORHERIGES]
-            _canvas->fillRoundRect(365, 350, 190, 48, 8, 0x18C3);
-            _canvas->drawRoundRect(365, 350, 190, 48, 8, COLOR_BORDER);
-            _canvas->setTextColor(COLOR_LIGHT_GRAY, 0x18C3);
-            _canvas->drawString("< VORHERIGES", 365 + 95, 350 + 24);
-
-            // [NÄCHSTES >]
-            _canvas->fillRoundRect(570, 350, 190, 48, 8, 0x18C3);
-            _canvas->drawRoundRect(570, 350, 190, 48, 8, COLOR_BORDER);
-            _canvas->setTextColor(COLOR_LIGHT_GRAY, 0x18C3);
-            _canvas->drawString("NAECHSTES >", 570 + 95, 350 + 24);
-
-            _canvas->setTextDatum(textdatum_t::top_left);
-        }
+        snprintf(wattStr, sizeof(wattStr), "%.0f W", lim.max_power_watts);
     }
-}
+    _canvas->setTextDatum(textdatum_t::top_right);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(activeCol, COLOR_SURFACE);
+    _canvas->drawString(wattStr, 740, 307);
 
-void DashboardRenderer::adjustCurrentSetting(int direction, DashTelemetry &telemetry) {
-    DashSettings &s = Settings.get();
-    _menu_last_activity_ms = millis();
-    _menu_dirty = true;
+    // Button [-]
+    _canvas->fillRoundRect(40, 347, 65, 54, 10, 0x18C3);
+    _canvas->drawRoundRect(40, 347, 65, 54, 10, 0x39C7);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+    _canvas->drawString("-", 72, 374);
 
-    switch (_menu_root_idx) {
-        case 0: // POWER & DRIVE
-            if (_menu_sub_idx == 0) { // max battery amps (5..35)
-                int v = (int)s.max_battery_amps + direction;
-                if (v < 5) v = 5;
-                if (v > 35) v = 35;
-                s.max_battery_amps = v;
-            } else if (_menu_sub_idx == 1) { // max phase amps (10..300)
-                int v = (int)s.max_phase_amps + direction;
-                if (v < 10) v = 10;
-                if (v > 300) v = 300;
-                s.max_phase_amps = v;
-            } else if (_menu_sub_idx == 2) { // field weakening (0..20)
-                int v = (int)s.field_weak_amps + direction;
-                if (v < 0) v = 0;
-                if (v > 20) v = 20;
-                s.field_weak_amps = v;
-            } else if (_menu_sub_idx == 3) { // speed limit presets: 0, 25, 32, 45, 60
-                static const uint8_t presets[] = { 0, 25, 32, 45, 60 };
-                int idx = 0;
-                for (int i = 0; i < 5; i++) {
-                    if (s.max_speed_kmh == presets[i]) { idx = i; break; }
-                }
-                idx = (idx + direction + 5) % 5;
-                s.max_speed_kmh = presets[idx];
-            } else if (_menu_sub_idx == 4) { // ramp time (0.10..1.00s)
-                float v = s.throttle_ramp_sec + (direction * 0.05f);
-                if (v < 0.10f) v = 0.10f;
-                if (v > 1.00f) v = 1.00f;
-                s.throttle_ramp_sec = v;
-            } else if (_menu_sub_idx == 5) { // throttle adc channel
-                s.throttle_adc_channel = (s.throttle_adc_channel == 0) ? 1 : 0;
-            }
-            break;
+    // Button [+]
+    _canvas->fillRoundRect(695, 347, 65, 54, 10, 0x18C3);
+    _canvas->drawRoundRect(695, 347, 65, 54, 10, 0x39C7);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+    _canvas->drawString("+", 727, 374);
 
-        case 1: // DISPLAY & UI
-            if (_menu_sub_idx == 0) { // brightness (20..100)
-                int b = (int)s.brightness_pct + (direction * 5);
-                if (b < 20) b = 20;
-                if (b > 100) b = 100;
-                s.brightness_pct = b;
-                _display->setBrightness(map(s.brightness_pct, 0, 100, 0, 255));
-            }
-            break;
-
-        case 2: // BATTERY PROFILES
-            if (_menu_sub_idx == 0) { // active profile
-                s.active_battery_profile = (s.active_battery_profile == 0) ? 1 : 0;
-                Battery.setActiveProfile(s.active_battery_profile);
-            } else if (_menu_sub_idx == 1) { // B1 nominal Wh
-                float wh = Battery.getProfile(0).nominal_wh + (direction * 50.0f);
-                if (wh < 500.0f) wh = 500.0f;
-                if (wh > 2500.0f) wh = 2500.0f;
-                Battery.getProfile(0).nominal_wh = wh;
-                Battery.saveProfiles();
-            } else if (_menu_sub_idx == 2) { // B2 nominal Wh
-                float wh = Battery.getProfile(1).nominal_wh + (direction * 50.0f);
-                if (wh < 500.0f) wh = 500.0f;
-                if (wh > 2500.0f) wh = 2500.0f;
-                Battery.getProfile(1).nominal_wh = wh;
-                Battery.saveProfiles();
-            } else if (_menu_sub_idx == 3) { // Voltage Trim (-2.0V .. +2.0V)
-                float v = s.voltage_trim_v + (direction * 0.1f);
-                if (v < -2.0f) v = -2.0f;
-                if (v > 2.0f) v = 2.0f;
-                s.voltage_trim_v = v;
-            }
-            break;
-
-        case 3: // BIKE SETUP
-            if (_menu_sub_idx == 0) { // wheel diameter (10..29 in)
-                float d = s.wheel_diameter_in + (direction * 0.5f);
-                if (d < 10.0f) d = 10.0f;
-                if (d > 29.0f) d = 29.0f;
-                s.wheel_diameter_in = d;
-            } else if (_menu_sub_idx == 1) { // pole pairs (8..24)
-                int p = (int)s.motor_pole_pairs + direction;
-                if (p < 8) p = 8;
-                if (p > 24) p = 24;
-                s.motor_pole_pairs = p;
-            } else if (_menu_sub_idx == 2) { // gear ratio (1.00..4.00)
-                float g = s.gear_ratio + (direction * 0.05f);
-                if (g < 1.00f) g = 1.00f;
-                if (g > 4.00f) g = 4.00f;
-                s.gear_ratio = g;
-            }
-            break;
-
-        case 4: // SYSTEM & DIAG
-            if (_menu_sub_idx == 6) {
-                s.pin_lock_enabled = !s.pin_lock_enabled;
-                Settings.save();
-            } else if (_menu_sub_idx == 7) {
-                static const char *PIN_PRESETS[] = { "1234", "0000", "1111", "2580", "4321", "9999", "8888", "1337" };
-                const int num_presets = 8;
-                int cur_p = 0;
-                for (int p = 0; p < num_presets; p++) {
-                    if (strcmp(s.pin_code, PIN_PRESETS[p]) == 0) {
-                        cur_p = p;
-                        break;
-                    }
-                }
-                cur_p = (cur_p + direction + num_presets) % num_presets;
-                strncpy(s.pin_code, PIN_PRESETS[cur_p], sizeof(s.pin_code) - 1);
-                s.pin_code[sizeof(s.pin_code) - 1] = '\0';
-                Settings.save();
-            }
-            break;
-
-        default:
-            break;
+    // Slider track
+    _canvas->fillRoundRect(125, 361, 550, 26, 8, 0x1084);
+    _canvas->drawRoundRect(125, 361, 550, 26, 8, 0x2965);
+    float fracWatt = (lim.max_power_watts - 250.0f) / (25000.0f - 250.0f);
+    if (fracWatt < 0.0f) fracWatt = 0.0f;
+    if (fracWatt > 1.0f) fracWatt = 1.0f;
+    int fillWWatt = (int)(fracWatt * 546.0f);
+    if (fillWWatt > 4) {
+        _canvas->fillRoundRect(127, 363, fillWWatt, 22, 6, activeCol);
     }
+    int knobXW = 127 + fillWWatt;
+    _canvas->fillCircle(knobXW, 374, 14, COLOR_WHITE);
+    _canvas->drawCircle(knobXW, 374, 14, activeCol);
+
+    _canvas->setFont(&fonts::Font0);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->drawString("250 W", 125, 395);
+    _canvas->setTextDatum(textdatum_t::top_right);
+    _canvas->drawString("25000 W", 675, 395);
+
+    // 6. Footer Strip
+    _canvas->setFont(&fonts::Font0);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
+    _canvas->drawString("Phasen- & Batteriestrom auf Maximum / Headroom  |  Auto-Save bei [< DASH]", 400, 462);
 }
 
 void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry) {
     if (action == NAV_NONE) return;
 
-    if (action == NAV_SCREEN_DASH) {
-        if (_menu_edit_mode) {
-            _menu_edit_mode = false;
-            Buttons.setEditMode(false);
-            Settings.save();
+    if (action == NAV_SCREEN_DASH || action == NAV_MENU_BACK) {
+        // Auto-save and apply limits
+        VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+        uint8_t m = (_settings_tab_idx < 3) ? _settings_tab_idx : 1;
+        for (int i = 0; i < 3; i++) {
+            if (cfg.tuned_modes[i].max_battery_amps < 95.0f) cfg.tuned_modes[i].max_battery_amps = 95.0f;
+            if (cfg.tuned_modes[i].max_phase_amps < 220.0f) cfg.tuned_modes[i].max_phase_amps = 220.0f;
+            if (cfg.tuned_modes[i].max_pull_watts < cfg.tuned_modes[i].max_power_watts) {
+                cfg.tuned_modes[i].max_pull_watts = cfg.tuned_modes[i].max_power_watts * 1.25f;
+            }
         }
-        _menu_in_sub = false;
+
+        ModeManager::instance().saveToNvs();
+        Settings.get().max_speed_kmh = (uint8_t)roundf(cfg.tuned_modes[m].max_speed_kmh);
+        Settings.save();
+        ModeManager::instance().applyCurrentMode();
+
         telemetry.screen = SCREEN_RIDE_DASH;
         _screen_dirty = true;
         _cache.invalidate();
         return;
     }
 
-    if (action == NAV_MENU_BACK) {
-        if (_menu_edit_mode) {
-            _menu_edit_mode = false;
-            Buttons.setEditMode(false);
-            Settings.save();
-            _menu_dirty = true;
-        } else if (_menu_in_sub) {
-            _menu_in_sub = false;
-            _menu_dirty = true;
-        } else {
-            telemetry.screen = SCREEN_RIDE_DASH;
-            _screen_dirty = true;
-            _cache.invalidate();
-        }
+    VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+    uint8_t m = (_settings_tab_idx < 3) ? _settings_tab_idx : 1;
+    ModeLimits &lim = cfg.tuned_modes[m];
+
+    if (action == NAV_BOTH_PRESSED) {
+        // Cycle tab: ECO -> SPORT -> RACE -> ECO
+        _settings_tab_idx = (_settings_tab_idx + 1) % 3;
+        _menu_dirty = true;
         return;
     }
 
-    if (_menu_edit_mode) {
-        _menu_last_activity_ms = millis();
-        if (action == NAV_EDIT_INC || action == NAV_BTN1_SHORT) {
-            adjustCurrentSetting(+1, telemetry);
-        } else if (action == NAV_EDIT_DEC || action == NAV_BTN2_SHORT) {
-            adjustCurrentSetting(-1, telemetry);
-        } else if (action == NAV_BOTH_PRESSED || action == NAV_BTN2_LONG || action == NAV_BTN1_LONG) {
-            _menu_edit_mode = false;
-            Buttons.setEditMode(false);
-            Settings.save();
-            _menu_dirty = true;
-        }
+    if (action == NAV_EDIT_INC || action == NAV_BTN2_SHORT) {
+        lim.max_speed_kmh += 1.0f;
+        if (lim.max_speed_kmh > 95.0f) lim.max_speed_kmh = 95.0f;
+        _menu_dirty = true;
         return;
     }
 
-    if (_menu_in_sub) {
-        if (action == NAV_BTN1_SHORT) { // Cursor UP
-            int total = getSubItemCount(_menu_root_idx);
-            if (total > 0) {
-                _menu_sub_idx = (_menu_sub_idx - 1 + total) % total;
-                _menu_dirty = true;
-            }
-        } else if (action == NAV_BTN2_SHORT) { // Cursor DOWN
-            int total = getSubItemCount(_menu_root_idx);
-            if (total > 0) {
-                _menu_sub_idx = (_menu_sub_idx + 1) % total;
-                _menu_dirty = true;
-            }
-        } else if (action == NAV_BOTH_PRESSED || action == NAV_BTN1_LONG) { // SELECT / ENTER
-            if (_menu_root_idx == 2 && _menu_sub_idx == 4) {
-                Battery.resetProfileLearning(Settings.get().active_battery_profile);
-                _menu_dirty = true;
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 0) {
-                Vesc.requestMcconf();
-                _menu_dirty = true;
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 1) {
-                _menu_in_sub = false;
-                _menu_edit_mode = false;
-                Buttons.setEditMode(false);
-                Vesc.enterBridgeMode();
-                telemetry.screen = SCREEN_VESC_BRIDGE;
-                _screen_dirty = true;
-                _cache.invalidate();
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 2) {
-                _menu_in_sub = false;
-                _menu_edit_mode = false;
-                Buttons.setEditMode(false);
-                Vesc.enterWifiBridgeMode();
-                telemetry.screen = SCREEN_WIFI_BRIDGE;
-                _screen_dirty = true;
-                _cache.invalidate();
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 3) {
-                telemetry.trip_km = 0.0f;
-                telemetry.stats.reset();
-                Battery.resetTrip();
-                Vesc.resetTripOdometer();
-                _menu_dirty = true;
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 4) {
-                Settings.resetToDefaults();
-                _display->setBrightness(map(Settings.get().brightness_pct, 0, 100, 0, 255));
-                _menu_dirty = true;
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 5) {
-                // Info-only
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 6) {
-                Settings.get().pin_lock_enabled = !Settings.get().pin_lock_enabled;
-                Settings.save();
-                _menu_dirty = true;
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 7) {
-                _menu_edit_mode = true;
-                Buttons.setEditMode(true);
-                _menu_last_activity_ms = millis();
-                _menu_dirty = true;
-            } else if (_menu_root_idx == 4 && _menu_sub_idx == 8) {
-                FaultManager::instance().clearFaults();
-                _menu_dirty = true;
-            } else {
-                _menu_edit_mode = true;
-                Buttons.setEditMode(true);
-                _menu_last_activity_ms = millis();
-                _menu_dirty = true;
-            }
-        } else if (action == NAV_BTN2_LONG) { // BACK
-            _menu_in_sub = false;
-            _menu_dirty = true;
-        }
-    } else {
-        if (action == NAV_BTN1_SHORT) { // Cursor UP
-            _menu_root_idx = (_menu_root_idx - 1 + 5) % 5;
-            _menu_dirty = true;
-        } else if (action == NAV_BTN2_SHORT) { // Cursor DOWN
-            _menu_root_idx = (_menu_root_idx + 1) % 5;
-            _menu_dirty = true;
-        } else if (action == NAV_BTN1_LONG) {
-            Vesc.requestMcconf();
-            _menu_dirty = true;
-        } else if (action == NAV_BOTH_PRESSED) { // ENTER SUBMENU
-            _menu_in_sub = true;
-            _menu_sub_idx = 0;
-            _menu_dirty = true;
-        } else if (action == NAV_BTN2_LONG) { // EXIT SETTINGS
-            telemetry.screen = SCREEN_RIDE_DASH;
-            _screen_dirty = true;
-            _cache.invalidate();
-        }
+    if (action == NAV_EDIT_DEC || action == NAV_BTN1_SHORT) {
+        lim.max_speed_kmh -= 1.0f;
+        if (lim.max_speed_kmh < 15.0f) lim.max_speed_kmh = 15.0f;
+        _menu_dirty = true;
+        return;
     }
 }
 
 bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry) {
-    _menu_last_activity_ms = millis();
+    if (tx < 0 || ty < 0) return false;
 
-    // 1. TOP BAR CLICKS (y <= 65)
-    if (ty <= 65) {
-        // Top Right: [DASH [X]] (x >= 640) -> Direct exit to Ride Dash
-        if (tx >= 640) {
+    // 1. TOP BAR (y <= 55): Return to Dash & Auto-Save
+    if (ty <= 55) {
+        if (tx <= 180 || tx >= 620) {
             handleMenuNav(NAV_SCREEN_DASH, telemetry);
             return true;
         }
-
-        // Top Left: [< ZURUECK] in submenu -> Root Menu; [< DASH] in root -> Ride Dash
-        if (tx <= 260) {
-            handleMenuNav(NAV_MENU_BACK, telemetry);
-            return true;
-        }
-
         return false;
     }
 
-    // 2. EDIT MODE INTERACTIONS
-    if (_menu_edit_mode) {
-        // Value Box tap (y: 100..205, x: 345..780): Save & exit edit mode
-        if (tx >= 345 && tx <= 780 && ty >= 100 && ty <= 205) {
-            _menu_edit_mode = false;
-            Buttons.setEditMode(false);
-            Settings.save();
+    // 2. TABS (y: 58..125)
+    if (ty >= 58 && ty <= 125) {
+        if (tx >= 20 && tx <= 265) {
+            _settings_tab_idx = 0; // ECO
             _menu_dirty = true;
             return true;
-        }
-
-        // [-] WENIGER (x: 345..560, y: 270..345)
-        if (tx >= 345 && tx < 560 && ty >= 270 && ty <= 345) {
-            adjustCurrentSetting(-1, telemetry);
-            return true;
-        }
-
-        // [+] MEHR (x: 560..780, y: 270..345)
-        if (tx >= 560 && tx <= 780 && ty >= 270 && ty <= 345) {
-            adjustCurrentSetting(+1, telemetry);
-            return true;
-        }
-
-        // [✔ SPEICHERN & FERTIG] (x: 345..780, y: 345..455)
-        if (tx >= 345 && tx <= 780 && ty >= 345 && ty <= 455) {
-            _menu_edit_mode = false;
-            Buttons.setEditMode(false);
-            Settings.save();
+        } else if (tx >= 270 && tx <= 530) {
+            _settings_tab_idx = 1; // SPORT
             _menu_dirty = true;
             return true;
-        }
-
-        // Left pane items: tap while in edit mode -> save current edit, exit edit mode, and select clicked item
-        if (tx >= 20 && tx <= 340 && ty >= 56 && ty <= 460) {
-            _menu_edit_mode = false;
-            Buttons.setEditMode(false);
-            Settings.save();
-            // Fall through to left pane item selection below
-        } else {
-            // In edit mode: consume any other tap in right pane so it does not trigger wrong actions
+        } else if (tx >= 535 && tx <= 780) {
+            _settings_tab_idx = 2; // RACE
+            _menu_dirty = true;
             return true;
         }
     }
 
-    // 2b. SCROLLBAR INTERACTIONS (x: 315..345, y: 50..460)
-    if (_menu_in_sub && tx >= 315 && tx <= 345 && ty >= 50 && ty <= 460) {
-        int count = getSubItemCount(_menu_root_idx);
-        if (count > 5) {
-            if (ty <= 75) {
-                // Scroll UP button [^]
-                if (_menu_sub_idx > 0) {
-                    _menu_sub_idx--;
-                    _menu_dirty = true;
-                }
-            } else if (ty >= 420) {
-                // Scroll DOWN button [v]
-                if (_menu_sub_idx < count - 1) {
-                    _menu_sub_idx++;
-                    _menu_dirty = true;
-                }
-            } else {
-                // Direct jump on scrollbar track
-                int target = (ty - 75) * count / (420 - 75);
-                if (target < 0) target = 0;
-                if (target >= count) target = count - 1;
-                _menu_sub_idx = target;
-                _menu_dirty = true;
-            }
+    VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+    uint8_t m = (_settings_tab_idx < 3) ? _settings_tab_idx : 1;
+    ModeLimits &lim = cfg.tuned_modes[m];
+
+    // 3. SPEED SLIDER & BUTTONS (y: 135..285)
+    if (ty >= 135 && ty <= 285) {
+        // [-] Button
+        if (tx >= 30 && tx <= 115) {
+            lim.max_speed_kmh -= 1.0f;
+            if (lim.max_speed_kmh < 15.0f) lim.max_speed_kmh = 15.0f;
+            _menu_dirty = true;
+            return true;
+        }
+        // [+] Button
+        if (tx >= 685 && tx <= 770) {
+            lim.max_speed_kmh += 1.0f;
+            if (lim.max_speed_kmh > 95.0f) lim.max_speed_kmh = 95.0f;
+            _menu_dirty = true;
+            return true;
+        }
+        // Slider Track tap / drag
+        if (tx >= 120 && tx <= 680) {
+            float frac = (float)(tx - 125) / 550.0f;
+            if (frac < 0.0f) frac = 0.0f;
+            if (frac > 1.0f) frac = 1.0f;
+            lim.max_speed_kmh = roundf(15.0f + frac * (95.0f - 15.0f));
+            _menu_dirty = true;
             return true;
         }
     }
 
-    // 3. LEFT PANE INTERACTIONS (x: 20..315, y: 56..460)
-    if (tx >= 20 && tx <= 340 && ty >= 56 && ty <= 460) {
-        int k = (ty - 58) / 76;
-        if (k < 0) k = 0;
-        if (k > 4) k = 4;
-
-        if (!_menu_in_sub) {
-            // Root categories: tap selects and enters the submenu
-            _menu_root_idx = k;
-            _menu_in_sub = true;
-            _menu_sub_idx = 0;
+    // 4. WATT SLIDER & BUTTONS (y: 295..445)
+    if (ty >= 295 && ty <= 445) {
+        // [-] Button
+        if (tx >= 30 && tx <= 115) {
+            lim.max_power_watts -= (lim.max_power_watts > 5000.0f) ? 500.0f : 250.0f;
+            if (lim.max_power_watts < 250.0f) lim.max_power_watts = 250.0f;
+            lim.max_pull_watts = lim.max_power_watts * 1.25f;
             _menu_dirty = true;
-            return true;
-        } else {
-            // Submenu: select item
-            int count = getSubItemCount(_menu_root_idx);
-            int start_idx = 0;
-            if (count > 5) {
-                if (_menu_sub_idx >= 3) {
-                    start_idx = _menu_sub_idx - 2;
-                }
-                if (start_idx + 5 > count) start_idx = count - 5;
-                if (start_idx < 0) start_idx = 0;
-            }
-            int j = start_idx + k;
-            if (j < count) {
-                if (_menu_sub_idx == j) {
-                    // Already selected -> trigger edit or action
-                    handleMenuNav(NAV_BOTH_PRESSED, telemetry);
-                } else {
-                    _menu_sub_idx = j;
-                    _menu_dirty = true;
-                }
-            }
             return true;
         }
-    }
-
-    // 4. RIGHT PANE INTERACTIONS (x: 345..780, y: 56..460)
-    if (tx >= 345 && tx <= 780 && ty >= 56 && ty <= 460) {
-        if (!_menu_in_sub) {
-            // Root menu bottom buttons:
-            // [< DASH] (Exit): x: 350..560, y: 360..455 -> Direct return to Ride Dash!
-            if (tx >= 350 && tx < 560 && ty >= 360 && ty <= 455) {
-                handleMenuNav(NAV_SCREEN_DASH, telemetry);
-                return true;
-            }
-            // [OEFFNEN >] (Open category) or anywhere else on right card -> enter submenu
-            _menu_in_sub = true;
-            _menu_sub_idx = 0;
+        // [+] Button
+        if (tx >= 685 && tx <= 770) {
+            lim.max_power_watts += (lim.max_power_watts >= 5000.0f) ? 500.0f : 250.0f;
+            if (lim.max_power_watts > 25000.0f) lim.max_power_watts = 25000.0f;
+            lim.max_pull_watts = lim.max_power_watts * 1.25f;
             _menu_dirty = true;
             return true;
-        } else {
-            // Submenu right pane:
-            // Value Box (y: 100..205) or [WERT BEARBEITEN / AUSFÜHREN] button (y: 270..345)
-            if ((ty >= 100 && ty <= 205) || (ty >= 270 && ty <= 345)) {
-                handleMenuNav(NAV_BOTH_PRESSED, telemetry);
-                return true;
-            }
-
-            // Previous Item Button [< VORHERIGES] (x: 345..560, y: 345..435)
-            if (tx >= 345 && tx < 560 && ty >= 345 && ty <= 435) {
-                int total = getSubItemCount(_menu_root_idx);
-                if (total > 0) {
-                    _menu_sub_idx = (_menu_sub_idx - 1 + total) % total;
-                    _menu_dirty = true;
-                }
-                return true;
-            }
-
-            // Next Item Button [NAECHSTES >] (x: 560..780, y: 345..435)
-            if (tx >= 560 && tx <= 780 && ty >= 345 && ty <= 435) {
-                int total = getSubItemCount(_menu_root_idx);
-                if (total > 0) {
-                    _menu_sub_idx = (_menu_sub_idx + 1) % total;
-                    _menu_dirty = true;
-                }
-                return true;
-            }
+        }
+        // Slider Track tap / drag
+        if (tx >= 120 && tx <= 680) {
+            float frac = (float)(tx - 125) / 550.0f;
+            if (frac < 0.0f) frac = 0.0f;
+            if (frac > 1.0f) frac = 1.0f;
+            float rawWatt = 250.0f + frac * (25000.0f - 250.0f);
+            lim.max_power_watts = roundf(rawWatt / 50.0f) * 50.0f;
+            if (lim.max_power_watts < 250.0f) lim.max_power_watts = 250.0f;
+            if (lim.max_power_watts > 25000.0f) lim.max_power_watts = 25000.0f;
+            lim.max_pull_watts = lim.max_power_watts * 1.25f;
+            _menu_dirty = true;
+            return true;
         }
     }
 

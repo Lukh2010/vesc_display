@@ -19,7 +19,9 @@ public:
     // Menu Navigation Handler (called by main when in SCREEN_SETTINGS_MENU)
     void handleMenuNav(NavAction action, DashTelemetry &telemetry);
     bool handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
-    bool isInEditMode() const { return _menu_edit_mode; }
+    bool isInEditMode() const { return false; }
+    uint8_t getSettingsTab() const { return _settings_tab_idx; }
+    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 3) ? tab : 0; _menu_dirty = true; }
 
     // Race / Dragy Timer Logic
     void updateRaceTimer(DashTelemetry &telemetry, uint32_t now);
@@ -46,12 +48,9 @@ private:
     void renderRtGraphsScreen(const DashTelemetry &telemetry);
     void drawWaveformGraph(int x, int y, int w, int h, const float *data, int count, float max_val, uint16_t line_col, uint16_t fill_col, const char *label, const char *val_str, uint16_t val_col);
 
-    // Screen 3: Interactive Settings Menu System
+    // Screen 3: Interactive Touch Mode Configurator
     void initSettingsScreen(const DashTelemetry &telemetry);
     void renderSettingsScreen(const DashTelemetry &telemetry);
-    void renderRootMenu();
-    void renderSubmenu(uint8_t sub_id, const DashTelemetry &telemetry);
-    void adjustCurrentSetting(int direction, DashTelemetry &telemetry); // +1 or -1
 
     // Screen 4: Transparent USB CDC <-> UART Bridge for VESC Tool
     void initVescBridgeScreen(const DashTelemetry &telemetry);
@@ -81,12 +80,8 @@ private:
     bool            _screen_dirty;
     bool            _mode_banner_active;
 
-    // Menu Navigation State
-    bool     _menu_in_sub;
-    uint8_t  _menu_root_idx;
-    uint8_t  _menu_sub_idx;
-    bool     _menu_edit_mode;
-    uint32_t _menu_last_activity_ms;
+    // Menu / Settings Configurator State
+    uint8_t  _settings_tab_idx; // 0 = ECO, 1 = SPORT, 2 = RACE
     bool     _menu_dirty;
 
     // Differential Render Cache
@@ -106,6 +101,7 @@ private:
         int temp_motor;
         int temp_esc;
         int g_force_x10;
+        int incline_deg;
         int trip_x10;
         int odo;
         int uptime;
@@ -147,6 +143,7 @@ private:
             temp_motor = -999;
             temp_esc = -999;
             g_force_x10 = -999;
+            incline_deg = -999;
             trip_x10 = -1;
             odo = -1;
             uptime = -1;

@@ -22,9 +22,11 @@ public:
     void setTransport(IVescTransport *transport) { _transport = transport; }
     IVescTransport* getTransport() const { return _transport; }
 
-    // Manual simulation throttle override
+    // Manual simulation throttle & incline override
     void setSimThrottle(float pct);
     float getSimThrottle() const { return _sim_throttle; }
+    void setSimIncline(float deg) { _sim_incline = deg; }
+    float getSimIncline() const { return _sim_incline; }
     void triggerSimFault(uint8_t code) { _sim_fault_code = code; }
     uint8_t getSimFault() const { return _sim_fault_code; }
 
@@ -69,9 +71,9 @@ public:
     VescSyncStatus getSyncStatus() const { return _sync_status; }
     uint32_t getSyncTimeMs() const { return _sync_ms; }
     void resetSyncStatus() { _sync_status = SYNC_IDLE; }
+    void runSimulation(DashTelemetry &telemetry);
 
 private:
-    void runSimulation(DashTelemetry &telemetry);
     void pollRealVesc(DashTelemetry &telemetry);
     void pollCanVesc(DashTelemetry &telemetry);
     void initCanBus();
@@ -92,6 +94,7 @@ private:
 
     // Simulation Engine State
     float _sim_throttle;
+    float _sim_incline;
     float _target_speed;
     float _target_rpm;
     uint8_t _sim_fault_code;

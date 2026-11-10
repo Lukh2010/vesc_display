@@ -112,6 +112,7 @@ struct DashTelemetry {
     // Speed & Inverter State
     float speed_kmh;           // Vehicle speed (km/h)
     float g_force;             // Longitudinal acceleration G-force (+/- G)
+    float incline_deg;         // Vehicle pitch / incline angle (+/- deg)
     float duty_cycle_pct;      // Inverter Duty Cycle (0.0% to 120.0%, >100% = Field Weakening)
     float rpm;                 // Motor mechanical RPM
     float throttle_pct;        // Throttle input percentage (0 - 100%)

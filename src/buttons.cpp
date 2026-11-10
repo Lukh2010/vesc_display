@@ -297,8 +297,8 @@ void ButtonHandler::processTouch(uint32_t now) {
                             _pending_action = NAV_BTN2_LONG; // Top Right -> Reset Trip
                         } else if (_last_tap_x <= 130 && _last_tap_y <= 65) {
                             _pending_action = NAV_BTN1_SHORT; // Top Left -> Return to Ride Dash
-                        } else if (_last_tap_x >= 140 && _last_tap_x <= 250 && _last_tap_y <= 65) {
-                            _pending_action = NAV_SCREEN_RACE; // [ RACE ] Button -> Open Dragy/Launch Timer Screen
+                        } else if (_tuning_mode && _last_tap_x >= 140 && _last_tap_x <= 250 && _last_tap_y <= 65) {
+                            _pending_action = NAV_SCREEN_RACE; // [ RACE ] Button (Only available when tuning_mode == true!)
                         }
                         // All other taps (on cards, tiles, empty space, brightness controls)
                         // do NOT exit back to Dash! Only pressing < DASH returns.
@@ -335,14 +335,12 @@ void ButtonHandler::processTouch(uint32_t now) {
                         }
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
                         // On SETTINGS Screen:
-                        if (_last_tap_y <= 65 && _last_tap_x <= 140) {
-                            _pending_action = NAV_SCREEN_DASH; // Top Left -> Return to Ride Dash (fallback if not consumed)
-                        } else if (_last_tap_y <= 65 && _last_tap_x >= 640) {
-                            _pending_action = NAV_SCREEN_DASH; // Top Right [X] -> Return to Ride Dash
-                        } else if (_last_tap_y <= 65 && _last_tap_x > 140 && _last_tap_x <= 280) {
-                            _pending_action = NAV_MENU_BACK;   // Top Submenu [< MENÜ] -> Return to Root Categories
+                        if (_last_tap_y <= 55 && _last_tap_x <= 160) {
+                            _pending_action = NAV_SCREEN_DASH; // Top Left [< DASH] -> Return to Ride Dash
+                        } else if (_last_tap_y <= 55 && _last_tap_x >= 640) {
+                            _pending_action = NAV_SCREEN_DASH; // Top Right [FERTIG / X] -> Return to Ride Dash
                         }
-                        // Detailed item selection, scrollbar, and value box taps are forwarded to Renderer.handleSettingsTouch via getLastTap()
+                        // Detailed tab selection and slider touches are forwarded to Renderer.handleSettingsTouch via getLastTap()
                     } else {
                         // On SCREEN_RIDE_DASH / Default:
                         // 1. Top Left [ STATS ] Navigation Touch Button -> Open Statistics Screen (SCREEN_RT_GRAPHS)
