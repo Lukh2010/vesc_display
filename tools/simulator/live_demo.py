@@ -76,6 +76,7 @@ class SimTelemetry(ctypes.Structure):
         ("race_split_0_50", ctypes.c_float),
         ("race_split_0_70", ctypes.c_float),
         ("g_force", ctypes.c_float),
+        ("incline_deg", ctypes.c_float),
     ]
 
 sim_lib.sim_init.restype = None

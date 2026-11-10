@@ -60,6 +60,7 @@ public:
 
     // Sends current active limits to VESC
     void applyLimitsToVesc();
+    void applyCurrentMode() { applyLimitsToVesc(); }
 
 private:
     ModeManager();

@@ -90,6 +90,7 @@ VescHandler::VescHandler()
       _dist_trip_offset(0),
       _last_dist(0),
       _sim_throttle(0.0f),
+      _sim_incline(0.0f),
       _target_speed(0.0f),
       _target_rpm(0.0f),
       _sim_fault_code(0),
@@ -137,9 +138,12 @@ void VescHandler::begin() {
 }
 
 void VescHandler::setSimThrottle(float pct) {
-    if (pct < 0.0f) pct = 0.0f;
-    if (pct > 100.0f) pct = 100.0f;
-    _sim_throttle = pct;
+    if (pct <= 0.01f) {
+        _sim_throttle = 0.0f;
+    } else {
+        if (pct > 100.0f) pct = 100.0f;
+        _sim_throttle = pct;
+    }
 }
 
 void VescHandler::update(DashTelemetry &telemetry) {
@@ -163,27 +167,9 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     if (dt <= 0.001f) return;
     _sim_last_update_ms = now;
 
-    // Automated 45-second dynamic riding cycle
-    uint32_t cycle_ms = now % 45000;
     float sim_t = 0.0f;
-
-    if (cycle_ms < 4000) {
-        // Stopped at intersection
-        sim_t = 0.0f;
-    } else if (cycle_ms < 14000) {
-        // Acceleration phase (heavy torque demand)
-        float p = (cycle_ms - 4000) / 10000.0f;
-        sim_t = p * 75.0f;
-    } else if (cycle_ms < 22000) {
-        // Steady cruise at ~35 km/h
-        sim_t = 40.0f;
-    } else if (cycle_ms < 34000) {
-        // Hard sprint into Field Weakening territory (>100% duty)
-        float p = (cycle_ms - 22000) / 12000.0f;
-        sim_t = 40.0f + p * 58.0f; // up to 98% throttle
-    } else {
-        // Coasting down to stop (BBS mid-drive freewheeling, no regen)
-        sim_t = 0.0f;
+    if (_sim_throttle > 0.01f) {
+        sim_t = _sim_throttle;
     }
 
     // Check if vehicle is locked by boot PIN
@@ -191,8 +177,7 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
         sim_t = 0.0f;
     }
 
-    _sim_throttle = sim_t;
-    telemetry.throttle_pct = _sim_throttle;
+    telemetry.throttle_pct = sim_t;
 
     // Fault injection/simulation
     if (_sim_fault_code != 0) {
@@ -207,28 +192,47 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     uint8_t speed_limit = Settings.get().max_speed_kmh;
     float max_possible_speed = (speed_limit > 0) ? (float)speed_limit : 95.0f;
 
-    _target_speed = (_sim_throttle / 100.0f) * max_possible_speed;
+    if (sim_t <= 0.01f) {
+        sim_t = 0.0f;
+        _target_speed = 0.0f;
+        telemetry.speed_kmh = 0.0f;
+        telemetry.power_watts = 0.0f;
+        telemetry.current_amps = 0.0f;
+        telemetry.phase_amps = 0.0f;
+        telemetry.duty_cycle_pct = 0.0f;
+        telemetry.rpm = 0.0f;
+        telemetry.g_force = 0.0f;
+    } else {
+        _target_speed = (sim_t / 100.0f) * max_possible_speed;
+    }
+
     float prev_sim_spd = telemetry.speed_kmh;
-    telemetry.speed_kmh += (_target_speed - telemetry.speed_kmh) * (dt * 1.6f);
-    if (telemetry.speed_kmh < 0.2f) telemetry.speed_kmh = 0.0f;
-    if (dt > 0.001f) {
-        float dv_ms = (telemetry.speed_kmh - prev_sim_spd) / 3.6f;
-        float g_inst = (dv_ms / dt) / 9.80665f;
-        if (g_inst > 3.0f) g_inst = 3.0f;
-        if (g_inst < -3.0f) g_inst = -3.0f;
-        telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
-        if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
-        if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
-            telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
+    if (sim_t == 0.0f && telemetry.speed_kmh == 0.0f) {
+        telemetry.speed_kmh = 0.0f;
+        telemetry.g_force = 0.0f;
+    } else {
+        telemetry.speed_kmh += (_target_speed - telemetry.speed_kmh) * (dt * 1.6f);
+        if (telemetry.speed_kmh < 0.2f) telemetry.speed_kmh = 0.0f;
+        if (dt > 0.001f) {
+            float dv_ms = (telemetry.speed_kmh - prev_sim_spd) / 3.6f;
+            float g_inst = (dv_ms / dt) / 9.80665f;
+            if (g_inst > 3.0f) g_inst = 3.0f;
+            if (g_inst < -3.0f) g_inst = -3.0f;
+            telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
+            if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
+            if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
+                telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
+            }
         }
     }
+    telemetry.incline_deg = _sim_incline;
 
     // 2. Realistic Duty Cycle calculation (0.0% to 120.0%)
     // Base duty cycle tracks vehicle speed / back-EMF headroom
     float base_duty = (telemetry.speed_kmh / 48.0f) * 92.0f;
-    if (_sim_throttle > 85.0f && telemetry.speed_kmh > 46.0f) {
+    if (sim_t > 85.0f && telemetry.speed_kmh > 46.0f) {
         // Field Weakening engaged: duty cycle pushes beyond 100% (up to 114%)
-        float fw_extra = ((_sim_throttle - 85.0f) / 15.0f) * 18.0f;
+        float fw_extra = ((sim_t - 85.0f) / 15.0f) * 18.0f;
         telemetry.duty_cycle_pct = 96.0f + fw_extra;
     } else {
         telemetry.duty_cycle_pct = base_duty;
@@ -243,7 +247,7 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     uint16_t max_bat_a = Settings.get().max_battery_amps; // e.g. 28A
     uint16_t max_pha_a = Settings.get().max_phase_amps;   // e.g. 160A / up to 300A
 
-    float target_bat_amps = (_sim_throttle / 100.0f) * (float)max_bat_a;
+    float target_bat_amps = (sim_t / 100.0f) * (float)max_bat_a;
     telemetry.current_amps += (target_bat_amps - telemetry.current_amps) * (dt * 3.5f);
     if (telemetry.current_amps < 0.0f) telemetry.current_amps = 0.0f;
 

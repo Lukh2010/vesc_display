@@ -45,6 +45,7 @@ void setup() {
     // 4. Initialize Telemetry State
     telemetry.speed_kmh           = 0.0f;
     telemetry.g_force             = 0.0f;
+    telemetry.incline_deg         = 0.0f;
     telemetry.duty_cycle_pct      = 0.0f;
     telemetry.rpm                 = 0.0f;
     telemetry.throttle_pct        = 0.0f;
@@ -150,6 +151,17 @@ void loop() {
         telemetry.tuning_mode = ModeManager::instance().isTuningMode();
         Buttons.setTuningMode(telemetry.tuning_mode);
         telemetry.mode_badge_until = now + 2500;
+        if (!telemetry.tuning_mode && telemetry.screen == SCREEN_RACE_TIMER) {
+            telemetry.screen = SCREEN_RIDE_DASH;
+            telemetry.race_state = 0;
+            telemetry.ride_mode = telemetry.saved_ride_mode;
+            ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+            telemetry.boost_active = false;
+            telemetry.race_popup_open = false;
+            Buttons.setRaceState(0);
+            Buttons.setRacePopupOpen(false);
+            Renderer.invalidateCache();
+        }
         Renderer.markScreenDirty();
     }
     if (telemetry.ride_mode != ModeManager::instance().getRideMode()) {
@@ -384,6 +396,13 @@ void loop() {
         if (Buttons.getLastTap(&tx, &ty)) {
             Renderer.handleSettingsTouch(tx, ty, telemetry);
             Buttons.clearNavAction(); // Clear any pending action to prevent double-invocation
+        } else if (Buttons.isTouching()) {
+            int16_t cx = Buttons.getTouchX();
+            int16_t cy = Buttons.getTouchY();
+            // Real-time slider drag: speed track y: 135..285, watt track y: 295..445, x: 120..680
+            if (cx >= 120 && cx <= 680 && ((cy >= 135 && cy <= 285) || (cy >= 295 && cy <= 445))) {
+                Renderer.handleSettingsTouch(cx, cy, telemetry);
+            }
         }
     }
 
@@ -485,6 +504,10 @@ void loop() {
                     break;
 
                 case NAV_SCREEN_RACE:
+                    if (!telemetry.tuning_mode) {
+                        Serial.println("[NAV] NAV_SCREEN_RACE blocked: tuning_mode is false (police mode)");
+                        break;
+                    }
                     if (telemetry.screen != SCREEN_RACE_TIMER) {
                         telemetry.saved_ride_mode = telemetry.ride_mode;
                     }
@@ -579,6 +602,12 @@ void loop() {
                     if (telemetry.boost_active) {
                         telemetry.boost_end_ms = now + 10000;
                     }
+                    if (telemetry.throttle_pct <= 0.01f && telemetry.speed_kmh <= 0.5f) {
+                        telemetry.speed_kmh = 0.0f;
+                        telemetry.power_watts = 0.0f;
+                        telemetry.current_amps = 0.0f;
+                        telemetry.phase_amps = 0.0f;
+                    }
                     Renderer.markScreenDirty();
                     Serial.printf("[NAV] Toggled Hyper Boost: %s\n", telemetry.boost_active ? "ACTIVE" : "OFF");
                     break;
@@ -597,6 +626,17 @@ void loop() {
                     Buttons.setTuningMode(false);
                     ModeManager::instance().setTuningMode(false);
                     telemetry.mode_badge_until = now + 2500;
+                    if (telemetry.screen == SCREEN_RACE_TIMER) {
+                        telemetry.screen = SCREEN_RIDE_DASH;
+                        telemetry.race_state = 0;
+                        telemetry.ride_mode = telemetry.saved_ride_mode;
+                        ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+                        telemetry.boost_active = false;
+                        telemetry.race_popup_open = false;
+                        Buttons.setRaceState(0);
+                        Buttons.setRacePopupOpen(false);
+                        Renderer.invalidateCache();
+                    }
                     Renderer.markScreenDirty();
                     Serial.println("[NAV] Tuning Mode DEACTIVATED via single tap on speed number!");
                     break;
@@ -605,6 +645,12 @@ void loop() {
                     telemetry.ride_mode = (RideMode)(((int)telemetry.ride_mode + 1) % MODE_COUNT);
                     ModeManager::instance().setRideMode(telemetry.ride_mode);
                     telemetry.mode_badge_until = now + 2500;
+                    if (telemetry.throttle_pct <= 0.01f && telemetry.speed_kmh <= 0.5f) {
+                        telemetry.speed_kmh = 0.0f;
+                        telemetry.power_watts = 0.0f;
+                        telemetry.current_amps = 0.0f;
+                        telemetry.phase_amps = 0.0f;
+                    }
                     Renderer.markScreenDirty();
                     Serial.printf("[NAV] Cycled Ride Mode: %d (%s, Tuning: %s)\n",
                                   (int)telemetry.ride_mode,
