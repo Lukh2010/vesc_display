@@ -160,7 +160,7 @@ void ButtonHandler::processTouch(uint32_t now) {
                         if (_touch_start_x >= 600 && _touch_start_y <= 65) {
                             if (_active_screen == SCREEN_RT_GRAPHS) _pending_action = NAV_BTN2_LONG; // Reset Trip
                             else if (_active_screen == SCREEN_RACE_TIMER) _pending_action = NAV_RACE_TOGGLE_POPUP; // Toggle Bestzeiten Popup
-                        } else if (_touch_start_x <= 150 && _touch_start_y <= 65) {
+                        } else if (_touch_start_x <= 130 && _touch_start_y <= 65) {
                             _pending_action = NAV_BTN1_SHORT; // Top-left < DASH returns to Ride Dash
                         }
                         // All other holds in STATS/RACE do NOT exit screen
@@ -297,7 +297,7 @@ void ButtonHandler::processTouch(uint32_t now) {
                             _pending_action = NAV_BTN2_LONG; // Top Right -> Reset Trip
                         } else if (_last_tap_x <= 130 && _last_tap_y <= 65) {
                             _pending_action = NAV_BTN1_SHORT; // Top Left -> Return to Ride Dash
-                        } else if (_tuning_mode && _last_tap_x >= 140 && _last_tap_x <= 250 && _last_tap_y <= 65) {
+                        } else if (_tuning_mode && _last_tap_x >= 135 && _last_tap_x <= 255 && _last_tap_y <= 65) {
                             _pending_action = NAV_SCREEN_RACE; // [ RACE ] Button (Only available when tuning_mode == true!)
                         }
                         // All other taps (on cards, tiles, empty space, brightness controls)

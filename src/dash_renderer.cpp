@@ -665,7 +665,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (!_hyper_inited || cur_fet != _cache.temp_esc || cur_mot != _cache.temp_motor) {
         _cache.temp_esc = cur_fet;
         _cache.temp_motor = cur_mot;
-        _canvas->fillRect(100, 390, 280, 56, COLOR_BG);
+        _canvas->fillRect(150, 395, 180, 45, COLOR_BG);
         drawThermalsWithDegrees(_canvas, "", telemetry.temp_esc, telemetry.temp_motor, cx, 405, true);
     }
 
@@ -1537,10 +1537,8 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
 // ==============================================================================
 void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
     _canvas->fillScreen(COLOR_BG);
-    if (_settings_tab_idx >= 3) {
-        _settings_tab_idx = (uint8_t)telemetry.ride_mode;
-        if (_settings_tab_idx >= 3) _settings_tab_idx = 1;
-    }
+    _settings_tab_idx = (uint8_t)telemetry.ride_mode;
+    if (_settings_tab_idx >= 3) _settings_tab_idx = 0;
     _menu_dirty = true;
 }
 
@@ -1741,6 +1739,13 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
             if (cfg.tuned_modes[i].max_phase_amps < 220.0f) cfg.tuned_modes[i].max_phase_amps = 220.0f;
             if (cfg.tuned_modes[i].max_pull_watts < cfg.tuned_modes[i].max_power_watts) {
                 cfg.tuned_modes[i].max_pull_watts = cfg.tuned_modes[i].max_power_watts * 1.25f;
+            }
+            if (!ModeManager::instance().isTuningMode()) {
+                cfg.legal_modes[i].max_speed_kmh = cfg.tuned_modes[i].max_speed_kmh;
+                cfg.legal_modes[i].max_power_watts = cfg.tuned_modes[i].max_power_watts;
+                cfg.legal_modes[i].max_pull_watts = cfg.tuned_modes[i].max_pull_watts;
+                cfg.legal_modes[i].max_battery_amps = cfg.tuned_modes[i].max_battery_amps;
+                cfg.legal_modes[i].max_phase_amps = cfg.tuned_modes[i].max_phase_amps;
             }
         }
 
