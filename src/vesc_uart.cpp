@@ -1233,81 +1233,102 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
                   max_speed_kmh, max_erpm, max_power_watts, max_battery_amps, max_phase_amps);
 
 #if !SIMULATION_MODE
-    // 2. Transmit COMM_SET_MCCONF_TEMP (Command ID 0x3E / 62)
-    // Structure:
-    // [0] = 0x3E
-    // [1..4] = current_min (float32 auto)
-    // [5..8] = current_max (float32 auto)
-    // [9..12] = min_erpm (float32 auto)
-    // [13..16] = max_erpm (float32 auto)
-    // [17..20] = in_current_min (float32 auto)
-    // [21..24] = in_current_max (float32 auto)
-    // [25..26] = duty_min (int16 / 1000)
-    // [27..28] = duty_max (int16 / 1000)
-    // [29..32] = watt_min (float32 auto)
-    // [33..36] = watt_max (float32 auto)
-    uint8_t payload[37];
+    auto append_f32_auto = [](uint8_t *b, float number, int32_t *idx) {
+        if (fabsf(number) < 1.5e-38f) {
+            number = 0.0f;
+        }
+        int e = 0;
+        float sig = frexpf(number, &e);
+        float sig_abs = fabsf(sig);
+        uint32_t sig_i = 0;
+        if (sig_abs >= 0.5f) {
+            sig_i = (uint32_t)((sig_abs - 0.5f) * 2.0f * 8388608.0f);
+            e += 126;
+        }
+        uint32_t res = ((e & 0xFF) << 23) | (sig_i & 0x7FFFFF);
+        if (sig < 0) {
+            res |= (1U << 31);
+        }
+        b[(*idx)++] = (uint8_t)(res >> 24);
+        b[(*idx)++] = (uint8_t)(res >> 16);
+        b[(*idx)++] = (uint8_t)(res >> 8);
+        b[(*idx)++] = (uint8_t)(res);
+    };
+
+    // 2. Official VESC COMM_SET_MCCONF_TEMP (Command ID 48 / 0x30)
+    // Structure expected by VESC firmware comm/commands.c:
+    // [0] = 48 (COMM_SET_MCCONF_TEMP)
+    // [1] = store (bool: 0 = false)
+    // [2] = forward_can (bool: 1 = true)
+    // [3] = ack (bool: 0 = false)
+    // [4] = divide_by_controllers (bool: 0 = false)
+    // [5..8]   = l_current_min_scale (float32 auto)
+    // [9..12]  = l_current_max_scale (float32 auto)
+    // [13..16] = l_min_erpm (float32 auto)
+    // [17..20] = l_max_erpm (float32 auto)
+    // [21..24] = l_min_duty (float32 auto)
+    // [25..28] = l_max_duty (float32 auto)
+    // [29..32] = l_watt_min (float32 auto)
+    // [33..36] = l_watt_max (float32 auto)
+    // [37..40] = l_in_current_min (float32 auto)
+    // [41..44] = l_in_current_max (float32 auto)
+    uint8_t payload[45];
     int32_t p_idx = 0;
-    payload[p_idx++] = 0x3E;
+    payload[p_idx++] = 48; // COMM_SET_MCCONF_TEMP
+    payload[p_idx++] = 0;  // store = false
+    payload[p_idx++] = 1;  // forward_can = true
+    payload[p_idx++] = 0;  // ack = false
+    payload[p_idx++] = 0;  // divide_by_controllers = false
 
-    auto append_f32 = [](uint8_t *b, float val, int32_t *idx) {
-        union { float f; uint32_t u; } u;
-        u.f = val;
-        b[(*idx)++] = (uint8_t)(u.u >> 24);
-        b[(*idx)++] = (uint8_t)(u.u >> 16);
-        b[(*idx)++] = (uint8_t)(u.u >> 8);
-        b[(*idx)++] = (uint8_t)(u.u);
-    };
-    auto append_i16 = [](uint8_t *b, int16_t val, int32_t *idx) {
-        b[(*idx)++] = (uint8_t)(val >> 8);
-        b[(*idx)++] = (uint8_t)(val);
-    };
-
-    append_f32(payload, -max_phase_amps, &p_idx);
-    append_f32(payload, max_phase_amps, &p_idx);
-    append_f32(payload, -max_erpm, &p_idx);
-    append_f32(payload, max_erpm, &p_idx);
-    append_f32(payload, -max_battery_amps, &p_idx);
-    append_f32(payload, max_battery_amps, &p_idx);
-    append_i16(payload, 0, &p_idx);        // duty_min: 0.00
-    append_i16(payload, 950, &p_idx);      // duty_max: 0.95
-    append_f32(payload, -max_power_watts, &p_idx);
-    append_f32(payload, max_power_watts, &p_idx);
+    float cur_scale = is_locked ? 0.0f : 1.0f;
+    append_f32_auto(payload, cur_scale, &p_idx); // l_current_min_scale
+    append_f32_auto(payload, cur_scale, &p_idx); // l_current_max_scale
+    append_f32_auto(payload, is_locked ? 0.0f : -max_erpm, &p_idx);
+    append_f32_auto(payload, is_locked ? 0.0f : max_erpm, &p_idx);
+    append_f32_auto(payload, is_locked ? 0.0f : 0.005f, &p_idx); // l_min_duty
+    append_f32_auto(payload, is_locked ? 0.0f : 0.95f, &p_idx);  // l_max_duty
+    append_f32_auto(payload, is_locked ? 0.0f : -max_power_watts, &p_idx);
+    append_f32_auto(payload, is_locked ? 0.0f : max_power_watts, &p_idx);
+    append_f32_auto(payload, is_locked ? 0.0f : -max_battery_amps, &p_idx);
+    append_f32_auto(payload, is_locked ? 0.0f : max_battery_amps, &p_idx);
 
     // Short packet: 0x02, len, payload..., crc_hi, crc_lo, 0x03
-    uint8_t packet[45];
-    packet[0] = 0x02;
-    packet[1] = (uint8_t)p_idx;
-    memcpy(&packet[2], payload, p_idx);
-    uint16_t crc = crc16(payload, p_idx);
-    packet[2 + p_idx] = (uint8_t)(crc >> 8);
-    packet[3 + p_idx] = (uint8_t)(crc & 0xFF);
-    packet[4 + p_idx] = 0x03;
-    if (_transport) _transport->write(packet, p_idx + 5);
+    if (_transport) {
+        uint8_t packet[55];
+        packet[0] = 0x02;
+        packet[1] = (uint8_t)p_idx;
+        memcpy(&packet[2], payload, p_idx);
+        uint16_t crc = crc16(payload, p_idx);
+        packet[2 + p_idx] = (uint8_t)(crc >> 8);
+        packet[3 + p_idx] = (uint8_t)(crc & 0xFF);
+        packet[4 + p_idx] = 0x03;
+        _transport->write(packet, p_idx + 5);
 
-    // Also forward to Ubox secondary VESC via CAN (CAN ID 1)
-    uint8_t can_payload[39];
-    can_payload[0] = 0x22; // COMM_FORWARD_CAN
-    can_payload[1] = 0x01; // CAN ID 1
-    memcpy(&can_payload[2], payload, p_idx);
-    uint8_t can_packet[47];
-    can_packet[0] = 0x02;
-    can_packet[1] = (uint8_t)(p_idx + 2);
-    memcpy(&can_packet[2], can_payload, p_idx + 2);
-    uint16_t can_crc = crc16(can_payload, p_idx + 2);
-    can_packet[4 + p_idx] = (uint8_t)(can_crc >> 8);
-    can_packet[5 + p_idx] = (uint8_t)(can_crc & 0xFF);
-    can_packet[6 + p_idx] = 0x03;
-    if (_transport) _transport->write(can_packet, p_idx + 7);
+        // Also forward to secondary CAN ID 1 via UART COMM_FORWARD_CAN
+        uint8_t can_payload[47];
+        can_payload[0] = 0x22; // COMM_FORWARD_CAN
+        can_payload[1] = 0x01; // CAN ID 1
+        memcpy(&can_payload[2], payload, p_idx);
+        uint8_t can_packet[55];
+        can_packet[0] = 0x02;
+        can_packet[1] = (uint8_t)(p_idx + 2);
+        memcpy(&can_packet[2], can_payload, p_idx + 2);
+        uint16_t can_crc = crc16(can_payload, p_idx + 2);
+        can_packet[4 + p_idx] = (uint8_t)(can_crc >> 8);
+        can_packet[5 + p_idx] = (uint8_t)(can_crc & 0xFF);
+        can_packet[6 + p_idx] = 0x03;
+        _transport->write(can_packet, p_idx + 7);
+    }
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        // 1. Transmit full temporary limits (Speed ERPM, Watts, Currents) via CAN multi-frame buffer
+        // 1. Transmit official COMM_SET_MCCONF_TEMP (48) via CAN multi-frame buffer to primary VESC (76) & 0
         sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, p_idx);
         if (VESC_CAN_ID_DEFAULT != 0) {
             sendVescCanBuffer(0, payload, p_idx);
         }
 
+        // 2. Hardware Native CAN Limits: Motor Phase Amps (CAN_PACKET_CONF_CURRENT_LIMITS ID 21)
         twai_message_t can_lim;
         can_lim.extd = 1;
         can_lim.identifier = (21 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC (76)
@@ -1328,6 +1349,7 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         can_lim.identifier = (21 << 8) | 1; // Also dispatch to VESC ID 1 (Dual VESC)
         twai_transmit(&can_lim, pdMS_TO_TICKS(10));
 
+        // 3. Hardware Native CAN Limits: Battery Amps (CAN_PACKET_CONF_CURRENT_LIMITS_IN ID 23)
         twai_message_t can_lim_in;
         can_lim_in.extd = 1;
         can_lim_in.identifier = (23 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS_IN -> Target VESC (76)
@@ -1347,6 +1369,27 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
         can_lim_in.identifier = (23 << 8) | 1; // Also dispatch to VESC ID 1 (Dual VESC)
         twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
+
+        // 4. Hardware Native CAN Battery Cutoffs (CAN_PACKET_CONF_BATTERY_CUT ID 29)
+        if (cutoff_start > 20.0f && cutoff_end > 20.0f) {
+            twai_message_t can_cut;
+            can_cut.extd = 1;
+            can_cut.identifier = (29 << 8) | VESC_CAN_ID_DEFAULT;
+            can_cut.data_length_code = 8;
+            int32_t cut_s = (int32_t)(cutoff_start * 1000.0f);
+            int32_t cut_e = (int32_t)(cutoff_end * 1000.0f);
+            can_cut.data[0] = (cut_s >> 24) & 0xFF;
+            can_cut.data[1] = (cut_s >> 16) & 0xFF;
+            can_cut.data[2] = (cut_s >> 8) & 0xFF;
+            can_cut.data[3] = cut_s & 0xFF;
+            can_cut.data[4] = (cut_e >> 24) & 0xFF;
+            can_cut.data[5] = (cut_e >> 16) & 0xFF;
+            can_cut.data[6] = (cut_e >> 8) & 0xFF;
+            can_cut.data[7] = cut_e & 0xFF;
+            twai_transmit(&can_cut, pdMS_TO_TICKS(10));
+            can_cut.identifier = (29 << 8) | 0;
+            twai_transmit(&can_cut, pdMS_TO_TICKS(10));
+        }
     }
 #endif
 
