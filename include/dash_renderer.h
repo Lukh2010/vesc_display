@@ -21,7 +21,7 @@ public:
     bool handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
     bool isInEditMode() const { return false; }
     uint8_t getSettingsTab() const { return _settings_tab_idx; }
-    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 3) ? tab : 0; _menu_dirty = true; }
+    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 4) ? tab : 0; _menu_dirty = true; }
 
     // Race / Dragy Timer Logic
     void updateRaceTimer(DashTelemetry &telemetry, uint32_t now);
@@ -81,7 +81,7 @@ private:
     bool            _mode_banner_active;
 
     // Menu / Settings Configurator State
-    uint8_t  _settings_tab_idx; // 0 = ECO, 1 = SPORT, 2 = RACE
+    uint8_t  _settings_tab_idx; // 0 = ECO, 1 = SPORT, 2 = RACE, 3 = VESC TOOL
     bool     _menu_dirty;
 
     // Differential Render Cache
