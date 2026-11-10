@@ -536,7 +536,10 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _anim_power += (telemetry.power_watts - _anim_power) * k_pwr;
         _anim_duty  += (telemetry.duty_cycle_pct - _anim_duty) * k;
     }
-    if (telemetry.speed_kmh == 0.0f) _anim_speed = 0.0f;
+    if (telemetry.speed_kmh == 0.0f) {
+        _anim_speed = 0.0f;
+        if (telemetry.power_watts == 0.0f) _anim_power = 0.0f;
+    }
     if (fabsf(_anim_power) < 15.0f && telemetry.speed_kmh < 0.5f) _anim_power = 0.0f;
     if (telemetry.duty_cycle_pct == 0.0f) _anim_duty = 0.0f;
 
@@ -1811,8 +1814,8 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
         VehicleModeConfig &cfg = ModeManager::instance().getConfig();
         uint8_t m = (_settings_tab_idx < 3) ? _settings_tab_idx : 1;
         for (int i = 0; i < 3; i++) {
-            if (cfg.tuned_modes[i].max_battery_amps < 95.0f) cfg.tuned_modes[i].max_battery_amps = 95.0f;
-            if (cfg.tuned_modes[i].max_phase_amps < 220.0f) cfg.tuned_modes[i].max_phase_amps = 220.0f;
+            if (cfg.tuned_modes[i].max_battery_amps < 60.0f) cfg.tuned_modes[i].max_battery_amps = 60.0f;
+            if (cfg.tuned_modes[i].max_phase_amps < 120.0f) cfg.tuned_modes[i].max_phase_amps = 120.0f;
             if (cfg.tuned_modes[i].max_pull_watts < cfg.tuned_modes[i].max_power_watts) {
                 cfg.tuned_modes[i].max_pull_watts = cfg.tuned_modes[i].max_power_watts * 1.25f;
             }
@@ -2178,6 +2181,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
         if (telemetry.race_state != 0) {
             telemetry.race_state = 0;
             telemetry.boost_active = false;
+            ModeManager::instance().setBoostActive(false);
             Buttons.setRaceState(0);
         }
         return;
@@ -2188,6 +2192,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
         if (telemetry.race_state == 1 || telemetry.race_state == 2) {
             telemetry.race_state = 0; // IDLE / ABORT
             telemetry.boost_active = false;
+            ModeManager::instance().setBoostActive(false);
             telemetry.ride_mode = telemetry.saved_ride_mode;
             ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
             Buttons.setRaceState(0);
@@ -2198,6 +2203,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
 
     if (telemetry.race_state == 1) { // 1 = COUNTDOWN (5s)
         telemetry.boost_active = true;
+        ModeManager::instance().setBoostActive(true);
         telemetry.boost_end_ms = now + 10000;
         uint32_t elapsed_cd = now - telemetry.race_countdown_start_ms;
         telemetry.race_elapsed_sec = (float)elapsed_cd / 1000.0f;
@@ -2213,6 +2219,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
         }
     } else if (telemetry.race_state == 2) { // 2 = MEASURING
         telemetry.boost_active = true;
+        ModeManager::instance().setBoostActive(true);
         telemetry.boost_end_ms = now + 10000;
         telemetry.race_elapsed_sec = (float)(now - telemetry.race_launch_start_ms) / 1000.0f;
 
@@ -2243,6 +2250,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             }
             telemetry.race_state = 3; // FINISHED
             telemetry.boost_active = false;
+            ModeManager::instance().setBoostActive(false);
             telemetry.ride_mode = telemetry.saved_ride_mode;
             ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
             Buttons.setRaceState(3);
@@ -2253,6 +2261,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
         if (telemetry.race_elapsed_sec >= 15.0f) {
             telemetry.race_state = 3; // FINISHED
             telemetry.boost_active = false;
+            ModeManager::instance().setBoostActive(false);
             telemetry.ride_mode = telemetry.saved_ride_mode;
             ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
             Buttons.setRaceState(3);

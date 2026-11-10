@@ -8,6 +8,7 @@ ModeManager& ModeManager::instance() {
 
 ModeManager::ModeManager()
     : _tuning_mode(false),
+      _boost_active(false),
       _is_locked(false),
       _ride_mode(MODE_ECO),
       _limits_dirty(false) {
@@ -55,15 +56,15 @@ void ModeManager::setFactoryDefaults() {
     _config.tuned_modes[PROFILE_MODE_SPORT].max_speed_kmh    = 55.0f;
     _config.tuned_modes[PROFILE_MODE_SPORT].max_power_watts  = 3500.0f;
     _config.tuned_modes[PROFILE_MODE_SPORT].max_pull_watts   = 5000.0f;
-    _config.tuned_modes[PROFILE_MODE_SPORT].max_battery_amps = 55.0f;
-    _config.tuned_modes[PROFILE_MODE_SPORT].max_phase_amps   = 110.0f;
+    _config.tuned_modes[PROFILE_MODE_SPORT].max_battery_amps = 60.0f;
+    _config.tuned_modes[PROFILE_MODE_SPORT].max_phase_amps   = 120.0f;
 
-    // 2: Tuned RACE (Full Performance 35kW+ Output)
+    // 2: Tuned RACE (Full Performance 85+ km/h Output)
     _config.tuned_modes[PROFILE_MODE_RACE].max_speed_kmh    = 85.0f;
     _config.tuned_modes[PROFILE_MODE_RACE].max_power_watts  = 15000.0f;
     _config.tuned_modes[PROFILE_MODE_RACE].max_pull_watts   = 25000.0f;
-    _config.tuned_modes[PROFILE_MODE_RACE].max_battery_amps = 95.0f;
-    _config.tuned_modes[PROFILE_MODE_RACE].max_phase_amps   = 220.0f;
+    _config.tuned_modes[PROFILE_MODE_RACE].max_battery_amps = 60.0f;
+    _config.tuned_modes[PROFILE_MODE_RACE].max_phase_amps   = 140.0f;
 
     // Global parameters
     _config.throttle_curve       = 0;     // 0 = Linear
@@ -75,15 +76,16 @@ void ModeManager::setFactoryDefaults() {
 void ModeManager::begin() {
     // Boot state is ALWAYS legal mode (ungetunt / gedrosselt, dot lit)
     _tuning_mode = false;
+    _boost_active = false;
     _ride_mode   = MODE_SPORT;
     _limits_dirty = false;
 
     _prefs.begin("vesc_modes", false);
-    if (!_prefs.isKey("cfg_v2")) {
+    if (!_prefs.isKey("cfg_v3")) {
         setFactoryDefaults();
         saveToNvs();
-        _prefs.putBool("cfg_v2", true);
-        Serial.println("[MODE_MGR] Initialized factory default vehicle & mode profiles (v2) in NVS.");
+        _prefs.putBool("cfg_v3", true);
+        Serial.println("[MODE_MGR] Initialized factory default vehicle & mode profiles (v3: 60A / 70A Boost) in NVS.");
     } else {
         loadFromNvs();
         Serial.println("[MODE_MGR] Loaded vehicle & mode configurations from NVS.");
@@ -199,6 +201,17 @@ void ModeManager::setTuningMode(bool enable) {
     }
 }
 
+void ModeManager::setBoostActive(bool enable) {
+    if (_boost_active != enable) {
+        _boost_active = enable;
+        _limits_dirty = true;
+        Serial.printf("[MODE_MGR] Hyper Boost switched to: %s -> Battery Limit: %.1f A\n",
+                      enable ? "ON (70A)" : "OFF (60A)",
+                      enable ? 70.0f : 60.0f);
+        applyLimitsToVesc();
+    }
+}
+
 void ModeManager::setLocked(bool locked) {
     if (_is_locked != locked) {
         _is_locked = locked;
@@ -232,13 +245,33 @@ ModeLimits ModeManager::getActiveLimits() const {
     int idx = (int)_ride_mode % PROFILE_MODE_COUNT;
     if (idx < 0) idx = 0;
 
+    ModeLimits lim;
     if (!_tuning_mode) {
         // Legal street limits (ECO 15, SPORT 20, RACE 22)
-        return _config.legal_modes[idx];
+        lim = _config.legal_modes[idx];
     } else {
         // Tuning mode unlocked limits (ECO, SPORT, RACE)
-        return _config.tuned_modes[idx];
+        lim = _config.tuned_modes[idx];
     }
+
+    if (_boost_active) {
+        // Boost requested by user: exactly 70A battery current (statt 60A)
+        lim.max_battery_amps = 70.0f;
+        if (lim.max_phase_amps < 140.0f) {
+            lim.max_phase_amps = 140.0f;
+        }
+        if (lim.max_power_watts < 4000.0f) {
+            lim.max_power_watts = 4000.0f;
+        }
+    } else if (_tuning_mode) {
+        // Normal tuned mode: 60A battery current (statt 60A -> 70A)
+        lim.max_battery_amps = 60.0f;
+        if (lim.max_phase_amps < 120.0f) {
+            lim.max_phase_amps = 120.0f;
+        }
+    }
+
+    return lim;
 }
 
 const char* ModeManager::getActiveModeName() const {

@@ -44,6 +44,9 @@ public:
     bool isTuningMode() const { return _tuning_mode; }
     void setTuningMode(bool enable);
 
+    bool isBoostActive() const { return _boost_active; }
+    void setBoostActive(bool active);
+
     bool isLocked() const { return _is_locked; }
     void setLocked(bool locked);
 
@@ -66,6 +69,7 @@ private:
     ModeManager();
     VehicleModeConfig _config;
     volatile bool _tuning_mode;
+    volatile bool _boost_active;
     volatile bool _is_locked;
     volatile RideMode _ride_mode;
     volatile bool _limits_dirty;
