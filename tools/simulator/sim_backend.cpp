@@ -50,10 +50,10 @@ static float s_sim_duty_cycle_pct = 0.0f;
 static float s_sim_rpm = 0.0f;
 static float s_sim_voltage = 76.7f;
 static float s_sim_power_watts = 0.0f;
-static float s_sim_temp_fet_rear = 60.0f;
-static float s_sim_temp_mot_rear = 75.0f;
-static float s_sim_temp_fet_front = 53.0f;
-static float s_sim_temp_mot_front = 54.0f;
+static float s_sim_temp_fet_rear = 38.0f;
+static float s_sim_temp_mot_rear = 42.0f;
+static float s_sim_temp_fet_front = 36.0f;
+static float s_sim_temp_mot_front = 39.0f;
 static float s_sim_trip_km = 0.0f;
 static float s_sim_odo_km = 206.6f;
 static float s_sim_ah_used = 0.0f;
@@ -95,6 +95,12 @@ struct SimTelemetryExport {
     uint32_t ride_time_sec;
     int32_t tuning_mode;
     int32_t is_locked;
+    int32_t race_state;
+    float race_elapsed_sec;
+    float race_split_0_22;
+    float race_split_0_50;
+    float race_split_0_70;
+    float g_force;
 };
 #pragma pack(pop)
 
@@ -116,7 +122,7 @@ static void runSimulationStep(float dt) {
     if (g_telemetry.boost_active) {
         sim_t *= 1.25f;
         if (sim_t > 100.0f) sim_t = 100.0f;
-        if (g_sim_uptime_ms > g_telemetry.boost_end_ms) {
+        if (g_telemetry.screen != SCREEN_RACE_TIMER && g_sim_uptime_ms > g_telemetry.boost_end_ms) {
             g_telemetry.boost_active = false;
             Renderer.markScreenDirty();
         }
@@ -339,10 +345,10 @@ static void runSimulationStep(float dt) {
         s_sim_temp_fet_front -= 0.08f * dt;
         s_sim_temp_mot_front -= 0.08f * dt;
     }
-    if (s_sim_temp_fet_rear < 45.0f)  s_sim_temp_fet_rear = 45.0f;
-    if (s_sim_temp_mot_rear < 58.0f)  s_sim_temp_mot_rear = 58.0f;
-    if (s_sim_temp_fet_front < 39.0f) s_sim_temp_fet_front = 39.0f;
-    if (s_sim_temp_mot_front < 54.0f) s_sim_temp_mot_front = 54.0f;
+    if (s_sim_temp_fet_rear < 35.0f)  s_sim_temp_fet_rear = 35.0f;
+    if (s_sim_temp_mot_rear < 38.0f)  s_sim_temp_mot_rear = 38.0f;
+    if (s_sim_temp_fet_front < 32.0f) s_sim_temp_fet_front = 32.0f;
+    if (s_sim_temp_mot_front < 35.0f) s_sim_temp_mot_front = 35.0f;
 
     // 7. Distance & Odometry
     float distance_delta = (s_sim_speed_kmh / 3600.0f) * dt;
@@ -466,18 +472,19 @@ void sim_init() {
     g_telemetry.screen = SCREEN_RIDE_DASH;
     g_telemetry.voltage = 76.7f;
     g_telemetry.battery_pct = 68.0f;
-    g_telemetry.temp_fet_rear  = 60.0f;
-    g_telemetry.temp_mot_rear  = 75.0f;
-    g_telemetry.temp_fet_front = 53.0f;
-    g_telemetry.temp_mot_front = 54.0f;
-    g_telemetry.temp_esc   = 60.0f;
-    g_telemetry.temp_motor = 75.0f;
+    g_telemetry.temp_fet_rear  = 38.0f;
+    g_telemetry.temp_mot_rear  = 42.0f;
+    g_telemetry.temp_fet_front = 36.0f;
+    g_telemetry.temp_mot_front = 39.0f;
+    g_telemetry.temp_esc   = 38.0f;
+    g_telemetry.temp_motor = 42.0f;
     g_telemetry.trip_km = 14.2f;
     g_telemetry.odo_km = 206.6f;
     g_telemetry.battery_profile_id = 0;
     g_telemetry.battery_health_soh = 98.4f;
     g_telemetry.est_range_km = 68.0f;
     g_telemetry.ride_mode = MODE_SPORT;
+    g_telemetry.saved_ride_mode = MODE_SPORT;
     g_telemetry.boost_active = false;
     g_telemetry.light_mode = 2; // RAINBOW
     g_telemetry.light_hue = 180;
@@ -485,6 +492,15 @@ void sim_init() {
     g_telemetry.lights_enabled = true;
     g_telemetry.hazard_active = false;
     g_telemetry.rider_tag[0] = '\0';
+    g_telemetry.race_popup_open = false;
+    g_telemetry.race_state = 0;
+    g_telemetry.race_countdown_start_ms = 0;
+    g_telemetry.race_launch_start_ms = 0;
+    g_telemetry.race_elapsed_sec = 0.0f;
+    g_telemetry.race_split_0_22 = 0.0f;
+    g_telemetry.race_split_0_50 = 0.0f;
+    g_telemetry.race_split_0_70 = 0.0f;
+    g_telemetry.race_records = Settings.getRaceRecords();
 
     // Seed realistic sine waveform curve history (from video frame 00:11)
     for (int i = 0; i < WAVE_HISTORY_LEN; i++) {
@@ -554,7 +570,10 @@ void sim_step(uint32_t step_ms) {
 
     // 1. Update buttons & touch gesture recognition
     Buttons.setActiveScreen(g_telemetry.screen);
+    Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+    Buttons.setRaceState(g_telemetry.race_state);
     Buttons.update();
+    Renderer.updateRaceTimer(g_telemetry, g_sim_uptime_ms);
 
     // PIN Lockscreen Input Processing (when locked)
     if (g_telemetry.is_locked) {
@@ -740,14 +759,33 @@ void sim_step(uint32_t step_ms) {
         } else {
             switch (nav) {
                 case NAV_SCREEN_DASH:
+                    if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                        g_telemetry.race_state = 0;
+                        g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                        ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                        g_telemetry.boost_active = false;
+                        g_telemetry.race_popup_open = false;
+                        Buttons.setRaceState(0);
+                        Buttons.setRacePopupOpen(false);
+                    }
                     g_telemetry.screen = SCREEN_RIDE_DASH;
                     Renderer.markScreenDirty();
                     Renderer.invalidateCache();
                     break;
                 case NAV_BTN1_SHORT: // Prev Screen
                     {
-                        if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
+                        if (g_telemetry.screen == SCREEN_RT_GRAPHS || g_telemetry.screen == SCREEN_RACE_TIMER) {
+                            if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                                g_telemetry.race_state = 0;
+                                g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                                ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                                g_telemetry.boost_active = false;
+                                g_telemetry.race_popup_open = false;
+                                Buttons.setRaceState(0);
+                                Buttons.setRacePopupOpen(false);
+                            }
                             g_telemetry.screen = SCREEN_RIDE_DASH;
+                            Renderer.markScreenDirty();
                         } else {
 #if ENABLE_LIGHTS_SCREEN
                             int cur = (int)g_telemetry.screen;
@@ -761,7 +799,16 @@ void sim_step(uint32_t step_ms) {
                     break;
                 case NAV_BTN2_SHORT: // Next Screen
                     {
-                        if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
+                        if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                            g_telemetry.race_state = 0;
+                            g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                            ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                            g_telemetry.boost_active = false;
+                            g_telemetry.race_popup_open = false;
+                            Buttons.setRaceState(0);
+                            Buttons.setRacePopupOpen(false);
+                            g_telemetry.screen = SCREEN_RIDE_DASH;
+                        } else if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
                             g_telemetry.screen = SCREEN_RIDE_DASH;
                         } else {
 #if ENABLE_LIGHTS_SCREEN
@@ -775,16 +822,92 @@ void sim_step(uint32_t step_ms) {
                     }
                     break;
                 case NAV_SCREEN_STATS:
+                    if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                        g_telemetry.race_state = 0;
+                        g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                        ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                        g_telemetry.boost_active = false;
+                        g_telemetry.race_popup_open = false;
+                        Buttons.setRaceState(0);
+                        Buttons.setRacePopupOpen(false);
+                    }
                     g_telemetry.screen = SCREEN_RT_GRAPHS;
                     Renderer.markScreenDirty();
                     break;
+                case NAV_SCREEN_RACE:
+                    if (g_telemetry.screen != SCREEN_RACE_TIMER) {
+                        g_telemetry.saved_ride_mode = g_telemetry.ride_mode;
+                    }
+                    g_telemetry.screen = SCREEN_RACE_TIMER;
+                    if (!isRaceThermalBlocked(g_telemetry)) {
+                        g_telemetry.ride_mode = MODE_RACE;
+                        ModeManager::instance().setRideMode(MODE_RACE);
+                        g_telemetry.boost_active = true;
+                    } else {
+                        g_telemetry.boost_active = false;
+                    }
+                    g_telemetry.boost_end_ms = g_sim_uptime_ms + 60000;
+                    Renderer.markScreenDirty();
+                    break;
+                case NAV_RACE_TOGGLE_POPUP:
+                    g_telemetry.race_popup_open = !g_telemetry.race_popup_open;
+                    Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+                    Renderer.markScreenDirty();
+                    break;
+                case NAV_RACE_CLOSE_POPUP:
+                    g_telemetry.race_popup_open = false;
+                    Buttons.setRacePopupOpen(false);
+                    Renderer.markScreenDirty();
+                    break;
+                case NAV_RACE_RESET_RECORDS:
+                    g_telemetry.race_records.reset();
+                    Settings.saveRaceRecords(g_telemetry.race_records);
+                    Renderer.markScreenDirty();
+                    break;
+                case NAV_RACE_START_LAUNCH:
+                    if (isRaceThermalBlocked(g_telemetry)) {
+                        Renderer.markScreenDirty();
+                        break;
+                    }
+                    g_telemetry.ride_mode = MODE_RACE;
+                    ModeManager::instance().setRideMode(MODE_RACE);
+                    g_telemetry.boost_active = true;
+                    g_telemetry.boost_end_ms = g_sim_uptime_ms + 60000;
+                    g_telemetry.race_state = 1; // COUNTDOWN (5s)
+                    g_telemetry.race_countdown_start_ms = g_sim_uptime_ms;
+                    g_telemetry.race_elapsed_sec = 0.0f;
+                    g_telemetry.race_split_0_22 = 0.0f;
+                    g_telemetry.race_split_0_50 = 0.0f;
+                    g_telemetry.race_split_0_70 = 0.0f;
+                    Buttons.setRaceState(1);
+                    Renderer.markScreenDirty();
+                    break;
+                case NAV_RACE_ABORT:
+                    g_telemetry.race_state = 0; // IDLE
+                    g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                    ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                    g_telemetry.boost_active = false;
+                    Buttons.setRaceState(0);
+                    Renderer.markScreenDirty();
+                    break;
                 case NAV_BTN1_LONG: // Settings Menu
+                    if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                        g_telemetry.race_state = 0;
+                        g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                        ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                        g_telemetry.boost_active = false;
+                        g_telemetry.race_popup_open = false;
+                        Buttons.setRaceState(0);
+                        Buttons.setRacePopupOpen(false);
+                    }
                     g_telemetry.screen = SCREEN_SETTINGS_MENU;
                     Renderer.markScreenDirty();
                     break;
                 case NAV_BTN2_LONG: // Trip Reset
                     g_telemetry.trip_km = 0.0f;
                     g_telemetry.stats.reset();
+                    Battery.resetTrip();
+                    Vesc.resetTripOdometer();
                     Renderer.markScreenDirty();
                     break;
                 case NAV_BOOST_TOGGLE:
@@ -1110,8 +1233,11 @@ void sim_touch_event(int is_down, int x, int y) {
     }
 
     Buttons.setActiveScreen(g_telemetry.screen);
+    Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+    Buttons.setRaceState(g_telemetry.race_state);
     Display.setSimTouch(is_down != 0, (int16_t)x, (int16_t)y);
     Buttons.update();
+    Renderer.updateRaceTimer(g_telemetry, g_sim_uptime_ms);
 
     NavAction act = g_telemetry.is_locked ? NAV_NONE : Buttons.getNavAction();
     if (act != NAV_NONE) {
@@ -1125,7 +1251,16 @@ void sim_trigger_nav(int nav_action) {
     } else {
         switch ((NavAction)nav_action) {
             case NAV_BTN1_SHORT: {
-                if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
+                if (g_telemetry.screen == SCREEN_RT_GRAPHS || g_telemetry.screen == SCREEN_RACE_TIMER) {
+                    if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                        g_telemetry.race_state = 0;
+                        g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                        ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                        g_telemetry.boost_active = false;
+                        g_telemetry.race_popup_open = false;
+                        Buttons.setRaceState(0);
+                        Buttons.setRacePopupOpen(false);
+                    }
                     g_telemetry.screen = SCREEN_RIDE_DASH;
                 } else {
 #if ENABLE_LIGHTS_SCREEN
@@ -1139,7 +1274,16 @@ void sim_trigger_nav(int nav_action) {
                 break;
             }
             case NAV_BTN2_SHORT: {
-                if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
+                if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                    g_telemetry.race_state = 0;
+                    g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                    ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                    g_telemetry.boost_active = false;
+                    g_telemetry.race_popup_open = false;
+                    Buttons.setRaceState(0);
+                    Buttons.setRacePopupOpen(false);
+                    g_telemetry.screen = SCREEN_RIDE_DASH;
+                } else if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
                     g_telemetry.screen = SCREEN_RIDE_DASH;
                 } else {
 #if ENABLE_LIGHTS_SCREEN
@@ -1153,14 +1297,97 @@ void sim_trigger_nav(int nav_action) {
                 break;
             }
             case NAV_SCREEN_STATS:
+                if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                    g_telemetry.race_state = 0;
+                    g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                    ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                    g_telemetry.boost_active = false;
+                    g_telemetry.race_popup_open = false;
+                    Buttons.setRaceState(0);
+                    Buttons.setRacePopupOpen(false);
+                }
                 g_telemetry.screen = SCREEN_RT_GRAPHS;
                 break;
+            case NAV_SCREEN_RACE:
+                if (g_telemetry.screen != SCREEN_RACE_TIMER) {
+                    g_telemetry.saved_ride_mode = g_telemetry.ride_mode;
+                }
+                g_telemetry.screen = SCREEN_RACE_TIMER;
+                if (!isRaceThermalBlocked(g_telemetry)) {
+                    g_telemetry.ride_mode = MODE_RACE;
+                    ModeManager::instance().setRideMode(MODE_RACE);
+                    g_telemetry.boost_active = true;
+                } else {
+                    g_telemetry.boost_active = false;
+                }
+                g_telemetry.boost_end_ms = g_sim_uptime_ms + 60000;
+                Renderer.markScreenDirty();
+                break;
+            case NAV_RACE_TOGGLE_POPUP:
+                g_telemetry.race_popup_open = !g_telemetry.race_popup_open;
+                Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+                Renderer.markScreenDirty();
+                break;
+            case NAV_RACE_CLOSE_POPUP:
+                g_telemetry.race_popup_open = false;
+                Buttons.setRacePopupOpen(false);
+                Renderer.markScreenDirty();
+                break;
+            case NAV_RACE_RESET_RECORDS:
+                g_telemetry.race_records.reset();
+                Settings.saveRaceRecords(g_telemetry.race_records);
+                Renderer.markScreenDirty();
+                break;
+            case NAV_RACE_START_LAUNCH:
+                if (isRaceThermalBlocked(g_telemetry)) {
+                    Renderer.markScreenDirty();
+                    break;
+                }
+                g_telemetry.ride_mode = MODE_RACE;
+                ModeManager::instance().setRideMode(MODE_RACE);
+                g_telemetry.boost_active = true;
+                g_telemetry.boost_end_ms = g_sim_uptime_ms + 60000;
+                g_telemetry.race_state = 1;
+                g_telemetry.race_countdown_start_ms = g_sim_uptime_ms;
+                g_telemetry.race_elapsed_sec = 0.0f;
+                g_telemetry.race_split_0_22 = 0.0f;
+                g_telemetry.race_split_0_50 = 0.0f;
+                g_telemetry.race_split_0_70 = 0.0f;
+                Buttons.setRaceState(1);
+                Renderer.markScreenDirty();
+                break;
+            case NAV_RACE_ABORT:
+                g_telemetry.race_state = 0;
+                g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                g_telemetry.boost_active = false;
+                Buttons.setRaceState(0);
+                Renderer.markScreenDirty();
+                break;
             case NAV_SCREEN_DASH:
+                if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                    g_telemetry.race_state = 0;
+                    g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                    ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                    g_telemetry.boost_active = false;
+                    g_telemetry.race_popup_open = false;
+                    Buttons.setRaceState(0);
+                    Buttons.setRacePopupOpen(false);
+                }
                 g_telemetry.screen = SCREEN_RIDE_DASH;
                 Renderer.markScreenDirty();
                 Renderer.invalidateCache();
                 break;
             case NAV_BTN1_LONG:
+                if (g_telemetry.screen == SCREEN_RACE_TIMER) {
+                    g_telemetry.race_state = 0;
+                    g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
+                    ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
+                    g_telemetry.boost_active = false;
+                    g_telemetry.race_popup_open = false;
+                    Buttons.setRaceState(0);
+                    Buttons.setRacePopupOpen(false);
+                }
                 g_telemetry.screen = SCREEN_SETTINGS_MENU;
                 break;
             case NAV_BTN2_LONG:
@@ -1172,6 +1399,7 @@ void sim_trigger_nav(int nav_action) {
                 g_telemetry.trip_km = 0.0f;
                 g_telemetry.stats.reset();
                 Battery.resetTrip();
+                Vesc.resetTripOdometer();
                 Renderer.markScreenDirty();
                 break;
             case NAV_BOOST_TOGGLE:
@@ -1352,6 +1580,12 @@ void sim_get_telemetry(SimTelemetryExport *out) {
     out->ride_time_sec = g_telemetry.stats.ride_time_sec;
     out->tuning_mode = g_telemetry.tuning_mode ? 1 : 0;
     out->is_locked = g_telemetry.is_locked ? 1 : 0;
+    out->race_state = (int32_t)g_telemetry.race_state;
+    out->race_elapsed_sec = g_telemetry.race_elapsed_sec;
+    out->race_split_0_22 = g_telemetry.race_split_0_22;
+    out->race_split_0_50 = g_telemetry.race_split_0_50;
+    out->race_split_0_70 = g_telemetry.race_split_0_70;
+    out->g_force = g_telemetry.g_force;
 }
 
 void sim_get_config_json(char *out_buf, int max_len) {

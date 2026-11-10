@@ -79,8 +79,12 @@
 #define PIN_BTN_BOOT    0    // Onboard BOOT button (GPIO 0)
 
 // ==============================================================================
-// VESC Controller Interfaces (Flipsky / VESC on Waveshare 4.3" Pins)
+// VESC Controller Interfaces (Spintend Ubox / Flipsky / VESC on Waveshare 4.3" Pins)
 // ==============================================================================
+// 1 = Live VESC CAN Bus (onboard TJA1051, GPIO 20 TX / GPIO 19 RX, 500k baud)
+// 0 = Live VESC UART (GPIO 43 TX / GPIO 44 RX, 115200 baud)
+#define VESC_USE_CAN_BUS    1
+
 // Option 1: VESC UART Interface (Serial1)
 // Connect VESC TX -> ESP32 RX (GPIO 44)
 // Connect VESC RX -> ESP32 TX (GPIO 43)

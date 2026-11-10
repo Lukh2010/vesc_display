@@ -122,13 +122,19 @@ bool DisplayDriver::initIOExpander() {
     delay(30);
 
     // 3. Release Reset: Pull TP_RST, LCD_BL, LCD_RST, SD_CS HIGH (0xDF = 0b11011111)
+    // If CAN bus is enabled, also set EXIO_USB_SEL (Bit 5) to switch FSUSB42 multiplexer to TJA1051 CAN transceiver (0xFF)
+    uint8_t ch422_val = 0xDF;
+#if VESC_USE_CAN_BUS
+    ch422_val |= EXIO_USB_SEL; // 0xFF (USB_SEL HIGH -> CAN transceiver active)
+#endif
     Wire.beginTransmission(CH422G_I2C_ADDR);
     Wire.write(0x01);
     Wire.endTransmission();
     Wire.beginTransmission(CH422G_I2C_DATA);
-    Wire.write(0xDF);
+    Wire.write(ch422_val);
     uint8_t err2 = Wire.endTransmission();
-    Serial.printf("[DISPLAY] CH422G data write status: %d (0xDF Backlight ON)\n", err2);
+    Serial.printf("[DISPLAY] CH422G data write status: %d (0x%02X Backlight ON%s)\n", 
+                  err2, ch422_val, (ch422_val & EXIO_USB_SEL) ? ", CAN MUX ACTIVE" : "");
     delay(120);
 
     return (err1 == 0 && err2 == 0);
@@ -165,12 +171,13 @@ void DisplayDriver::setBrightness(uint8_t brightness) {
     Wire.write(0x01);
     Wire.endTransmission();
 
+    uint8_t val = (brightness > 20) ? 0xDF : 0xDB;
+#if VESC_USE_CAN_BUS
+    val |= EXIO_USB_SEL; // Preserve Bit 5 (0x20) so CAN transceiver multiplexer stays connected!
+#endif
+
     Wire.beginTransmission(CH422G_I2C_DATA);
-    if (brightness > 20) {
-        Wire.write(0xDF); // Backlight ON (Bit 2 HIGH)
-    } else {
-        Wire.write(0xDB); // Backlight OFF (Bit 2 LOW)
-    }
+    Wire.write(val);
     Wire.endTransmission();
 }
 

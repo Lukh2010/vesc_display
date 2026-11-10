@@ -155,6 +155,10 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
         // Subtract from remaining Wh in current pack
         _remaining_wh -= delta_wh;
         if (_remaining_wh < 0.0f) _remaining_wh = 0.0f;
+    } else if (delta_wh < 0.0f) {
+        // Regenerative braking: add energy back capped at learned capacity
+        _remaining_wh -= delta_wh;
+        if (_remaining_wh > prof.learned_wh) _remaining_wh = prof.learned_wh;
     }
 
     // 3. Resting OCV Detection: resting if current is near zero (|I| < 0.8A)

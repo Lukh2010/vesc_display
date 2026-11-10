@@ -70,6 +70,12 @@ class SimTelemetry(ctypes.Structure):
         ("ride_time_sec", ctypes.c_uint32),
         ("tuning_mode", ctypes.c_int32),
         ("is_locked", ctypes.c_int32),
+        ("race_state", ctypes.c_int32),
+        ("race_elapsed_sec", ctypes.c_float),
+        ("race_split_0_22", ctypes.c_float),
+        ("race_split_0_50", ctypes.c_float),
+        ("race_split_0_70", ctypes.c_float),
+        ("g_force", ctypes.c_float),
     ]
 
 sim_lib.sim_init.restype = None
@@ -130,11 +136,20 @@ NAV_TUNING_ENABLE = 12
 NAV_TUNING_DISABLE = 13
 NAV_SCREEN_DASH = 14
 NAV_MENU_BACK = 15
+NAV_SCREEN_RACE = 16
+NAV_RACE_TOGGLE_POPUP = 17
+NAV_RACE_CLOSE_POPUP = 18
+NAV_RACE_RESET_RECORDS = 19
+NAV_RACE_START_LAUNCH = 20
+NAV_RACE_ABORT = 21
 
 SCREEN_RIDE_DASH = 0
 SCREEN_LIGHTS = 1
 SCREEN_RT_GRAPHS = 2
 SCREEN_SETTINGS_MENU = 3
+SCREEN_VESC_BRIDGE = 4
+SCREEN_WIFI_BRIDGE = 5
+SCREEN_RACE_TIMER = 6
 
 # Initialize backend
 sim_lib.sim_init()
@@ -341,6 +356,8 @@ HTML_PAGE = """<!DOCTYPE html>
       fetch('/api/nav?action=10');
     } else if (e.key === 't' || e.key === 'T') {
       fetch('/api/nav?action=11');
+    } else if (e.key === 'r' || e.key === 'R') {
+      fetch('/api/nav?action=16');
     } else if (e.key === 'x' || e.key === 'X') {
       fetch('/api/tuning?toggle=1');
     }
@@ -521,6 +538,7 @@ class WebDemoHandler(BaseHTTPRequestHandler):
                     "avg_speed_kmh": current_telemetry.avg_speed_kmh,
                     "ride_time_sec": current_telemetry.ride_time_sec,
                     "tuning_mode": bool(current_telemetry.tuning_mode),
+                    "g_force": current_telemetry.g_force,
                 }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -606,6 +624,7 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
                     "phase_current": current_telemetry.phase_amps,
                     "tuning_mode": bool(current_telemetry.tuning_mode),
                     "ride_mode": current_telemetry.ride_mode,
+                    "g_force": current_telemetry.g_force,
                 }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -727,6 +746,8 @@ class DesktopDemoApp:
         self.root.bind("<H>", lambda e: self.toggle_hazard())
         self.root.bind("<t>", lambda e: self.trigger_nav(NAV_SCREEN_STATS))
         self.root.bind("<T>", lambda e: self.trigger_nav(NAV_SCREEN_STATS))
+        self.root.bind("<r>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
+        self.root.bind("<R>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
         self.root.bind("<Escape>", lambda e: self.on_esc_press())
 
         self.tk_img = ImageTk.PhotoImage(initial_image)
@@ -756,7 +777,7 @@ class DesktopDemoApp:
 
     def on_digit_press(self, pct):
         # Ignore number keys when locked, entering PIN, or in Settings
-        if current_telemetry.is_locked or current_telemetry.screen in (SCREEN_SETTINGS_MENU, SCREEN_PIN_LOCK):
+        if current_telemetry.is_locked or current_telemetry.screen == SCREEN_SETTINGS_MENU:
             return
         self.set_throttle(pct)
 
@@ -766,7 +787,7 @@ class DesktopDemoApp:
                 self.trigger_nav(NAV_BTN1_SHORT)
             else:
                 self.trigger_nav(NAV_BTN2_SHORT)
-        elif not current_telemetry.is_locked and current_telemetry.screen != SCREEN_PIN_LOCK:
+        elif not current_telemetry.is_locked:
             self.adjust_throttle(5.0 if direction > 0 else -5.0)
 
     def on_enter_press(self):

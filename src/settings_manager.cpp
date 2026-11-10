@@ -22,6 +22,7 @@ void SettingsManager::loadDefaults() {
     _settings.throttle_adc_channel   = 0; // Default to ADC1 (standard VESC throttle)
     _settings.pin_lock_enabled       = true; // Handystyle 4-digit PIN lock on startup
     strncpy(_settings.pin_code, "1234", sizeof(_settings.pin_code));
+    _race_records.reset();
 }
 
 void SettingsManager::begin() {
@@ -54,6 +55,10 @@ void SettingsManager::begin() {
             strncpy(_settings.pin_code, "1234", sizeof(_settings.pin_code));
         }
 
+        _race_records.best_0_22_sec = _prefs.getFloat("rc_best22", 0.0f);
+        _race_records.best_0_50_sec = _prefs.getFloat("rc_best50", 0.0f);
+        _race_records.best_0_70_sec = _prefs.getFloat("rc_best70", 0.0f);
+
         // One-time automatic migration: fix boards that had adc_ch set to 1 by previous buggy default
         if (!_prefs.getBool("adc_v2_fixed", false)) {
             _settings.throttle_adc_channel = 0; // Force default to ADC1
@@ -82,6 +87,21 @@ void SettingsManager::save() {
     _prefs.putUChar("adc_ch", _settings.throttle_adc_channel);
     _prefs.putBool("pin_en", _settings.pin_lock_enabled);
     _prefs.putString("pin_code", _settings.pin_code);
+    _prefs.putFloat("rc_best22", _race_records.best_0_22_sec);
+    _prefs.putFloat("rc_best50", _race_records.best_0_50_sec);
+    _prefs.putFloat("rc_best70", _race_records.best_0_70_sec);
+}
+
+void SettingsManager::saveRaceRecords(const RaceRecords &records) {
+    _race_records = records;
+    _prefs.putFloat("rc_best22", _race_records.best_0_22_sec);
+    _prefs.putFloat("rc_best50", _race_records.best_0_50_sec);
+    _prefs.putFloat("rc_best70", _race_records.best_0_70_sec);
+}
+
+void SettingsManager::resetRaceRecords() {
+    _race_records.reset();
+    saveRaceRecords(_race_records);
 }
 
 void SettingsManager::resetToDefaults() {

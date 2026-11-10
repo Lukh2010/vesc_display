@@ -21,6 +21,9 @@ public:
     bool handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
     bool isInEditMode() const { return _menu_edit_mode; }
 
+    // Race / Dragy Timer Logic
+    void updateRaceTimer(DashTelemetry &telemetry, uint32_t now);
+
 private:
     DisplayDriver *_display;
     LovyanGFX     *_canvas;
@@ -57,6 +60,11 @@ private:
     // Screen 5: Transparent Wi-Fi TCP <-> UART Bridge for VESC Tool
     void initWifiBridgeScreen(const DashTelemetry &telemetry);
     void renderWifiBridgeScreen(const DashTelemetry &telemetry);
+
+    // Screen 6: "RACE" Dragy / Launch Acceleration Timer
+    void initRaceTimerScreen(const DashTelemetry &telemetry);
+    void renderRaceTimerScreen(const DashTelemetry &telemetry);
+    void drawRaceRecordsModal(const DashTelemetry &telemetry);
 
     // PIN-Lockscreen & VESC Alarm Banner (Requirements 1 & 7)
     void renderPinLockScreen(const DashTelemetry &telemetry);
@@ -97,6 +105,7 @@ private:
         int est_range;
         int temp_motor;
         int temp_esc;
+        int g_force_x10;
         int trip_x10;
         int odo;
         int uptime;
@@ -137,6 +146,7 @@ private:
             est_range = -1;
             temp_motor = -999;
             temp_esc = -999;
+            g_force_x10 = -999;
             trip_x10 = -1;
             odo = -1;
             uptime = -1;

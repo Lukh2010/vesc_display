@@ -276,6 +276,15 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             renderWifiBridgeScreen(telemetry);
             break;
 
+        case SCREEN_RACE_TIMER:
+            if (_screen_dirty) {
+                _canvas->fillScreen(COLOR_BG);
+                initRaceTimerScreen(telemetry);
+                _screen_dirty = false;
+            }
+            renderRaceTimerScreen(telemetry);
+            break;
+
         default:
             break;
     }
@@ -318,6 +327,35 @@ static void drawHeroDigitText(LovyanGFX *canvas, const char *str, int x, int y, 
     canvas->drawString(str, x + 2, y);
     canvas->drawString(str, x, y + 1);
     canvas->drawString(str, x + 1, y + 1);
+}
+
+static void drawGForceBadge(LovyanGFX *canvas, float g_force, int cx, int cy, int r) {
+    canvas->fillCircle(cx, cy, r, COLOR_BG);
+    uint16_t ringCol = COLOR_BORDER;
+    uint16_t textCol = COLOR_WHITE;
+    if (g_force > 0.15f) {
+        ringCol = COLOR_GREEN;
+        textCol = COLOR_GREEN;
+    } else if (g_force < -0.15f) {
+        ringCol = COLOR_RED;
+        textCol = COLOR_RED;
+    }
+    canvas->fillCircle(cx, cy, r - 2, COLOR_SURFACE);
+    canvas->drawCircle(cx, cy, r, ringCol);
+    canvas->drawCircle(cx, cy, r - 1, ringCol);
+
+    canvas->setFont(&fonts::Font2);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(textdatum_t::middle_center);
+    canvas->setTextColor(textCol, COLOR_SURFACE);
+    char gBuf[12];
+    snprintf(gBuf, sizeof(gBuf), "%+.1f", g_force);
+    canvas->drawString(gBuf, cx, cy - 5);
+
+    canvas->setFont(&fonts::Font0);
+    canvas->setTextSize(1);
+    canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    canvas->drawString("G-FORCE", cx, cy + 13);
 }
 
 static void drawThermalsWithDegrees(LovyanGFX *canvas, const char *prefix, float fet, float mot, int x, int y, bool centered = false) {
@@ -427,10 +465,11 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     // Static battery track bar
     _canvas->fillRoundRect(445, 218, 320, 14, 7, COLOR_TRACK_TEAL);
 
-    // Static label "RESTREICHWEITE"
+    // Static label "RESTREICHWEITE" & "TRIP"
     _canvas->setFont(&fonts::Font2);
     _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
     _canvas->drawString("RESTREICHWEITE", 445, 298);
+    _canvas->drawString("TRIP", 615, 298);
 }
 
 void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
@@ -596,7 +635,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     }
 
     // 5. Right Column: Hero Power Readout (Only redrawn when watts change)
-    int cur_watts = (int)(telemetry.power_watts + 0.5f);
+    int cur_watts = (int)roundf(telemetry.power_watts);
     if (!_hyper_inited || cur_watts != _cache.watts || telemetry.boost_active != _cache.boost_active) {
         _cache.watts = cur_watts;
         if (telemetry.fault_code == 0) {
@@ -742,9 +781,9 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     int cur_range = (int)(telemetry.est_range_km + 0.5f);
     if (!_hyper_inited || cur_range != _cache.est_range) {
         _cache.est_range = cur_range;
-        _canvas->fillRect(445, 322, 200, 36, COLOR_BG);
+        _canvas->fillRect(445, 322, 160, 36, COLOR_BG);
         _canvas->setFont(&fonts::FreeSansBold18pt7b);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
         _canvas->setTextDatum(textdatum_t::top_left);
         char rngBuf[16];
         if (telemetry.est_range_km < 0.0f) {
@@ -753,6 +792,19 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             snprintf(rngBuf, sizeof(rngBuf), "%d km", cur_range);
         }
         _canvas->drawString(rngBuf, 445, 322);
+    }
+
+    // 8b. Trip Distance Readout (Above [ MODE ] button at x=615..765, y=298..360)
+    int cur_trip_x10 = (int)roundf(telemetry.trip_km * 10.0f);
+    if (!_hyper_inited || cur_trip_x10 != _cache.trip_x10) {
+        _cache.trip_x10 = cur_trip_x10;
+        _canvas->fillRect(615, 322, 150, 36, COLOR_BG);
+        _canvas->setFont(&fonts::FreeSansBold18pt7b);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        char tripBuf[16];
+        snprintf(tripBuf, sizeof(tripBuf), "%.1f km", telemetry.trip_km);
+        _canvas->drawString(tripBuf, 615, 322);
     }
 
     // 9. Right Column: Bottom Touch Action Buttons (Only redrawn when state changes)
@@ -789,6 +841,13 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->setTextColor(btnCol, COLOR_BG);
         }
         _canvas->drawCenterString(btnLabel, 690, 404, &fonts::Font4);
+    }
+
+    // 9. Bottom Left: G-Force Badge
+    int cur_g10 = (int)roundf(telemetry.g_force * 10.0f);
+    if (!_hyper_inited || cur_g10 != _cache.g_force_x10) {
+        _cache.g_force_x10 = cur_g10;
+        drawGForceBadge(_canvas, telemetry.g_force, 52, 416, 26);
     }
 
     _hyper_inited = true;
@@ -926,7 +985,7 @@ void DashboardRenderer::renderLightsScreen(const DashTelemetry &telemetry) {
 void DashboardRenderer::initRtGraphsScreen(const DashTelemetry &telemetry) {
     _canvas->fillScreen(COLOR_BG);
 
-    // Top Bar: Back Button [< DASH], Center Title, Reset Trip Button
+    // Top Bar: Back Button [< DASH], [ RACE ] Button, Center Title, Reset Trip Button
     _canvas->fillRoundRect(20, 12, 110, 36, 18, 0x18C3);
     _canvas->drawRoundRect(20, 12, 110, 36, 18, 0x39C7);
     _canvas->setTextColor(COLOR_WHITE, 0x18C3);
@@ -934,9 +993,16 @@ void DashboardRenderer::initRtGraphsScreen(const DashTelemetry &telemetry) {
     _canvas->setFont(&fonts::Font2);
     _canvas->drawString("< DASH", 75, 30);
 
+    // Styled [ RACE ] touch button
+    _canvas->fillRoundRect(140, 12, 100, 36, 18, 0x9000);
+    _canvas->drawRoundRect(140, 12, 100, 36, 18, COLOR_RED);
+    _canvas->setTextColor(COLOR_WHITE, 0x9000);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->drawString("RACE", 190, 30);
+
     _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
     _canvas->setFont(&fonts::Font4);
-    _canvas->drawString("FAHRDATEN & STATISTIK", 400, 30);
+    _canvas->drawString("FAHRDATEN & STATISTIK", 430, 30);
 
     _canvas->fillRoundRect(640, 12, 140, 36, 18, 0x18C3);
     _canvas->drawRoundRect(640, 12, 140, 36, 18, 0x39C7);
@@ -2211,6 +2277,8 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
             } else if (_menu_root_idx == 4 && _menu_sub_idx == 3) {
                 telemetry.trip_km = 0.0f;
                 telemetry.stats.reset();
+                Battery.resetTrip();
+                Vesc.resetTripOdometer();
                 _menu_dirty = true;
             } else if (_menu_root_idx == 4 && _menu_sub_idx == 4) {
                 Settings.resetToDefaults();
@@ -2622,4 +2690,378 @@ void DashboardRenderer::renderWifiBridgeScreen(const DashTelemetry &telemetry) {
             _canvas->setTextPadding(0);
         }
     }
+}
+
+// ==============================================================================
+// SCREEN 6: "RACE" DRAGY / LAUNCH ACCELERATION TIMER (800x480)
+// ==============================================================================
+void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) {
+    if (telemetry.screen != SCREEN_RACE_TIMER) {
+        if (telemetry.race_state != 0) {
+            telemetry.race_state = 0;
+            telemetry.boost_active = false;
+            Buttons.setRaceState(0);
+        }
+        return;
+    }
+
+    // Continuous Thermal Protection: Abort launch if temperatures exceed 65 °C during run
+    if (isRaceThermalBlocked(telemetry)) {
+        if (telemetry.race_state == 1 || telemetry.race_state == 2) {
+            telemetry.race_state = 0; // IDLE / ABORT
+            telemetry.boost_active = false;
+            telemetry.ride_mode = telemetry.saved_ride_mode;
+            ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+            Buttons.setRaceState(0);
+            markScreenDirty();
+            return;
+        }
+    }
+
+    if (telemetry.race_state == 1) { // 1 = COUNTDOWN (5s)
+        telemetry.boost_active = true;
+        telemetry.boost_end_ms = now + 10000;
+        uint32_t elapsed_cd = now - telemetry.race_countdown_start_ms;
+        telemetry.race_elapsed_sec = (float)elapsed_cd / 1000.0f;
+        if (elapsed_cd >= 5000) {
+            telemetry.race_state = 2; // 2 = MEASURING
+            telemetry.race_launch_start_ms = now;
+            telemetry.race_elapsed_sec = 0.0f;
+            telemetry.race_split_0_22 = 0.0f;
+            telemetry.race_split_0_50 = 0.0f;
+            telemetry.race_split_0_70 = 0.0f;
+            Buttons.setRaceState(2);
+            markScreenDirty();
+        }
+    } else if (telemetry.race_state == 2) { // 2 = MEASURING
+        telemetry.boost_active = true;
+        telemetry.boost_end_ms = now + 10000;
+        telemetry.race_elapsed_sec = (float)(now - telemetry.race_launch_start_ms) / 1000.0f;
+
+        // Check 0 - 22 km/h split
+        if (telemetry.race_split_0_22 <= 0.0f && telemetry.speed_kmh >= 22.0f) {
+            telemetry.race_split_0_22 = (telemetry.race_elapsed_sec > 0.01f) ? telemetry.race_elapsed_sec : 0.01f;
+            if (telemetry.race_records.best_0_22_sec <= 0.01f || telemetry.race_split_0_22 < telemetry.race_records.best_0_22_sec) {
+                telemetry.race_records.best_0_22_sec = telemetry.race_split_0_22;
+                Settings.saveRaceRecords(telemetry.race_records);
+            }
+        }
+
+        // Check 0 - 50 km/h split
+        if (telemetry.race_split_0_50 <= 0.0f && telemetry.speed_kmh >= 50.0f) {
+            telemetry.race_split_0_50 = (telemetry.race_elapsed_sec > 0.01f) ? telemetry.race_elapsed_sec : 0.01f;
+            if (telemetry.race_records.best_0_50_sec <= 0.01f || telemetry.race_split_0_50 < telemetry.race_records.best_0_50_sec) {
+                telemetry.race_records.best_0_50_sec = telemetry.race_split_0_50;
+                Settings.saveRaceRecords(telemetry.race_records);
+            }
+        }
+
+        // Check 0 - 70 km/h split
+        if (telemetry.race_split_0_70 <= 0.0f && telemetry.speed_kmh >= 70.0f) {
+            telemetry.race_split_0_70 = (telemetry.race_elapsed_sec > 0.01f) ? telemetry.race_elapsed_sec : 0.01f;
+            if (telemetry.race_records.best_0_70_sec <= 0.01f || telemetry.race_split_0_70 < telemetry.race_records.best_0_70_sec) {
+                telemetry.race_records.best_0_70_sec = telemetry.race_split_0_70;
+                Settings.saveRaceRecords(telemetry.race_records);
+            }
+            telemetry.race_state = 3; // FINISHED
+            telemetry.boost_active = false;
+            telemetry.ride_mode = telemetry.saved_ride_mode;
+            ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+            Buttons.setRaceState(3);
+            markScreenDirty();
+        }
+
+        // 15-second measurement timeout cap (automatic race end)
+        if (telemetry.race_elapsed_sec >= 15.0f) {
+            telemetry.race_state = 3; // FINISHED
+            telemetry.boost_active = false;
+            telemetry.ride_mode = telemetry.saved_ride_mode;
+            ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+            Buttons.setRaceState(3);
+            markScreenDirty();
+        }
+    }
+}
+
+void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
+    _canvas->fillScreen(COLOR_BG);
+    _cache.invalidate();
+
+    // Top-Left [< DASH] Button (x=20, y=12, w=110, h=36, r=18)
+    _canvas->fillRoundRect(20, 12, 110, 36, 18, COLOR_SURFACE);
+    _canvas->drawRoundRect(20, 12, 110, 36, 18, COLOR_BORDER);
+    _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->drawString("< DASH", 75, 30);
+
+    // Top-Right [ BESTZEITEN ] Button (x=620, y=12, w=160, h=36, r=18)
+    _canvas->fillRoundRect(620, 12, 160, 36, 18, COLOR_SURFACE);
+    _canvas->drawRoundRect(620, 12, 160, 36, 18, COLOR_BORDER);
+    _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->drawString("BESTZEITEN", 700, 30);
+
+    // Speedometer Center Arc Gauge (280 degrees sweep: 130° to 410°)
+    int cx = 310, cy = 255;
+    int r_in = 130, r_out = 158;
+    float mid_r = 144.0f;
+    float deg2rad = 3.14159265f / 180.0f;
+    _canvas->fillArc(cx, cy, r_in, r_out, 130.0f, 410.0f, COLOR_SURFACE_LIGHT);
+    int s_cap_x = cx + (int)roundf(cosf(130.0f * deg2rad) * mid_r);
+    int s_cap_y = cy + (int)roundf(sinf(130.0f * deg2rad) * mid_r);
+    int e_cap_x = cx + (int)roundf(cosf(410.0f * deg2rad) * mid_r);
+    int e_cap_y = cy + (int)roundf(sinf(410.0f * deg2rad) * mid_r);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 14, COLOR_SURFACE_LIGHT);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 14, COLOR_SURFACE_LIGHT);
+
+    // Static label "km/h" under hero speed
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextSize(1);
+    _canvas->setTextDatum(textdatum_t::top_center);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
+    _canvas->drawString("km/h", cx, cy + 30);
+
+    // Corner Card: Clean Run Splits Card (x=530, y=70, w=250, h=390)
+    drawCard(530, 70, 250, 390, COLOR_SURFACE, COLOR_BORDER);
+
+    // Clean, spaced-out split rows with subtle dividers (no "RUN SPLITS" banner)
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->drawString("0 - 22 km/h", 548, 100);
+    _canvas->drawFastHLine(548, 185, 214, COLOR_SURFACE_LIGHT);
+
+    _canvas->drawString("0 - 50 km/h", 548, 205);
+    _canvas->drawFastHLine(548, 290, 214, COLOR_SURFACE_LIGHT);
+
+    _canvas->drawString("0 - 70 km/h", 548, 310);
+}
+
+void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
+    int cx = 310, cy = 255;
+    int r_in = 130, r_out = 158;
+    float mid_r = 144.0f;
+    float deg2rad = 3.14159265f / 180.0f;
+
+    // 1. Top-Center Timer Display
+    _canvas->fillRect(145, 10, 465, 46, COLOR_BG);
+    if (telemetry.race_state == 2 || telemetry.race_state == 3) {
+        char timeBuf[16];
+        snprintf(timeBuf, sizeof(timeBuf), "%.2f", telemetry.race_elapsed_sec);
+        int nw = _canvas->textWidth(timeBuf, &fonts::Font6);
+        int sw = _canvas->textWidth("s", &fonts::Font4);
+        int totalW = nw + 6 + sw;
+        int startX = 375 - totalW / 2;
+
+        _canvas->setFont(&fonts::Font6);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+        _canvas->setTextDatum(textdatum_t::middle_left);
+        _canvas->drawString(timeBuf, startX, 30);
+
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
+        _canvas->setTextDatum(textdatum_t::bottom_left);
+        _canvas->drawString("s", startX + nw + 6, 42);
+    } else if (telemetry.race_state == 1) {
+        int rem_sec = 5 - (int)telemetry.race_elapsed_sec;
+        if (rem_sec < 1) rem_sec = 1;
+        if (rem_sec > 5) rem_sec = 5;
+        char cdTitle[24];
+        snprintf(cdTitle, sizeof(cdTitle), "LAUNCH IN %d s", rem_sec);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(COLOR_AMBER, COLOR_BG);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->drawString(cdTitle, 375, 30);
+    } else {
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_BG);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->drawString("LAUNCH CONTROL", 375, 30);
+    }
+
+    // 2. Speedometer Arc
+    float spd = telemetry.speed_kmh;
+    if (spd < 0.8f) spd = 0.0f;
+    float frac = spd / 100.0f;
+    if (frac > 1.0f) frac = 1.0f;
+    float target_angle = 130.0f + (frac * 280.0f);
+    if (frac <= 0.005f) target_angle = 130.0f;
+
+    uint16_t arcCol = COLOR_WHITE;
+
+    // Redraw arc track and active fill
+    _canvas->fillArc(cx, cy, r_in, r_out, 130.0f, 410.0f, COLOR_SURFACE_LIGHT);
+    int s_cap_x = cx + (int)roundf(cosf(130.0f * deg2rad) * mid_r);
+    int s_cap_y = cy + (int)roundf(sinf(130.0f * deg2rad) * mid_r);
+    int e_cap_x = cx + (int)roundf(cosf(410.0f * deg2rad) * mid_r);
+    int e_cap_y = cy + (int)roundf(sinf(410.0f * deg2rad) * mid_r);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 14, COLOR_SURFACE_LIGHT);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 14, COLOR_SURFACE_LIGHT);
+    if (target_angle > 130.0f) {
+        _canvas->fillArc(cx, cy, r_in, r_out, 130.0f, target_angle, arcCol);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
+        int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
+        int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
+        _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
+        _canvas->fillCircle(tip_x, tip_y, 5, COLOR_WHITE);
+    }
+
+    // Digital Speed in Center
+    _canvas->fillRect(cx - 95, cy - 80, 190, 75, COLOR_BG);
+    char spdBuf[16];
+    snprintf(spdBuf, sizeof(spdBuf), "%.0f", spd);
+    drawHeroDigitText(_canvas, spdBuf, cx, cy - 40, textdatum_t::middle_center, COLOR_WHITE, COLOR_BG);
+
+    // 3. Center State Action / Countdown / Status
+    _canvas->fillRect(cx - 105, cy + 65, 210, 62, COLOR_BG);
+    if (telemetry.race_state == 0) { // IDLE / READY
+        bool overheat = isRaceThermalBlocked(telemetry);
+        if (overheat) {
+            _canvas->fillRoundRect(cx - 95, cy + 72, 190, 42, 21, 0x3000);
+            _canvas->drawRoundRect(cx - 95, cy + 72, 190, 42, 21, COLOR_AMBER);
+            _canvas->setTextColor(COLOR_AMBER, 0x3000);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("TEMP > 65C", cx, cy + 93);
+        } else {
+            _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_SURFACE);
+            _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_BORDER);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("START LAUNCH", cx, cy + 93);
+        }
+    } else if (telemetry.race_state == 1) { // COUNTDOWN (5s)
+        int rem_sec = 5 - (int)telemetry.race_elapsed_sec;
+        if (rem_sec < 1) rem_sec = 1;
+        if (rem_sec > 5) rem_sec = 5;
+        char cdBuf[16];
+        if (rem_sec == 1) {
+            snprintf(cdBuf, sizeof(cdBuf), "1 ... GO!");
+        } else {
+            snprintf(cdBuf, sizeof(cdBuf), "%d ...", rem_sec);
+        }
+
+        _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, 0x3000);
+        _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_RED);
+        _canvas->setTextColor(COLOR_WHITE, 0x3000);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->drawString(cdBuf, cx, cy + 93);
+    } else if (telemetry.race_state == 2) { // MEASURING
+        _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, 0x3000);
+        _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_RED);
+        _canvas->setTextColor(COLOR_WHITE, 0x3000);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->drawString("STOP / ABORT", cx, cy + 93);
+    } else { // FINISHED
+        _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_SURFACE);
+        _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_WHITE);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->drawString("NEUER LAUNCH", cx, cy + 93);
+    }
+
+    // 4. Update Corner Card Split Values (Clean time only during run; *PB* only on finished run)
+    auto drawSplit = [&](int y, float split_val, float best_val, bool is_active) {
+        _canvas->fillRect(548, y, 215, 36, COLOR_SURFACE);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        char sBuf[32];
+        if (split_val > 0.0f) {
+            bool is_best = (telemetry.race_state == 3 && best_val > 0.0f && split_val <= best_val + 0.001f);
+            snprintf(sBuf, sizeof(sBuf), "%.2f s%s", split_val, is_best ? " *PB*" : "");
+            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+            _canvas->drawString(sBuf, 548, y);
+        } else if (telemetry.race_state == 2 && is_active) {
+            snprintf(sBuf, sizeof(sBuf), "%.2f s", telemetry.race_elapsed_sec);
+            _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
+            _canvas->drawString(sBuf, 548, y);
+        } else {
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->drawString("--.-- s", 548, y);
+        }
+    };
+
+    bool active_0_22 = (telemetry.race_split_0_22 <= 0.0f);
+    bool active_0_50 = (telemetry.race_split_0_22 > 0.0f && telemetry.race_split_0_50 <= 0.0f);
+    bool active_0_70 = (telemetry.race_split_0_50 > 0.0f && telemetry.race_split_0_70 <= 0.0f);
+
+    drawSplit(130, telemetry.race_split_0_22, telemetry.race_records.best_0_22_sec, active_0_22);
+    drawSplit(235, telemetry.race_split_0_50, telemetry.race_records.best_0_50_sec, active_0_50);
+    drawSplit(340, telemetry.race_split_0_70, telemetry.race_records.best_0_70_sec, active_0_70);
+
+    // Bottom-Left G-Force Badge
+    drawGForceBadge(_canvas, telemetry.g_force, 52, 416, 26);
+
+    // 5. Bestzeiten Popup Modal (if open)
+    if (telemetry.race_popup_open) {
+        drawRaceRecordsModal(telemetry);
+    }
+}
+
+void DashboardRenderer::drawRaceRecordsModal(const DashTelemetry &telemetry) {
+    int mx = 140, my = 70, mw = 520, mh = 340;
+    // Dark modal surface card with glowing gold border
+    drawCard(mx, my, mw, mh, 0x10A2, COLOR_AMBER);
+
+    // Modal Header
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_AMBER, 0x10A2);
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->drawString("PERSOENLICHE BESTZEITEN", mx + 24, my + 18);
+
+    // Top-Right Close Button [ X ]
+    _canvas->fillRoundRect(mx + mw - 55, my + 14, 40, 34, 8, 0x2124);
+    _canvas->drawRoundRect(mx + mw - 55, my + 14, 40, 34, 8, COLOR_MUTED_GRAY);
+    _canvas->setTextColor(COLOR_WHITE, 0x2124);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->drawString("X", mx + mw - 35, my + 31);
+
+    // Display rows for 0-22, 0-50, 0-70 km/h
+    auto drawRecordRow = [&](int y, const char *label, float best_sec) {
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(COLOR_WHITE, 0x10A2);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->drawString(label, mx + 30, y);
+
+        char valBuf[32];
+        if (best_sec > 0.01f) {
+            snprintf(valBuf, sizeof(valBuf), "%.2f s", best_sec);
+            _canvas->setTextColor(COLOR_GREEN, 0x10A2);
+        } else {
+            snprintf(valBuf, sizeof(valBuf), "Keine Daten");
+            _canvas->setTextColor(COLOR_MUTED_GRAY, 0x10A2);
+        }
+        _canvas->setTextDatum(textdatum_t::top_right);
+        _canvas->drawString(valBuf, mx + mw - 40, y);
+
+        // Subtle divider
+        _canvas->drawFastHLine(mx + 30, y + 36, mw - 70, 0x2124);
+    };
+
+    drawRecordRow(my + 70, "0 - 22 km/h", telemetry.race_records.best_0_22_sec);
+    drawRecordRow(my + 130, "0 - 50 km/h", telemetry.race_records.best_0_50_sec);
+    drawRecordRow(my + 190, "0 - 70 km/h", telemetry.race_records.best_0_70_sec);
+
+    // Bottom Action Buttons: [ RESET ] (left) and [ SCHLIESSEN ] (right)
+    int btnY = my + 265;
+    // [ RESET ] button
+    _canvas->fillRoundRect(mx + 35, btnY, 150, 48, 12, 0x3000);
+    _canvas->drawRoundRect(mx + 35, btnY, 150, 48, 12, COLOR_RED);
+    _canvas->setTextColor(COLOR_WHITE, 0x3000);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->drawString("RESET", mx + 110, btnY + 24);
+
+    // [ SCHLIESSEN ] button
+    _canvas->fillRoundRect(mx + mw - 215, btnY, 180, 48, 12, 0x18C3);
+    _canvas->drawRoundRect(mx + mw - 215, btnY, 180, 48, 12, 0x39C7);
+    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->drawString("SCHLIESSEN", mx + mw - 125, btnY + 24);
 }
