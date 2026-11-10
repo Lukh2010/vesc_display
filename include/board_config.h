@@ -99,6 +99,7 @@
 #define CAN_TX_PIN          GPIO_NUM_20
 #define CAN_RX_PIN          GPIO_NUM_19
 #define CAN_BAUDRATE_VESC   500000 // 500k standard VESC CAN
+#define VESC_CAN_ID_DEFAULT 76     // Target VESC Controller ID (Spintend Ubox = 76)
 
 // ==============================================================================
 // Feature Flags
