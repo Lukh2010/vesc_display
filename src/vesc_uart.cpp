@@ -1112,23 +1112,78 @@ void VescHandler::updateBridge() {
     }
 }
 
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+static void sendVescCanBuffer(uint8_t controller_id, const uint8_t *data, size_t len) {
+    if (!s_can_initialized || len == 0) return;
+
+    if (len <= 6) {
+        twai_message_t msg;
+        msg.extd = 1;
+        msg.identifier = (8 << 8) | controller_id; // CAN_PACKET_PROCESS_SHORT_BUFFER (ID 8)
+        msg.data_length_code = (uint8_t)(len + 2);
+        msg.data[0] = 0; // source controller ID
+        msg.data[1] = 0; // send flag (0 = no reply)
+        memcpy(&msg.data[2], data, len);
+        twai_transmit(&msg, pdMS_TO_TICKS(10));
+    } else {
+        // Multi-frame send: CAN_PACKET_FILL_RX_BUFFER (ID 5)
+        for (size_t i = 0; i < len; i += 7) {
+            size_t chunk_len = (len - i > 7) ? 7 : (len - i);
+            twai_message_t msg;
+            msg.extd = 1;
+            msg.identifier = (5 << 8) | controller_id; // CAN_PACKET_FILL_RX_BUFFER
+            msg.data_length_code = (uint8_t)(chunk_len + 1);
+            msg.data[0] = (uint8_t)i; // index offset
+            memcpy(&msg.data[1], data + i, chunk_len);
+            twai_transmit(&msg, pdMS_TO_TICKS(10));
+            delay(1);
+        }
+
+        // Process frame: CAN_PACKET_PROCESS_RX_BUFFER (ID 7)
+        uint16_t crc = crc16(data, len);
+        twai_message_t proc;
+        proc.extd = 1;
+        proc.identifier = (7 << 8) | controller_id; // CAN_PACKET_PROCESS_RX_BUFFER
+        proc.data_length_code = 6;
+        proc.data[0] = 0; // source controller ID
+        proc.data[1] = 0; // send flag
+        proc.data[2] = (uint8_t)(len >> 8);
+        proc.data[3] = (uint8_t)(len & 0xFF);
+        proc.data[4] = (uint8_t)(crc >> 8);
+        proc.data[5] = (uint8_t)(crc & 0xFF);
+        twai_transmit(&proc, pdMS_TO_TICKS(10));
+    }
+}
+#endif
+
 void VescHandler::sendTerminalCommand(const char *str) {
 #if !SIMULATION_MODE
-    if (!_transport) return;
     size_t slen = strlen(str);
     if (slen > 68) slen = 68;
     uint8_t t_payload[70];
     t_payload[0] = 0x14; // COMM_TERMINAL_CMD
     memcpy(&t_payload[1], str, slen);
-    uint8_t t_packet[76];
-    t_packet[0] = 0x02;
-    t_packet[1] = (uint8_t)(slen + 1);
-    memcpy(&t_packet[2], t_payload, slen + 1);
-    uint16_t tcrc = crc16(t_payload, slen + 1);
-    t_packet[3 + slen] = (uint8_t)(tcrc >> 8);
-    t_packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
-    t_packet[5 + slen] = 0x03;
-    _transport->write(t_packet, slen + 6);
+
+    if (_transport) {
+        uint8_t t_packet[76];
+        t_packet[0] = 0x02;
+        t_packet[1] = (uint8_t)(slen + 1);
+        memcpy(&t_packet[2], t_payload, slen + 1);
+        uint16_t tcrc = crc16(t_payload, slen + 1);
+        t_packet[3 + slen] = (uint8_t)(tcrc >> 8);
+        t_packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
+        t_packet[5 + slen] = 0x03;
+        _transport->write(t_packet, slen + 6);
+    }
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (s_can_initialized) {
+        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, t_payload, slen + 1);
+        if (VESC_CAN_ID_DEFAULT != 0) {
+            sendVescCanBuffer(0, t_payload, slen + 1);
+        }
+    }
+#endif
 #endif
 }
 
@@ -1247,6 +1302,12 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
+        // 1. Transmit full temporary limits (Speed ERPM, Watts, Currents) via CAN multi-frame buffer
+        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, p_idx);
+        if (VESC_CAN_ID_DEFAULT != 0) {
+            sendVescCanBuffer(0, payload, p_idx);
+        }
+
         twai_message_t can_lim;
         can_lim.extd = 1;
         can_lim.identifier = (21 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC (76)
