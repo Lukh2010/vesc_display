@@ -97,11 +97,13 @@ void VirtualVesc::handlePacket(const uint8_t *payload, size_t len, const Respons
             break;
 
         case COMM_GET_VALUES:
-            handleGetValues();
+        case COMM_GET_VALUES_SELECTIVE:
+            handleGetValues(cmd_id, payload, len);
             break;
 
         case COMM_GET_VALUES_SETUP:
-            handleGetValuesSetup();
+        case COMM_GET_VALUES_SETUP_SELECTIVE:
+            handleGetValuesSetup(cmd_id, payload, len);
             break;
 
         case COMM_GET_DECODED_ADC:
@@ -187,7 +189,7 @@ void VirtualVesc::handleFwVersion() {
 
     buf[idx++] = COMM_FW_VERSION;
     buf[idx++] = 6;  // fw_major
-    buf[idx++] = 5;  // fw_minor (6.05)
+    buf[idx++] = 6;  // fw_minor (6.06 to match modern VESC Tool 7.00 without limited mode)
 
     const char *hw_name = "75_300";
     size_t hw_len = strlen(hw_name) + 1; // null-terminated
@@ -212,17 +214,26 @@ void VirtualVesc::handleFwVersion() {
     sendResponse(buf, idx);
 }
 
-void VirtualVesc::handleGetValuesSetup() {
+void VirtualVesc::handleGetValuesSetup(uint8_t cmd_id, const uint8_t *payload, size_t len) {
     uint8_t buf[128];
     int32_t idx = 0;
 
-    buf[idx++] = COMM_GET_VALUES_SETUP;
+    buf[idx++] = cmd_id;
+
+    uint32_t mask = 0xFFFFFFFF;
+    if (cmd_id == COMM_GET_VALUES_SETUP_SELECTIVE) {
+        if (len >= 5) {
+            int32_t ind2 = 1;
+            mask = buffer_get_uint32(payload, &ind2);
+        }
+        buffer_append_uint32(buf, mask, &idx);
+    }
 
     int16_t temp_mos = (int16_t)roundf(_telem.temp_mos * 10.0f);
     int16_t temp_mot = (int16_t)roundf(_telem.temp_mot * 10.0f);
     int32_t current_mot = (int32_t)roundf(_telem.current_mot * 100.0f);
     int32_t current_in  = (int32_t)roundf(_telem.current_in * 100.0f);
-    int16_t duty_now    = (int16_t)roundf(_telem.duty_cycle_pct * 10.0f);
+    int16_t duty_now    = (int16_t)roundf(_telem.duty_cycle_pct * 10.0f); // 0.1% -> 1e3 float
 
     int pole_pairs = (_telem.pole_pairs < 2) ? 15 : _telem.pole_pairs;
     int32_t erpm = (int32_t)roundf(_telem.rpm * (float)pole_pairs);
@@ -230,7 +241,7 @@ void VirtualVesc::handleGetValuesSetup() {
     // Ground speed in mm/s (vesc_uart: speed_kmh = (speed_m_s / 1000.0f) * 3.6f)
     int32_t speed_m_s = (int32_t)roundf((_telem.speed_kmh / 3.6f) * 1000.0f);
     int16_t v_in = (int16_t)roundf(_telem.voltage * 10.0f);
-    int16_t batt_level = (int16_t)roundf(_telem.battery_pct * 10.0f);
+    int16_t batt_level = (int16_t)roundf(_telem.battery_pct * 10.0f); // 0..1000
 
     int32_t ah_used = (int32_t)roundf(_telem.amphours_used * 10000.0f);
     int32_t ah_charge = (int32_t)roundf(_telem.amphours_charged * 10000.0f);
@@ -241,55 +252,46 @@ void VirtualVesc::handleGetValuesSetup() {
     int32_t dist_m = (int32_t)roundf(_telem.trip_km * 1000000.0f);
     int32_t dist_tot = (int32_t)roundf(_telem.odo_km * 1000000.0f);
 
-    buffer_append_int16(buf, temp_mos, &idx);     // idx 1..2 (temp_mos)
-    buffer_append_int16(buf, temp_mot, &idx);     // idx 3..4 (temp_mot)
-    buffer_append_int32(buf, current_mot, &idx);  // idx 5..8 (current_motor)
-    buffer_append_int32(buf, current_in, &idx);   // idx 9..12 (current_in)
-    buffer_append_int16(buf, duty_now, &idx);     // idx 13..14 (duty_now)
-    buffer_append_int32(buf, erpm, &idx);         // idx 15..18 (rpm)
-    buffer_append_int32(buf, speed_m_s, &idx);    // idx 19..22 (speed)
-    buffer_append_int16(buf, v_in, &idx);         // idx 23..24 (v_in)
-    buffer_append_int16(buf, batt_level, &idx);   // idx 25..26 (battery_level)
-    buffer_append_int32(buf, ah_used, &idx);      // idx 27..30 (amp_hours)
-    buffer_append_int32(buf, ah_charge, &idx);    // idx 31..34 (amp_hours_charged)
-    buffer_append_int32(buf, wh_used, &idx);      // idx 35..38 (watt_hours)
-    buffer_append_int32(buf, wh_charge, &idx);    // idx 39..42 (watt_hours_charged)
-    buffer_append_int32(buf, dist_m, &idx);       // idx 43..46 (tachometer/distance)
-    buffer_append_int32(buf, dist_tot, &idx);     // idx 47..50 (tachometer_abs/distance_abs)
-
-    // BIT 15: position (pid_pos_now)
-    buffer_append_int32(buf, 0, &idx);            // idx 51..54 (position)
-
-    // BIT 16: fault_code (standard VESC protocol index 55)
-    buf[idx++] = _telem.fault_code;               // idx 55 (fault code)
-
-    // BIT 17: vesc_id / controller_id
-    buf[idx++] = 0;                               // idx 56 (controller_id)
-
-    // BIT 18: num_vescs
-    buf[idx++] = 1;                               // idx 57 (num_vescs)
-
-    // BIT 19: wh_batt_left
-    buffer_append_int32(buf, 0, &idx);            // idx 58..61 (wh_batt_left)
-
-    // BIT 20: odometer
-    buffer_append_uint32(buf, (uint32_t)dist_tot, &idx); // idx 62..65 (odometer)
-
-    // Additional multi-FET thermals & stator voltages
-    buffer_append_int16(buf, temp_mos, &idx);     // idx 66..67 (temp_mos1)
-    buffer_append_int16(buf, temp_mos, &idx);     // idx 68..69 (temp_mos2)
-    buffer_append_int16(buf, temp_mos, &idx);     // idx 70..71 (temp_mos3)
-    buffer_append_int32(buf, 0, &idx);            // idx 72..75 (vd)
-    buffer_append_int32(buf, 0, &idx);            // idx 76..79 (vq)
+    if (mask & ((uint32_t)1 << 0)) buffer_append_int16(buf, temp_mos, &idx);     // idx 1..2 (temp_mos)
+    if (mask & ((uint32_t)1 << 1)) buffer_append_int16(buf, temp_mot, &idx);     // idx 3..4 (temp_mot)
+    if (mask & ((uint32_t)1 << 2)) buffer_append_int32(buf, current_mot, &idx);  // idx 5..8 (current_motor)
+    if (mask & ((uint32_t)1 << 3)) buffer_append_int32(buf, current_in, &idx);   // idx 9..12 (current_in)
+    if (mask & ((uint32_t)1 << 4)) buffer_append_int16(buf, duty_now, &idx);     // idx 13..14 (duty_now)
+    if (mask & ((uint32_t)1 << 5)) buffer_append_int32(buf, erpm, &idx);         // idx 15..18 (rpm)
+    if (mask & ((uint32_t)1 << 6)) buffer_append_int32(buf, speed_m_s, &idx);    // idx 19..22 (speed)
+    if (mask & ((uint32_t)1 << 7)) buffer_append_int16(buf, v_in, &idx);         // idx 23..24 (v_in)
+    if (mask & ((uint32_t)1 << 8)) buffer_append_int16(buf, batt_level, &idx);   // idx 25..26 (battery_level)
+    if (mask & ((uint32_t)1 << 9)) buffer_append_int32(buf, ah_used, &idx);      // idx 27..30 (amp_hours)
+    if (mask & ((uint32_t)1 << 10)) buffer_append_int32(buf, ah_charge, &idx);   // idx 31..34 (amp_hours_charged)
+    if (mask & ((uint32_t)1 << 11)) buffer_append_int32(buf, wh_used, &idx);     // idx 35..38 (watt_hours)
+    if (mask & ((uint32_t)1 << 12)) buffer_append_int32(buf, wh_charge, &idx);   // idx 39..42 (watt_hours_charged)
+    if (mask & ((uint32_t)1 << 13)) buffer_append_int32(buf, dist_m, &idx);      // idx 43..46 (tachometer/distance)
+    if (mask & ((uint32_t)1 << 14)) buffer_append_int32(buf, dist_tot, &idx);    // idx 47..50 (tachometer_abs/distance_abs)
+    if (mask & ((uint32_t)1 << 15)) buffer_append_int32(buf, 0, &idx);           // idx 51..54 (position)
+    if (mask & ((uint32_t)1 << 16)) buf[idx++] = _telem.fault_code;              // idx 55 (fault code)
+    if (mask & ((uint32_t)1 << 17)) buf[idx++] = 0;                              // idx 56 (controller_id)
+    if (mask & ((uint32_t)1 << 18)) buf[idx++] = 1;                              // idx 57 (num_vescs)
+    if (mask & ((uint32_t)1 << 19)) buffer_append_int32(buf, 0, &idx);           // idx 58..61 (wh_batt_left)
+    if (mask & ((uint32_t)1 << 20)) buffer_append_uint32(buf, (uint32_t)dist_tot, &idx); // idx 62..65 (odometer)
+    if (mask & ((uint32_t)1 << 21)) buffer_append_uint32(buf, 0, &idx);          // system_time_ms
 
     sendResponse(buf, idx);
 }
 
-void VirtualVesc::handleGetValues() {
+void VirtualVesc::handleGetValues(uint8_t cmd_id, const uint8_t *payload, size_t len) {
     uint8_t buf[128];
     int32_t idx = 0;
 
-    buf[idx++] = COMM_GET_VALUES;
+    buf[idx++] = cmd_id;
+
+    uint32_t mask = 0xFFFFFFFF;
+    if (cmd_id == COMM_GET_VALUES_SELECTIVE) {
+        if (len >= 5) {
+            int32_t ind2 = 1;
+            mask = buffer_get_uint32(payload, &ind2);
+        }
+        buffer_append_uint32(buf, mask, &idx);
+    }
 
     int16_t temp_mos = (int16_t)roundf(_telem.temp_mos * 10.0f);
     int16_t temp_mot = (int16_t)roundf(_telem.temp_mot * 10.0f);
@@ -306,31 +308,32 @@ void VirtualVesc::handleGetValues() {
     int32_t wh_used = (int32_t)roundf(_telem.watthours_used * 10000.0f);
     int32_t wh_charge = (int32_t)roundf(_telem.watthours_charged * 10000.0f);
 
-    buffer_append_int16(buf, temp_mos, &idx);     // idx 1..2
-    buffer_append_int16(buf, temp_mot, &idx);     // idx 3..4
-    buffer_append_int32(buf, current_mot, &idx);  // idx 5..8
-    buffer_append_int32(buf, current_in, &idx);   // idx 9..12
-    buffer_append_int32(buf, 0, &idx);            // idx 13..16 (id)
-    buffer_append_int32(buf, 0, &idx);            // idx 17..20 (iq)
-    buffer_append_int16(buf, duty_now, &idx);     // idx 21..22
-    buffer_append_int32(buf, erpm, &idx);         // idx 23..26
-    buffer_append_int16(buf, v_in, &idx);         // idx 27..28
-    buffer_append_int32(buf, ah_used, &idx);      // idx 29..32
-    buffer_append_int32(buf, ah_charge, &idx);    // idx 33..36
-    buffer_append_int32(buf, wh_used, &idx);      // idx 37..40
-    buffer_append_int32(buf, wh_charge, &idx);    // idx 41..44
-    buffer_append_int32(buf, _telem.tachometer, &idx);     // idx 45..48
-    buffer_append_int32(buf, _telem.tachometer_abs, &idx); // idx 49..52
-
-    buf[idx++] = _telem.fault_code;               // idx 53 (fault code)
-    buffer_append_int32(buf, 0, &idx);            // idx 54..57 (pid_pos_now)
-    buf[idx++] = 0;                               // idx 58 (controller_id)
-
-    buffer_append_int16(buf, temp_mos, &idx);     // idx 59..60 (temp_mos1)
-    buffer_append_int16(buf, temp_mos, &idx);     // idx 61..62 (temp_mos2)
-    buffer_append_int16(buf, temp_mos, &idx);     // idx 63..64 (temp_mos3)
-    buffer_append_int32(buf, 0, &idx);            // idx 65..68 (vd)
-    buffer_append_int32(buf, 0, &idx);            // idx 69..72 (vq)
+    if (mask & ((uint32_t)1 << 0)) buffer_append_int16(buf, temp_mos, &idx);     // idx 1..2
+    if (mask & ((uint32_t)1 << 1)) buffer_append_int16(buf, temp_mot, &idx);     // idx 3..4
+    if (mask & ((uint32_t)1 << 2)) buffer_append_int32(buf, current_mot, &idx);  // idx 5..8
+    if (mask & ((uint32_t)1 << 3)) buffer_append_int32(buf, current_in, &idx);   // idx 9..12
+    if (mask & ((uint32_t)1 << 4)) buffer_append_int32(buf, 0, &idx);            // idx 13..16 (id)
+    if (mask & ((uint32_t)1 << 5)) buffer_append_int32(buf, 0, &idx);            // idx 17..20 (iq)
+    if (mask & ((uint32_t)1 << 6)) buffer_append_int16(buf, duty_now, &idx);     // idx 21..22
+    if (mask & ((uint32_t)1 << 7)) buffer_append_int32(buf, erpm, &idx);         // idx 23..26
+    if (mask & ((uint32_t)1 << 8)) buffer_append_int16(buf, v_in, &idx);         // idx 27..28
+    if (mask & ((uint32_t)1 << 9)) buffer_append_int32(buf, ah_used, &idx);      // idx 29..32
+    if (mask & ((uint32_t)1 << 10)) buffer_append_int32(buf, ah_charge, &idx);   // idx 33..36
+    if (mask & ((uint32_t)1 << 11)) buffer_append_int32(buf, wh_used, &idx);     // idx 37..40
+    if (mask & ((uint32_t)1 << 12)) buffer_append_int32(buf, wh_charge, &idx);   // idx 41..44
+    if (mask & ((uint32_t)1 << 13)) buffer_append_int32(buf, _telem.tachometer, &idx);     // idx 45..48
+    if (mask & ((uint32_t)1 << 14)) buffer_append_int32(buf, _telem.tachometer_abs, &idx); // idx 49..52
+    if (mask & ((uint32_t)1 << 15)) buf[idx++] = _telem.fault_code;               // idx 53 (fault code)
+    if (mask & ((uint32_t)1 << 16)) buffer_append_int32(buf, 0, &idx);            // idx 54..57 (pid_pos_now)
+    if (mask & ((uint32_t)1 << 17)) buf[idx++] = 0;                               // idx 58 (controller_id)
+    if (mask & ((uint32_t)1 << 18)) {
+        buffer_append_int16(buf, temp_mos, &idx);     // idx 59..60 (temp_mos1)
+        buffer_append_int16(buf, temp_mos, &idx);     // idx 61..62 (temp_mos2)
+        buffer_append_int16(buf, temp_mos, &idx);     // idx 63..64 (temp_mos3)
+    }
+    if (mask & ((uint32_t)1 << 19)) buffer_append_int32(buf, 0, &idx);            // idx 65..68 (vd)
+    if (mask & ((uint32_t)1 << 20)) buffer_append_int32(buf, 0, &idx);            // idx 69..72 (vq)
+    if (mask & ((uint32_t)1 << 21)) buf[idx++] = 0;                               // status
 
     sendResponse(buf, idx);
 }
