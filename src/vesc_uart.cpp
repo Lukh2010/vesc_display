@@ -8,6 +8,9 @@
 #if !defined(NATIVE_SIMULATOR)
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#if VESC_USE_CAN_BUS
+#include "driver/twai.h"
+#endif
 static SemaphoreHandle_t s_uartMutex = NULL;
 struct UartLock {
     UartLock() { if (s_uartMutex) xSemaphoreTake(s_uartMutex, portMAX_DELAY); }
@@ -67,11 +70,25 @@ float VescHandler::getLastAdc1Pct() const { return _last_adc1_pct; }
 float VescHandler::getLastAdc2Voltage() const { return _last_adc2_v; }
 float VescHandler::getLastAdc2Pct() const { return _last_adc2_pct; }
 
+void VescHandler::resetTripOdometer(int32_t current_tacho) {
+    if (current_tacho != 0) {
+        _tacho_trip_offset = current_tacho;
+        _dist_trip_offset = current_tacho;
+    } else {
+        _tacho_trip_offset = _last_tacho;
+        _dist_trip_offset = _last_dist;
+    }
+}
+
 VescHandler::VescHandler()
     : _transport(nullptr),
       _pole_pairs(15),
       _wheel_diameter_mm(660.0f),
       _gear_ratio(1.0f),
+      _tacho_trip_offset(0),
+      _last_tacho(0),
+      _dist_trip_offset(0),
+      _last_dist(0),
       _sim_throttle(0.0f),
       _target_speed(0.0f),
       _target_rpm(0.0f),
@@ -97,6 +114,9 @@ void VescHandler::begin() {
         s_uartMutex = xSemaphoreCreateMutex();
     }
 #if !SIMULATION_MODE
+#if VESC_USE_CAN_BUS
+    initCanBus();
+#else
     VESC_UART_PORT.setRxBufferSize(4096);
     VESC_UART_PORT.setTxBufferSize(4096);
     VESC_UART_PORT.begin(VESC_UART_BAUDRATE, SERIAL_8N1, VESC_UART_RX_PIN, VESC_UART_TX_PIN);
@@ -104,6 +124,7 @@ void VescHandler::begin() {
     if (!_transport) {
         _transport = &s_hwTransport;
     }
+#endif
 #endif
 #else
     static VescLoopbackTransport s_defaultSimTransport;
@@ -124,6 +145,10 @@ void VescHandler::setSimThrottle(float pct) {
 void VescHandler::update(DashTelemetry &telemetry) {
 #if SIMULATION_MODE
     runSimulation(telemetry);
+#elif defined(NATIVE_SIMULATOR)
+    pollRealVesc(telemetry);
+#elif VESC_USE_CAN_BUS
+    pollCanVesc(telemetry);
 #else
     pollRealVesc(telemetry);
 #endif
@@ -183,8 +208,20 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     float max_possible_speed = (speed_limit > 0) ? (float)speed_limit : 95.0f;
 
     _target_speed = (_sim_throttle / 100.0f) * max_possible_speed;
+    float prev_sim_spd = telemetry.speed_kmh;
     telemetry.speed_kmh += (_target_speed - telemetry.speed_kmh) * (dt * 1.6f);
     if (telemetry.speed_kmh < 0.2f) telemetry.speed_kmh = 0.0f;
+    if (dt > 0.001f) {
+        float dv_ms = (telemetry.speed_kmh - prev_sim_spd) / 3.6f;
+        float g_inst = (dv_ms / dt) / 9.80665f;
+        if (g_inst > 3.0f) g_inst = 3.0f;
+        if (g_inst < -3.0f) g_inst = -3.0f;
+        telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
+        if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
+        if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
+            telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
+        }
+    }
 
     // 2. Realistic Duty Cycle calculation (0.0% to 120.0%)
     // Base duty cycle tracks vehicle speed / back-EMF headroom
@@ -279,6 +316,224 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
 
     telemetry.vesc_connected = true;
 }
+
+// ==============================================================================
+// Live Spintend Ubox / VESC CAN Bus Communication (ESP32-S3 TWAI)
+// ==============================================================================
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+static bool s_can_initialized = false;
+
+void VescHandler::initCanBus() {
+    if (s_can_initialized) return;
+
+    twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_NORMAL);
+    g_config.rx_queue_len = 32;
+    g_config.tx_queue_len = 16;
+    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
+    twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+
+    esp_err_t err = twai_driver_install(&g_config, &t_config, &f_config);
+    if (err == ESP_OK) {
+        err = twai_start();
+        if (err == ESP_OK) {
+            s_can_initialized = true;
+            Serial.println("[VESC_CAN] ESP32-S3 TWAI CAN driver started at 500kbit/s (TX: GPIO 20, RX: GPIO 19).");
+        } else {
+            Serial.printf("[VESC_CAN ERROR] twai_start failed: 0x%x\n", err);
+        }
+    } else {
+        Serial.printf("[VESC_CAN ERROR] twai_driver_install failed: 0x%x\n", err);
+    }
+}
+
+void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (!s_can_initialized) return;
+
+    twai_status_info_t st;
+    if (twai_get_status_info(&st) == ESP_OK) {
+        if (st.state == TWAI_STATE_BUS_OFF) {
+            twai_initiate_recovery();
+        } else if (st.state == TWAI_STATE_STOPPED) {
+            twai_start();
+        }
+    }
+#endif
+    uint32_t now = millis();
+    static uint32_t s_last_update_ms = millis();
+    static uint32_t s_last_can_rx_ms = 0;
+    static uint32_t s_last_can_diag_ms = 0;
+    float dt = (now - s_last_update_ms) / 1000.0f;
+    s_last_update_ms = now;
+
+    twai_message_t msg;
+    int frames_read = 0;
+    while (twai_receive(&msg, pdMS_TO_TICKS(0)) == ESP_OK && frames_read < 32) {
+        frames_read++;
+        if (!msg.extd) continue;
+
+        uint8_t controller_id = (uint8_t)(msg.identifier & 0xFF);
+        uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
+
+        if (cmd_id == 9 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS
+            int32_t erpm = (int32_t)(((uint32_t)msg.data[0] << 24) |
+                                     ((uint32_t)msg.data[1] << 16) |
+                                     ((uint32_t)msg.data[2] << 8)  |
+                                     (uint32_t)msg.data[3]);
+            int16_t cur_raw = (int16_t)(((uint16_t)msg.data[4] << 8) | msg.data[5]);
+            int16_t duty_raw = (int16_t)(((uint16_t)msg.data[6] << 8) | msg.data[7]);
+
+            float mot_i = fabsf((float)cur_raw / 10.0f);
+            float duty = fabsf((float)duty_raw / 10.0f);
+
+            if (controller_id == 0) {
+                int pole_pairs = Settings.get().motor_pole_pairs > 1 ? Settings.get().motor_pole_pairs : 15;
+                float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
+                float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
+                float mech_rpm = fabsf((float)erpm / (float)pole_pairs);
+                telemetry.rpm = mech_rpm;
+                float wheel_rpm = mech_rpm / gear_ratio;
+                telemetry.speed_kmh = (wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f;
+                if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
+                telemetry.phase_amps = mot_i;
+                telemetry.duty_cycle_pct = duty;
+                telemetry.vesc_connected = true;
+                s_last_can_rx_ms = now;
+            } else if (controller_id == 1) {
+                telemetry.vesc2_max_phase = mot_i;
+                telemetry.vesc_connected = true;
+                s_last_can_rx_ms = now;
+            }
+        }
+        else if (cmd_id == 16 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS_4
+            int16_t fet_raw = (int16_t)(((uint16_t)msg.data[0] << 8) | msg.data[1]);
+            int16_t mot_raw = (int16_t)(((uint16_t)msg.data[2] << 8) | msg.data[3]);
+            int16_t in_raw  = (int16_t)(((uint16_t)msg.data[4] << 8) | msg.data[5]);
+
+            float t_fet = (float)fet_raw / 10.0f;
+            float t_mot = (float)mot_raw / 10.0f;
+            float bat_i = (float)in_raw / 10.0f;
+
+            if (controller_id == 0) {
+                telemetry.temp_esc = t_fet;
+                telemetry.temp_motor = t_mot;
+                telemetry.temp_fet_rear = t_fet;
+                telemetry.temp_mot_rear = t_mot;
+                telemetry.current_amps = bat_i;
+                telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
+                telemetry.vesc_connected = true;
+                s_last_can_rx_ms = now;
+            } else if (controller_id == 1) {
+                telemetry.temp_fet_front = t_fet;
+                telemetry.temp_mot_front = t_mot;
+                telemetry.vesc2_max_power = telemetry.voltage * bat_i;
+            }
+        }
+        else if (cmd_id == 27 && msg.data_length_code >= 6) { // CAN_PACKET_STATUS_5
+            int32_t tacho = (int32_t)(((uint32_t)msg.data[0] << 24) |
+                                     ((uint32_t)msg.data[1] << 16) |
+                                     ((uint32_t)msg.data[2] << 8)  |
+                                     (uint32_t)msg.data[3]);
+            _last_tacho = tacho;
+            int16_t v_raw = (int16_t)(((uint16_t)msg.data[4] << 8) | msg.data[5]);
+            float v_in = ((float)v_raw / 10.0f) + Settings.get().voltage_trim_v;
+
+            if (controller_id == 0) {
+                telemetry.voltage = v_in;
+                telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
+
+                static bool s_can_tacho_init = false;
+                if (!s_can_tacho_init) {
+                    _tacho_trip_offset = tacho;
+                    s_can_tacho_init = true;
+                }
+
+                int pole_pairs = Settings.get().motor_pole_pairs > 1 ? Settings.get().motor_pole_pairs : 15;
+                float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
+                float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
+                int32_t rel_tacho = tacho - _tacho_trip_offset;
+                telemetry.trip_km = fabsf(((float)rel_tacho / ((float)pole_pairs * 6.0f)) * wheel_circ_m) / (gear_ratio * 1000.0f);
+                telemetry.vesc_connected = true;
+                s_last_can_rx_ms = now;
+            }
+        }
+        else if (cmd_id == 14 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS_2
+            int32_t ah_raw = (int32_t)(((uint32_t)msg.data[0] << 24) |
+                                       ((uint32_t)msg.data[1] << 16) |
+                                       ((uint32_t)msg.data[2] << 8)  |
+                                       (uint32_t)msg.data[3]);
+            if (controller_id == 0) {
+                telemetry.amphours_used = (float)ah_raw / 10000.0f;
+            }
+        }
+    }
+
+    if (now - s_last_can_rx_ms > 1500) {
+        telemetry.vesc_connected = false;
+    }
+
+    if (now - s_last_can_diag_ms >= 2000) {
+        s_last_can_diag_ms = now;
+        Serial.printf("[VESC_CAN] Link: %s | V_in: %.1fV | Spd: %.1f km/h | MotI: %.1fA | BatI: %.1fA | ESC: %.1fC | Mot: %.1fC\n",
+                      telemetry.vesc_connected ? "CONNECTED" : "NO_DATA",
+                      telemetry.voltage, telemetry.speed_kmh, telemetry.phase_amps, telemetry.current_amps,
+                      telemetry.temp_esc, telemetry.temp_motor);
+    }
+
+    if (telemetry.is_locked || ModeManager::instance().isLocked()) {
+        telemetry.speed_kmh = 0.0f;
+        telemetry.current_amps = 0.0f;
+        telemetry.phase_amps = 0.0f;
+        telemetry.power_watts = 0.0f;
+        telemetry.duty_cycle_pct = 0.0f;
+    }
+
+    if (dt > 0.001f && dt < 1.0f) {
+        Battery.update(telemetry, dt);
+
+        if (telemetry.current_amps > telemetry.stats.peak_current_amps) telemetry.stats.peak_current_amps = telemetry.current_amps;
+        if (telemetry.phase_amps > telemetry.stats.peak_phase_amps) telemetry.stats.peak_phase_amps = telemetry.phase_amps;
+        if (telemetry.power_watts > telemetry.stats.peak_power_watts) telemetry.stats.peak_power_watts = telemetry.power_watts;
+        if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
+        if (telemetry.temp_motor > telemetry.stats.max_temp_motor) telemetry.stats.max_temp_motor = telemetry.temp_motor;
+        if (telemetry.temp_esc > telemetry.stats.max_temp_esc) telemetry.stats.max_temp_esc = telemetry.temp_esc;
+
+        static float s_last_spd_can = 0.0f;
+        if (dt > 0.005f) {
+            float dv_ms = (telemetry.speed_kmh - s_last_spd_can) / 3.6f;
+            float g_inst = (dv_ms / dt) / 9.80665f;
+            if (g_inst > 3.0f) g_inst = 3.0f;
+            if (g_inst < -3.0f) g_inst = -3.0f;
+            telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
+            if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
+            if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
+                telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
+            }
+            s_last_spd_can = telemetry.speed_kmh;
+        }
+
+        static float s_real_ride_time_accum = 0.0f;
+        if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
+            s_real_ride_time_accum = 0.0f;
+        }
+        if (telemetry.speed_kmh > 1.2f) {
+            s_real_ride_time_accum += dt;
+            while (s_real_ride_time_accum >= 1.0f) {
+                telemetry.stats.ride_time_sec += 1;
+                s_real_ride_time_accum -= 1.0f;
+            }
+        }
+        if (telemetry.stats.ride_time_sec > 2 && telemetry.trip_km > 0.01f) {
+            telemetry.stats.avg_speed_kmh = telemetry.trip_km / (telemetry.stats.ride_time_sec / 3600.0f);
+        }
+    }
+}
+#else
+void VescHandler::initCanBus() {}
+void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
+    pollRealVesc(telemetry);
+}
+#endif
 
 // ==============================================================================
 // Live Flipsky 75100 VESC UART Communication
@@ -390,6 +645,20 @@ void VescHandler::pollRealVesc(DashTelemetry &telemetry) {
         if (telemetry.temp_motor > telemetry.stats.max_temp_motor) telemetry.stats.max_temp_motor = telemetry.temp_motor;
         if (telemetry.temp_esc > telemetry.stats.max_temp_esc) telemetry.stats.max_temp_esc = telemetry.temp_esc;
 
+        static float s_last_spd_can = 0.0f;
+        if (dt > 0.005f) {
+            float dv_ms = (telemetry.speed_kmh - s_last_spd_can) / 3.6f;
+            float g_inst = (dv_ms / dt) / 9.80665f;
+            if (g_inst > 3.0f) g_inst = 3.0f;
+            if (g_inst < -3.0f) g_inst = -3.0f;
+            telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
+            if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
+            if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
+                telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
+            }
+            s_last_spd_can = telemetry.speed_kmh;
+        }
+
         static float s_real_ride_time_accum = 0.0f;
         if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
             s_real_ride_time_accum = 0.0f;
@@ -488,11 +757,12 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         idx += 4; // skip wh_charge_tot
         int32_t dist_m = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
         int32_t dist_tot = (payload_len >= 51) ? (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]) : 0; idx += 4;
+        _last_dist = dist_m;
 
         telemetry.temp_esc       = temp_mos / 10.0f;
         telemetry.temp_motor     = temp_mot / 10.0f;
         telemetry.phase_amps     = fabsf(current_mot / 100.0f);
-        telemetry.current_amps   = fabsf(current_in / 100.0f);
+        telemetry.current_amps   = (float)current_in / 100.0f;
         telemetry.duty_cycle_pct = fabsf((float)duty_now / 10.0f);
         int pole_pairs = Settings.get().motor_pole_pairs;
         if (pole_pairs < 2) pole_pairs = 15;
@@ -505,7 +775,9 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         // Ground speed from VESC (injected by Port 4 LispBM wheel sensor override)
         telemetry.speed_kmh      = fabsf((speed_m_s / 1000.0f) * 3.6f);
         if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
-        telemetry.trip_km        = fabsf((dist_m / 1000.0f) / 1000.0f);
+
+        int32_t rel_dist         = dist_m - _dist_trip_offset;
+        telemetry.trip_km        = fabsf(((float)rel_dist / 1000.0f) / 1000.0f);
         if (payload_len >= 51) {
             telemetry.odo_km     = fabsf((dist_tot / 1000.0f) / 1000.0f);
         }
@@ -549,11 +821,12 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         idx += 4; // skip wh_used
         idx += 4; // skip wh_charged
         int32_t tachometer = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
+        _last_tacho = tachometer;
 
         telemetry.temp_esc       = temp_mos / 10.0f;
         telemetry.temp_motor     = temp_mot / 10.0f;
         telemetry.phase_amps     = fabsf(current_mot / 100.0f);
-        telemetry.current_amps   = fabsf(current_in / 100.0f);
+        telemetry.current_amps   = (float)current_in / 100.0f;
         telemetry.duty_cycle_pct = fabsf((float)duty_now / 10.0f);
         telemetry.voltage        = (v_in / 10.0f) + Settings.get().voltage_trim_v;
         if (telemetry.voltage < 0.0f) telemetry.voltage = 0.0f;
@@ -574,7 +847,14 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
 
         // Odometer & Trip from tachometer step counts
-        float revs = (float)tachometer / ((float)pole_pairs * 6.0f);
+        static bool s_uart_tacho_init = false;
+        if (!s_uart_tacho_init) {
+            _tacho_trip_offset = tachometer;
+            s_uart_tacho_init = true;
+        }
+
+        int32_t rel_tacho = tachometer - _tacho_trip_offset;
+        float revs = (float)rel_tacho / ((float)pole_pairs * 6.0f);
         telemetry.trip_km = fabsf((revs * wheel_circ_m) / (gear_ratio * 1000.0f));
 
         // Fault code extraction (idx 53 in COMM_GET_VALUES)
@@ -956,6 +1236,46 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     can_packet[5 + p_idx] = (uint8_t)(can_crc & 0xFF);
     can_packet[6 + p_idx] = 0x03;
     if (_transport) _transport->write(can_packet, p_idx + 7);
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (s_can_initialized) {
+        twai_message_t can_lim;
+        can_lim.extd = 1;
+        can_lim.identifier = (21 << 8) | 0; // CAN_PACKET_CONF_CURRENT_LIMITS -> VESC ID 0
+        can_lim.data_length_code = 8;
+        int32_t min_mot = (int32_t)(-max_phase_amps * 1000.0f);
+        int32_t max_mot = (int32_t)(max_phase_amps * 1000.0f);
+        can_lim.data[0] = (min_mot >> 24) & 0xFF;
+        can_lim.data[1] = (min_mot >> 16) & 0xFF;
+        can_lim.data[2] = (min_mot >> 8) & 0xFF;
+        can_lim.data[3] = min_mot & 0xFF;
+        can_lim.data[4] = (max_mot >> 24) & 0xFF;
+        can_lim.data[5] = (max_mot >> 16) & 0xFF;
+        can_lim.data[6] = (max_mot >> 8) & 0xFF;
+        can_lim.data[7] = max_mot & 0xFF;
+        twai_transmit(&can_lim, pdMS_TO_TICKS(10));
+        can_lim.identifier = (21 << 8) | 1; // Also dispatch to VESC ID 1 (Dual VESC)
+        twai_transmit(&can_lim, pdMS_TO_TICKS(10));
+
+        twai_message_t can_lim_in;
+        can_lim_in.extd = 1;
+        can_lim_in.identifier = (23 << 8) | 0; // CAN_PACKET_CONF_CURRENT_LIMITS_IN -> VESC ID 0
+        can_lim_in.data_length_code = 8;
+        int32_t min_bat = (int32_t)(-max_battery_amps * 1000.0f);
+        int32_t max_bat = (int32_t)(max_battery_amps * 1000.0f);
+        can_lim_in.data[0] = (min_bat >> 24) & 0xFF;
+        can_lim_in.data[1] = (min_bat >> 16) & 0xFF;
+        can_lim_in.data[2] = (min_bat >> 8) & 0xFF;
+        can_lim_in.data[3] = min_bat & 0xFF;
+        can_lim_in.data[4] = (max_bat >> 24) & 0xFF;
+        can_lim_in.data[5] = (max_bat >> 16) & 0xFF;
+        can_lim_in.data[6] = (max_bat >> 8) & 0xFF;
+        can_lim_in.data[7] = max_bat & 0xFF;
+        twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
+        can_lim_in.identifier = (23 << 8) | 1; // Also dispatch to VESC ID 1 (Dual VESC)
+        twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
+    }
+#endif
 
     // 3. Fallback / Universal Terminal Commands
     char cmd[64];

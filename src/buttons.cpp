@@ -36,7 +36,9 @@ ButtonHandler::ButtonHandler()
       _tuning_mode(false),
       _speed_touch_started(false),
       _speed_touch_held(false),
-      _speed_touch_fired(false) {
+      _speed_touch_fired(false),
+      _race_popup_open(false),
+      _race_state(0) {
     _btn1 = { PIN_BTN_1, false, false, 0, 0, 0, false, false, 0 };
     _btn2 = { PIN_BTN_2, false, false, 0, 0, 0, false, false, 0 };
 }
@@ -113,6 +115,7 @@ void ButtonHandler::processTouch(uint32_t now) {
 
             // Touch down detected
             _touch_active = true;
+            _has_tap = false;
             _touch_start_x = tx;
             _touch_start_y = ty;
             _touch_curr_x = tx;
@@ -153,13 +156,14 @@ void ButtonHandler::processTouch(uint32_t now) {
                     // Contextual Long Touch Action
                     if (_in_edit_mode) {
                         _pending_action = NAV_BOTH_PRESSED; // Save & exit edit mode
-                    } else if (_active_screen == SCREEN_RT_GRAPHS) {
+                    } else if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER) {
                         if (_touch_start_x >= 600 && _touch_start_y <= 65) {
-                            _pending_action = NAV_BTN2_LONG; // Reset Trip
+                            if (_active_screen == SCREEN_RT_GRAPHS) _pending_action = NAV_BTN2_LONG; // Reset Trip
+                            else if (_active_screen == SCREEN_RACE_TIMER) _pending_action = NAV_RACE_TOGGLE_POPUP; // Toggle Bestzeiten Popup
                         } else if (_touch_start_x <= 150 && _touch_start_y <= 65) {
                             _pending_action = NAV_BTN1_SHORT; // Top-left < DASH returns to Ride Dash
                         }
-                        // All other holds in STATS do NOT exit screen
+                        // All other holds in STATS/RACE do NOT exit screen
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
                         if (_touch_start_y <= 65 && _touch_start_x <= 160) {
                             _pending_action = NAV_SCREEN_DASH; // Top-left < DASH returns to Ride Dash
@@ -228,8 +232,8 @@ void ButtonHandler::processTouch(uint32_t now) {
 
                 if (adx >= SWIPE_THRESHOLD_PX && adx > ady) {
                     // Horizontal Swipe
-                    if (_active_screen == SCREEN_RT_GRAPHS) {
-                        // In STATS screen: do NOT switch screen on swipe! Only < DASH exits.
+                    if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER) {
+                        // In STATS / RACE screen: do NOT switch screen on swipe! Only < DASH exits.
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
                         if (dx > 0) {
                             // Swipe Right -> Back to Root Menu or Exit to Dash
@@ -247,8 +251,8 @@ void ButtonHandler::processTouch(uint32_t now) {
                     }
                 } else if (ady >= SWIPE_THRESHOLD_PX && ady > adx) {
                     // Vertical Swipe (in menu: scroll up/down)
-                    if (_active_screen == SCREEN_RT_GRAPHS) {
-                        // In STATS screen: do NOT switch screen on swipe! Only < DASH exits.
+                    if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER) {
+                        // In STATS / RACE screen: do NOT switch screen on swipe! Only < DASH exits.
                     } else if (dy > 0) {
                         // Swipe Down -> Up in menu (Previous item)
                         _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BTN1_SHORT;
@@ -291,11 +295,44 @@ void ButtonHandler::processTouch(uint32_t now) {
                         // On RT GRAPHS Screen (Statistics Menu):
                         if (_last_tap_x >= 600 && _last_tap_y <= 65) {
                             _pending_action = NAV_BTN2_LONG; // Top Right -> Reset Trip
-                        } else if (_last_tap_x <= 150 && _last_tap_y <= 65) {
+                        } else if (_last_tap_x <= 130 && _last_tap_y <= 65) {
                             _pending_action = NAV_BTN1_SHORT; // Top Left -> Return to Ride Dash
+                        } else if (_last_tap_x >= 140 && _last_tap_x <= 250 && _last_tap_y <= 65) {
+                            _pending_action = NAV_SCREEN_RACE; // [ RACE ] Button -> Open Dragy/Launch Timer Screen
                         }
                         // All other taps (on cards, tiles, empty space, brightness controls)
                         // do NOT exit back to Dash! Only pressing < DASH returns.
+                    } else if (_active_screen == SCREEN_RACE_TIMER) {
+                        // On SCREEN_RACE_TIMER:
+                        if (_last_tap_x <= 130 && _last_tap_y <= 65) {
+                            _pending_action = NAV_SCREEN_DASH; // Top Left -> Return to Ride Dash / STATS
+                        } else if (_last_tap_x >= 600 && _last_tap_y <= 65) {
+                            _pending_action = NAV_RACE_TOGGLE_POPUP; // Top Right -> Toggle Bestzeiten Popup
+                        } else if (_race_popup_open) {
+                            // Popup is open: modal bounds (x:140..660, y:70..410)
+                            if (_last_tap_x >= 585 && _last_tap_x <= 645 && _last_tap_y >= 80 && _last_tap_y <= 135) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP; // Top-Right [ X ]
+                            } else if (_last_tap_x >= 170 && _last_tap_x <= 340 && _last_tap_y >= 325 && _last_tap_y <= 390) {
+                                _pending_action = NAV_RACE_RESET_RECORDS; // [ RESET ]
+                            } else if (_last_tap_x >= 430 && _last_tap_x <= 630 && _last_tap_y >= 325 && _last_tap_y <= 390) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP; // [ SCHLIESSEN ]
+                            } else if (_last_tap_x < 140 || _last_tap_x > 660 || _last_tap_y < 70 || _last_tap_y > 410) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP; // Tap outside modal closes it
+                            }
+                        } else {
+                            // Popup is closed
+                            if (_race_state == 1 || _race_state == 2) {
+                                // If COUNTDOWN or MEASURING: tapping center aborts
+                                if (_last_tap_x >= 150 && _last_tap_x <= 510 && _last_tap_y >= 100 && _last_tap_y <= 420) {
+                                    _pending_action = NAV_RACE_ABORT;
+                                }
+                            } else {
+                                // IDLE / FINISHED: tapping center starts launch
+                                if (_last_tap_x >= 150 && _last_tap_x <= 510 && _last_tap_y >= 100 && _last_tap_y <= 420) {
+                                    _pending_action = NAV_RACE_START_LAUNCH;
+                                }
+                            }
+                        }
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
                         // On SETTINGS Screen:
                         if (_last_tap_y <= 65 && _last_tap_x <= 140) {

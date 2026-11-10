@@ -44,6 +44,7 @@ void setup() {
 
     // 4. Initialize Telemetry State
     telemetry.speed_kmh           = 0.0f;
+    telemetry.g_force             = 0.0f;
     telemetry.duty_cycle_pct      = 0.0f;
     telemetry.rpm                 = 0.0f;
     telemetry.throttle_pct        = 0.0f;
@@ -66,6 +67,7 @@ void setup() {
     telemetry.vesc_connected      = false;
     telemetry.uptime_sec          = 0;
     telemetry.ride_mode           = MODE_ECO;
+    telemetry.saved_ride_mode     = MODE_ECO;
     telemetry.tuning_mode         = false; // Requirement 1: Boot state is ALWAYS stealth / gedrosselt!
     telemetry.is_locked           = Settings.get().pin_lock_enabled;
     telemetry.pin_entry[0]        = '\0';
@@ -74,6 +76,15 @@ void setup() {
     telemetry.fault_code          = 0;
     telemetry.fault_start_ms      = 0;
     telemetry.dynamic_wh_km       = Battery.getDynamicWhKm();
+    telemetry.race_popup_open     = false;
+    telemetry.race_state          = 0;
+    telemetry.race_countdown_start_ms = 0;
+    telemetry.race_launch_start_ms = 0;
+    telemetry.race_elapsed_sec    = 0.0f;
+    telemetry.race_split_0_22     = 0.0f;
+    telemetry.race_split_0_50     = 0.0f;
+    telemetry.race_split_0_70     = 0.0f;
+    telemetry.race_records        = Settings.getRaceRecords();
 
     // 5. Initialize Touch and Input Handling (GT911 I2C SDA=8, SCL=9)
     Buttons.begin();
@@ -101,6 +112,8 @@ void setup() {
 #if SIMULATION_MODE
     Serial.println("[MODE] Self-Test Simulation Mode Active.");
     Serial.println("       Set SIMULATION_MODE in include/board_config.h to 0 for live Flipsky / VESC UART.");
+#elif VESC_USE_CAN_BUS
+    Serial.println("[MODE] Live VESC CAN Bus Mode Active (TX: GPIO 20, RX: GPIO 19 @ 500kbit/s).");
 #else
     Serial.println("[MODE] Live VESC UART Mode Active (TX: GPIO 43, RX: GPIO 44).");
 #endif
@@ -157,7 +170,10 @@ void loop() {
 
     // 1. Process Touch & Button Navigation Inputs
     Buttons.setActiveScreen(telemetry.screen);
+    Buttons.setRacePopupOpen(telemetry.race_popup_open);
+    Buttons.setRaceState(telemetry.race_state);
     Buttons.update();
+    Renderer.updateRaceTimer(telemetry, now);
 
     // PIN Lockscreen Input Processing (when locked)
     if (telemetry.is_locked) {
@@ -387,6 +403,15 @@ void loop() {
         } else {
             switch (nav) {
                 case NAV_SCREEN_DASH:
+                    if (telemetry.screen == SCREEN_RACE_TIMER) {
+                        telemetry.race_state = 0;
+                        telemetry.ride_mode = telemetry.saved_ride_mode;
+                        ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+                        telemetry.boost_active = false;
+                        telemetry.race_popup_open = false;
+                        Buttons.setRaceState(0);
+                        Buttons.setRacePopupOpen(false);
+                    }
                     telemetry.screen = SCREEN_RIDE_DASH;
                     Renderer.markScreenDirty();
                     Renderer.invalidateCache();
@@ -394,8 +419,18 @@ void loop() {
                     break;
                 case NAV_BTN1_SHORT: // Previous Screen (Swipe Right / Left Tap)
                     {
-                        if (telemetry.screen == SCREEN_RT_GRAPHS) {
+                        if (telemetry.screen == SCREEN_RT_GRAPHS || telemetry.screen == SCREEN_RACE_TIMER) {
+                            if (telemetry.screen == SCREEN_RACE_TIMER) {
+                                telemetry.race_state = 0;
+                                telemetry.ride_mode = telemetry.saved_ride_mode;
+                                ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+                                telemetry.boost_active = false;
+                                telemetry.race_popup_open = false;
+                                Buttons.setRaceState(0);
+                                Buttons.setRacePopupOpen(false);
+                            }
                             telemetry.screen = SCREEN_RIDE_DASH;
+                            Renderer.markScreenDirty();
                         } else {
 #if ENABLE_LIGHTS_SCREEN
                             int cur = (int)telemetry.screen;
@@ -410,7 +445,17 @@ void loop() {
 
                 case NAV_BTN2_SHORT: // Next Screen (Swipe Left / Right Tap)
                     {
-                        if (telemetry.screen == SCREEN_RT_GRAPHS) {
+                        if (telemetry.screen == SCREEN_RACE_TIMER) {
+                            telemetry.race_state = 0;
+                            telemetry.ride_mode = telemetry.saved_ride_mode;
+                            ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+                            telemetry.boost_active = false;
+                            telemetry.race_popup_open = false;
+                            Buttons.setRaceState(0);
+                            Buttons.setRacePopupOpen(false);
+                            telemetry.screen = SCREEN_RIDE_DASH;
+                            Renderer.markScreenDirty();
+                        } else if (telemetry.screen == SCREEN_RT_GRAPHS) {
                             telemetry.screen = SCREEN_RIDE_DASH;
                         } else {
 #if ENABLE_LIGHTS_SCREEN
@@ -425,12 +470,97 @@ void loop() {
                     break;
 
                 case NAV_SCREEN_STATS:
+                    if (telemetry.screen == SCREEN_RACE_TIMER) {
+                        telemetry.race_state = 0;
+                        telemetry.ride_mode = telemetry.saved_ride_mode;
+                        ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+                        telemetry.boost_active = false;
+                        telemetry.race_popup_open = false;
+                        Buttons.setRaceState(0);
+                        Buttons.setRacePopupOpen(false);
+                    }
                     telemetry.screen = SCREEN_RT_GRAPHS;
                     Renderer.markScreenDirty();
                     Serial.println("[NAV] [ STATS ] button tapped -> Switched to Screen ID 2 (RT Graphs)");
                     break;
 
+                case NAV_SCREEN_RACE:
+                    if (telemetry.screen != SCREEN_RACE_TIMER) {
+                        telemetry.saved_ride_mode = telemetry.ride_mode;
+                    }
+                    telemetry.screen = SCREEN_RACE_TIMER;
+                    if (!isRaceThermalBlocked(telemetry)) {
+                        telemetry.ride_mode = MODE_RACE;
+                        ModeManager::instance().setRideMode(MODE_RACE);
+                        telemetry.boost_active = true;
+                    } else {
+                        telemetry.boost_active = false;
+                    }
+                    telemetry.boost_end_ms = now + 60000;
+                    Renderer.markScreenDirty();
+                    Serial.println("[NAV] Switched to SCREEN_RACE_TIMER");
+                    break;
+
+                case NAV_RACE_TOGGLE_POPUP:
+                    telemetry.race_popup_open = !telemetry.race_popup_open;
+                    Buttons.setRacePopupOpen(telemetry.race_popup_open);
+                    Renderer.markScreenDirty();
+                    break;
+
+                case NAV_RACE_CLOSE_POPUP:
+                    telemetry.race_popup_open = false;
+                    Buttons.setRacePopupOpen(false);
+                    Renderer.markScreenDirty();
+                    break;
+
+                case NAV_RACE_RESET_RECORDS:
+                    telemetry.race_records.reset();
+                    Settings.saveRaceRecords(telemetry.race_records);
+                    Renderer.markScreenDirty();
+                    Serial.println("[RACE] Reset personal best records in NVS");
+                    break;
+
+                case NAV_RACE_START_LAUNCH:
+                    if (isRaceThermalBlocked(telemetry)) {
+                        Serial.println("[RACE] Launch blocked: Motor/ESC temperature > 65 C!");
+                        Renderer.markScreenDirty();
+                        break;
+                    }
+                    telemetry.ride_mode = MODE_RACE;
+                    ModeManager::instance().setRideMode(MODE_RACE);
+                    telemetry.boost_active = true;
+                    telemetry.boost_end_ms = now + 60000;
+                    telemetry.race_state = 1; // COUNTDOWN (5s)
+                    telemetry.race_countdown_start_ms = now;
+                    telemetry.race_elapsed_sec = 0.0f;
+                    telemetry.race_split_0_22 = 0.0f;
+                    telemetry.race_split_0_50 = 0.0f;
+                    telemetry.race_split_0_70 = 0.0f;
+                    Buttons.setRaceState(1);
+                    Renderer.markScreenDirty();
+                    Serial.println("[RACE] 5-second launch countdown started!");
+                    break;
+
+                case NAV_RACE_ABORT:
+                    telemetry.race_state = 0; // IDLE
+                    telemetry.ride_mode = telemetry.saved_ride_mode;
+                    ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+                    telemetry.boost_active = false;
+                    Buttons.setRaceState(0);
+                    Renderer.markScreenDirty();
+                    Serial.println("[RACE] Launch timer stopped/aborted (restored mode & boost off)");
+                    break;
+
                 case NAV_BTN1_LONG: // Long Press Top / Tap Settings: Open Settings Menu directly
+                    if (telemetry.screen == SCREEN_RACE_TIMER) {
+                        telemetry.race_state = 0;
+                        telemetry.ride_mode = telemetry.saved_ride_mode;
+                        ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+                        telemetry.boost_active = false;
+                        telemetry.race_popup_open = false;
+                        Buttons.setRaceState(0);
+                        Buttons.setRacePopupOpen(false);
+                    }
                     telemetry.screen = SCREEN_SETTINGS_MENU;
                     Serial.println("[NAV] Opened Settings Menu");
                     break;
@@ -439,6 +569,7 @@ void loop() {
                     telemetry.trip_km = 0.0f;
                     telemetry.stats.reset();
                     Battery.resetTrip();
+                    Vesc.resetTripOdometer();
                     Renderer.markScreenDirty();
                     Serial.println("[NAV] Reset Trip Odometer and Statistics to 0.0");
                     break;
@@ -504,8 +635,8 @@ void loop() {
         }
     }
 
-    // Boost timer expiration check
-    if (telemetry.boost_active && now > telemetry.boost_end_ms) {
+    // Boost timer expiration check (10s max duration on ride dash)
+    if (telemetry.screen != SCREEN_RACE_TIMER && telemetry.boost_active && now > telemetry.boost_end_ms) {
         telemetry.boost_active = false;
         Renderer.markScreenDirty();
     }

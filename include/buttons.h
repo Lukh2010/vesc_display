@@ -16,7 +16,13 @@ public:
 
     NavAction getNavAction();
 
-    void setActiveScreen(DashboardScreen screen) { _active_screen = screen; }
+    void setActiveScreen(DashboardScreen screen) {
+        if (_active_screen != screen) {
+            _active_screen = screen;
+            _has_tap = false;
+            _pending_action = NAV_NONE;
+        }
+    }
     DashboardScreen getActiveScreen() const { return _active_screen; }
 
     bool isBtn1Down() const { return _btn1.is_down; }
@@ -43,6 +49,12 @@ public:
     void setTuningMode(bool active) { _tuning_mode = active; }
     bool isTuningMode() const { return _tuning_mode; }
     bool isSpeedNumberTouch(int16_t x, int16_t y) const;
+
+    // Race / Dragy Timer Input State
+    void setRacePopupOpen(bool open) { _race_popup_open = open; }
+    bool isRacePopupOpen() const { return _race_popup_open; }
+    void setRaceState(uint8_t state) { _race_state = state; }
+    uint8_t getRaceState() const { return _race_state; }
 
 private:
     DashboardScreen _active_screen;
@@ -85,6 +97,10 @@ private:
     bool        _speed_touch_started;
     bool        _speed_touch_held;
     bool        _speed_touch_fired;
+
+    // Race State
+    bool        _race_popup_open;
+    uint8_t     _race_state;
 
     void processDebounce(ButtonState &btn, bool raw, uint32_t now);
     void processTouch(uint32_t now);

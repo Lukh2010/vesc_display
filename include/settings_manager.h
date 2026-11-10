@@ -32,8 +32,13 @@ public:
     DashSettings& get() { return _settings; }
     const DashSettings& get() const { return _settings; }
 
+    RaceRecords getRaceRecords() const { return _race_records; }
+    void saveRaceRecords(const RaceRecords &records);
+    void resetRaceRecords();
+
 private:
     DashSettings _settings;
+    RaceRecords  _race_records;
     Preferences  _prefs;
     void loadDefaults();
 };

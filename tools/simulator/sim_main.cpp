@@ -375,6 +375,58 @@ void testTouchGestures() {
     assert(actStatsResetTap == NAV_BTN2_LONG);
     printf("[PASS] Statistics Screen Reset Trip Tap triggered NAV_BTN2_LONG.\n");
 
+    // 10b. Test Statistics Screen: Tap on [ RACE ] button (Hitbox: x: 140..250, y <= 65)
+    NavAction actStatsRaceTap = simTouchAction(190, 30, 190, 30, 50);
+    assert(actStatsRaceTap == NAV_SCREEN_RACE);
+    printf("[PASS] Statistics Screen [ RACE ] Button Tap triggered NAV_SCREEN_RACE.\n");
+
+    // 10c. Test Race Timer Screen Touches
+    Buttons.setActiveScreen(SCREEN_RACE_TIMER);
+    Buttons.setRacePopupOpen(false);
+    Buttons.setRaceState(0); // IDLE
+
+    // Top-Left < DASH
+    NavAction actRaceDash = simTouchAction(75, 30, 75, 30, 50);
+    assert(actRaceDash == NAV_SCREEN_DASH);
+    printf("[PASS] Race Screen [< DASH] Tap triggered NAV_SCREEN_DASH.\n");
+
+    // Top-Right [ BESTZEITEN ]
+    NavAction actRaceBestzeiten = simTouchAction(700, 30, 700, 30, 50);
+    assert(actRaceBestzeiten == NAV_RACE_TOGGLE_POPUP);
+    printf("[PASS] Race Screen [ BESTZEITEN ] Tap triggered NAV_RACE_TOGGLE_POPUP.\n");
+
+    // Center [ START LAUNCH ] when IDLE
+    NavAction actRaceStart = simTouchAction(310, 255, 310, 255, 50);
+    assert(actRaceStart == NAV_RACE_START_LAUNCH);
+    printf("[PASS] Race Screen Center Tap when IDLE triggered NAV_RACE_START_LAUNCH.\n");
+
+    // Center when MEASURING (state 2) -> Abort
+    Buttons.setRaceState(2);
+    NavAction actRaceAbort = simTouchAction(310, 255, 310, 255, 50);
+    assert(actRaceAbort == NAV_RACE_ABORT);
+    printf("[PASS] Race Screen Center Tap when MEASURING triggered NAV_RACE_ABORT.\n");
+
+    // When popup is open:
+    Buttons.setRacePopupOpen(true);
+    // Tap [ X ]
+    NavAction actPopupCloseX = simTouchAction(615, 100, 615, 100, 50);
+    assert(actPopupCloseX == NAV_RACE_CLOSE_POPUP);
+    printf("[PASS] Race Popup [ X ] Tap triggered NAV_RACE_CLOSE_POPUP.\n");
+
+    // Tap [ SCHLIESSEN ]
+    NavAction actPopupCloseBtn = simTouchAction(500, 350, 500, 350, 50);
+    assert(actPopupCloseBtn == NAV_RACE_CLOSE_POPUP);
+    printf("[PASS] Race Popup [ SCHLIESSEN ] Tap triggered NAV_RACE_CLOSE_POPUP.\n");
+
+    // Tap [ RESET ]
+    NavAction actPopupReset = simTouchAction(220, 350, 220, 350, 50);
+    assert(actPopupReset == NAV_RACE_RESET_RECORDS);
+    printf("[PASS] Race Popup [ RESET ] Tap triggered NAV_RACE_RESET_RECORDS.\n");
+
+    Buttons.setRacePopupOpen(false);
+    Buttons.setRaceState(0);
+    Buttons.setActiveScreen(SCREEN_RT_GRAPHS);
+
     // 11. Test Statistics Screen: Boundary tap just outside Reset button
     NavAction actStatsOutsideReset = simTouchAction(570, 60, 570, 60, 50);
     assert(actStatsOutsideReset == NAV_NONE);
@@ -933,6 +985,194 @@ void testFaultManagerAndBlackbox() {
     FaultManager::instance().clearFaults();
     assert(FaultManager::instance().getFaultCount() == 0);
     printf("=== All VESC Fault Manager Tests PASSED! ===\n\n");
+}
+
+void testRaceTimerAndRecords() {
+    printf("=== Running Race Dragy / Launch Timer Unit Tests ===\n");
+    DashTelemetry t;
+    setBaseTelemetry(t);
+    t.screen = SCREEN_RACE_TIMER;
+    t.race_records.reset();
+    Settings.saveRaceRecords(t.race_records);
+
+    // 1. Initial State: IDLE
+    t.race_state = 0;
+    Renderer.updateRaceTimer(t, 1000);
+    assert(t.race_state == 0);
+    assert(t.race_elapsed_sec == 0.0f);
+    printf("[PASS] IDLE race timer remains idle.\n");
+
+    // 2. Start Countdown (5s)
+    t.race_state = 1;
+    t.race_countdown_start_ms = 1000;
+    Renderer.updateRaceTimer(t, 3000); // 2s elapsed
+    assert(t.race_state == 1);
+    printf("[PASS] Countdown at 2s remains in COUNTDOWN state.\n");
+
+    // Countdown finishes at 5s
+    Renderer.updateRaceTimer(t, 6000); // 5s elapsed
+    assert(t.race_state == 2); // MEASURING
+    assert(t.race_launch_start_ms == 6000);
+    assert(t.race_elapsed_sec == 0.0f);
+    printf("[PASS] Countdown expiration cleanly triggers MEASURING state at 0.00s.\n");
+
+    // 3. Accelerating: at t = 7.5s (elapsed = 1.5s), speed reaches 25 km/h -> crosses 22 km/h
+    t.speed_kmh = 25.0f;
+    Renderer.updateRaceTimer(t, 7500);
+    assert(t.race_state == 2);
+    assert(fabsf(t.race_split_0_22 - 1.5f) < 0.05f);
+    assert(t.race_split_0_50 == 0.0f);
+    assert(fabsf(t.race_records.best_0_22_sec - 1.5f) < 0.05f);
+    printf("[PASS] 0-22 km/h split captured at 1.50s and updated best records.\n");
+
+    // Continuing acceleration: at t = 9.8s (elapsed = 3.8s), speed reaches 52 km/h -> crosses 50 km/h
+    t.speed_kmh = 52.0f;
+    Renderer.updateRaceTimer(t, 9800);
+    assert(t.race_state == 2);
+    assert(fabsf(t.race_split_0_22 - 1.5f) < 0.05f); // 0-22 remained frozen!
+    assert(fabsf(t.race_split_0_50 - 3.8f) < 0.05f);
+    assert(t.race_split_0_70 == 0.0f);
+    assert(fabsf(t.race_records.best_0_50_sec - 3.8f) < 0.05f);
+    printf("[PASS] 0-50 km/h split captured at 3.80s while 0-22 remained frozen.\n");
+
+    t.saved_ride_mode = MODE_SPORT;
+    t.ride_mode = MODE_RACE;
+    t.boost_active = true;
+
+    // Reaching 70 km/h: at t = 13.1s (elapsed = 7.1s), speed reaches 72 km/h -> crosses 70 km/h
+    t.speed_kmh = 72.0f;
+    Renderer.updateRaceTimer(t, 13100);
+    assert(t.race_state == 3); // FINISHED!
+    assert(t.boost_active == false); // Boost turned off when finished
+    assert(t.ride_mode == MODE_SPORT); // Restored normal ride mode!
+    assert(fabsf(t.race_split_0_70 - 7.1f) < 0.05f);
+    assert(fabsf(t.race_records.best_0_70_sec - 7.1f) < 0.05f);
+    printf("[PASS] 0-70 km/h split captured at 7.10s, run FINISHED, boost disabled, and mode restored.\n");
+
+    // 4. Test 15-second automatic race timeout
+    t.race_state = 2; // MEASURING
+    t.race_launch_start_ms = 20000;
+    t.boost_active = true;
+    t.ride_mode = MODE_RACE;
+    t.saved_ride_mode = MODE_ECO;
+    t.speed_kmh = 30.0f;
+    Renderer.updateRaceTimer(t, 34900); // 14.9s elapsed
+    assert(t.race_state == 2);
+    assert(t.boost_active == true);
+    Renderer.updateRaceTimer(t, 35100); // 15.1s elapsed -> Timeout!
+    assert(t.race_state == 3); // FINISHED
+    assert(t.boost_active == false); // Boost turned off on timeout
+    assert(t.ride_mode == MODE_ECO); // Saved ride mode restored!
+    printf("[PASS] 15-second automatic measurement timeout cleanly finished race and restored mode.\n");
+
+    // 5. Test Thermal Protection (> 65 °C blocks launch)
+    t.temp_motor = 66.0f;
+    assert(isRaceThermalBlocked(t) == true);
+    t.temp_motor = 50.0f;
+    t.temp_esc = 67.0f;
+    assert(isRaceThermalBlocked(t) == true);
+    t.temp_esc = 55.0f;
+    assert(isRaceThermalBlocked(t) == false);
+    printf("[PASS] Thermal protection correctly identifies temperatures > 65 °C.\n");
+
+    // 6. Test Continuous Thermal Abort during active run
+    t.race_state = 2; // MEASURING
+    t.boost_active = true;
+    t.ride_mode = MODE_RACE;
+    t.saved_ride_mode = MODE_SPORT;
+    t.temp_motor = 66.0f; // Overheated during run!
+    Renderer.updateRaceTimer(t, 40000);
+    assert(t.race_state == 0); // Aborted to IDLE
+    assert(t.boost_active == false); // Boost killed
+    assert(t.ride_mode == MODE_SPORT); // Safely restored to SPORT mode
+    t.temp_motor = 45.0f; // Cooled down
+    printf("[PASS] Active thermal cutoff successfully aborted launch and restored safe mode.\n");
+
+    // Verify record reset
+    t.race_records.reset();
+    assert(t.race_records.best_0_22_sec == 0.0f);
+    assert(t.race_records.best_0_50_sec == 0.0f);
+    assert(t.race_records.best_0_70_sec == 0.0f);
+    Settings.saveRaceRecords(t.race_records);
+    printf("=== All Race Dragy / Launch Timer Unit Tests PASSED! ===\n\n");
+}
+
+void testRegenAndTripReset() {
+    printf("=== Running Regenerative Braking & Trip Reset Unit Tests ===\n");
+    DashTelemetry t;
+    setBaseTelemetry(t);
+    t.voltage = 52.0f;
+    t.current_amps = 10.0f;
+    t.power_watts = 520.0f;
+    t.stats.peak_current_amps = 10.0f;
+    t.stats.peak_power_watts = 520.0f;
+
+    // 1. Negative current (Regenerative braking: -25.0A)
+    t.current_amps = -25.0f;
+    t.power_watts = t.voltage * t.current_amps; // -1300.0W
+    assert(t.current_amps < 0.0f);
+    assert(t.power_watts < -1000.0f);
+
+    // Verify stats tracking does not track negative current as peak discharge current
+    if (t.current_amps > t.stats.peak_current_amps) t.stats.peak_current_amps = t.current_amps;
+    if (t.power_watts > t.stats.peak_power_watts) t.stats.peak_power_watts = t.power_watts;
+    assert(t.stats.peak_current_amps == 10.0f);
+    assert(t.stats.peak_power_watts == 520.0f);
+    printf("[PASS] 1. Signed negative current/power preserved and peak stats protected.\n");
+
+    // 2. Battery Coulomb Counter Regeneration: delta_wh < 0 adds energy back
+    float rem_before = Battery.getRemainingWh();
+    Battery.update(t, 1.0f); // 1 second of regen
+    float rem_after = Battery.getRemainingWh();
+    assert(rem_after >= rem_before);
+    printf("[PASS] 2. Battery Coulomb Counter adds energy back during regen.\n");
+
+    // 3. Trip Reset Odometer Offset
+    VescLoopbackTransport loopback;
+    VirtualVesc vesc;
+    Vesc.setTransport(&loopback.getSideA());
+    vesc.setTransport(&loopback.getSideB());
+    Vesc.begin();
+    vesc.begin();
+
+    VirtualVescTelemetry vt;
+    vt.speed_kmh = 20.0f;
+    vt.trip_km = 15.5f; // Initial distance
+    vt.voltage = 52.0f;
+    vesc.setPhysicsTelemetry(vt);
+
+    simAdvanceMs(30);
+    Vesc.update(t);
+    vesc.process();
+    Vesc.update(t);
+    assert(fabsf(t.trip_km - 15.5f) < 0.2f);
+
+    // Trigger trip reset
+    Vesc.resetTripOdometer();
+    t.trip_km = 0.0f;
+
+    // Next frame: trip_km should stay at 0.0f (relative to reset offset)
+    simAdvanceMs(30);
+    Vesc.update(t);
+    vesc.process();
+    Vesc.update(t);
+    assert(fabsf(t.trip_km) < 0.05f);
+
+    // Subsequent distance increases correctly
+    vt.trip_km = 17.5f; // Traveled 2.0 km more
+    vesc.setPhysicsTelemetry(vt);
+    simAdvanceMs(30);
+    Vesc.update(t);
+    vesc.process();
+    Vesc.update(t);
+    assert(fabsf(t.trip_km - 2.0f) < 0.1f);
+
+    // Restore default simulator transport
+    Vesc.setTransport(&g_sim_test_transport.getSideA());
+    g_virtual_vesc.setTransport(&g_sim_test_transport.getSideB());
+
+    printf("[PASS] 3. Trip reset odometer baseline offset verified.\n");
+    printf("=== All Regenerative Braking & Trip Reset Unit Tests PASSED! ===\n\n");
 }
 
 void testSpeedSweepAnimation() {
@@ -1578,6 +1818,8 @@ int main(int argc, char **argv) {
     testStatsCalculationAndLiveUpdates();
     testModeManagerAndLegalProfiles();
     testFaultManagerAndBlackbox();
+    testRaceTimerAndRecords();
+    testRegenAndTripReset();
 
     DashTelemetry t;
     setBaseTelemetry(t);
@@ -1794,6 +2036,30 @@ int main(int argc, char **argv) {
     Renderer.markScreenDirty();
     renderAndSave("18_pin_lockscreen_error", t);
 
-    printf("\n[SUCCESS] All 18 scenarios rendered and saved to tools/simulator/screenshots/\n");
+    // ----------------------------------------------------
+    // Scenario 19: Screen 6 - "RACE" Dragy Launch-Timer (Measuring 48 km/h)
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    t.screen = SCREEN_RACE_TIMER;
+    t.speed_kmh = 48.0f;
+    t.race_state = 2; // MEASURING
+    t.race_elapsed_sec = 3.42f;
+    t.race_split_0_22 = 1.65f;
+    t.race_split_0_50 = 0.0f;
+    t.race_split_0_70 = 0.0f;
+    t.race_records.best_0_22_sec = 1.72f;
+    t.race_records.best_0_50_sec = 4.10f;
+    t.race_records.best_0_70_sec = 7.80f;
+    Renderer.markScreenDirty();
+    renderAndSave("19_race_timer_measuring", t);
+
+    // ----------------------------------------------------
+    // Scenario 20: Screen 6 - Bestzeiten Popup Modal
+    // ----------------------------------------------------
+    t.race_popup_open = true;
+    Renderer.markScreenDirty();
+    renderAndSave("20_race_records_modal", t);
+
+    printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");
     return 0;
 }

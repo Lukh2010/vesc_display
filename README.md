@@ -18,6 +18,8 @@ Custom high-performance dashboard for VESC-driven electric scooters, e-bikes, an
 | <img src="tools/simulator/screenshots/17_pin_lockscreen.png" width="100%"> | <img src="tools/simulator/screenshots/16_vesc_fault_banner.png" width="100%"> |
 | **Mode Banner HUD Overlay** | **Wi-Fi Bridge & Diagnostics** |
 | <img src="tools/simulator/screenshots/00_hyper_35kw_mode_banner.png" width="100%"> | <img src="tools/simulator/screenshots/13_wifi_bridge.png" width="100%"> |
+| **RACE Dragy / Launch Timer** | **Personal Best Records Modal** |
+| <img src="tools/simulator/screenshots/19_race_timer_measuring.png" width="100%"> | <img src="tools/simulator/screenshots/20_race_records_modal.png" width="100%"> |
 
 ---
 
@@ -38,6 +40,7 @@ Custom high-performance dashboard for VESC-driven electric scooters, e-bikes, an
   - High-precision SoC percentage and voltage readout supporting 10S to 24S packs (up to 105 V).
   - Live Motor Phase Current (`MOTOR 142 A`) and Battery Current (`BATTERY 83 A`).
   - Minimalist dynamic remaining range readout (`RESTREICHWEITE 48 km`).
+  - **Live Trip Distance Readout:** Cockpit trip odometer (`TRIP 14.2 km`) positioned in the cockpit cluster above the mode button.
 - **Interactive Touch Buttons:**
   - `[ BOOST ]`: Triggers a 10-second 120% power burst.
   - `[ ECO / SPORT / RACE ]`: Cycles through active power profiles.
@@ -68,6 +71,24 @@ Custom high-performance dashboard for VESC-driven electric scooters, e-bikes, an
 - Hotspot AP (`VESC-HyperDash`, `192.168.4.1`) launched automatically on Core 0.
 - Live web dashboard, power limits configuration, and OTA firmware updates without requiring USB connections.
 
+### 6. RACE Launch Control / Dragy Acceleration Timer (Screen 6)
+- **High-Precision Dragy-Style Launch Measurement:**
+  - Launch countdown ($5\text{s}$ with visual cues and `1 ... GO!` launch trigger, titled `LAUNCH CONTROL` in idle state).
+  - High-precision split times automatically captured: **0–22 km/h**, **0–50 km/h**, and **0–70 km/h**.
+  - Clean split display: shows only live time during measuring (clean, uncluttered without premature PB tags), and marks personal bests (`*PB*`) upon completion.
+  - Automatic race termination when 70 km/h is reached or at a strict **15-second measurement timeout**.
+- **Automated Vehicle Profile & Boost Engagement:**
+  - Entering the Race Timer screen automatically switches the vehicle into **RACE Mode** (`PROFILE_MODE_RACE`) and engages **Hyper Boost** (`boost_active = true`).
+  - Boost stays permanently active throughout the countdown and entire acceleration run.
+  - Exiting the screen (or stopping/canceling the run) cleanly restores the previous ride mode and disables boost.
+- **Thermal Safety Cutoff:**
+  - Automatic temperature safety interlock: if motor or VESC FET temperatures exceed **65 °C**, launch is locked out with visual `TEMP > 65C` notice to safeguard hardware. Continuous thermal protection also aborts active runs if temperature spikes above 65 °C.
+- **G-Force Telemetry Badge:**
+  - Real-time longitudinal acceleration/braking force calculation ($\pm G$) displayed in a compact HUD circular badge with dynamic color ring.
+- **Persistent Personal Best Records (NVS Flash):**
+  - All-time best acceleration records stored across reboots in non-volatile storage.
+  - Interactive popup modal (`[ BESTZEITEN ]`) showing records with one-touch `[ RESET ]` functionality.
+
 ---
 
 ## 👆 Touch Navigation Gestures (GT911)
@@ -78,6 +99,10 @@ Custom high-performance dashboard for VESC-driven electric scooters, e-bikes, an
 | **Swipe Right** ($\Delta X > +60\text{px}$) | Ride Dash / RT Graphs | Previous Screen (`RT Graphs` $\rightarrow$ `Ride Dash`) |
 | **Tap `[ STATS ]`** (Top-Left) | Ride Dash | Open Stats Screen |
 | **Tap `[ < DASH ]`** (Top-Left) | RT Graphs | Return to Ride Dash |
+| **Tap `[ RACE ]`** (Top-Left) | RT Graphs | Open Race Launch Timer Screen |
+| **Tap `[ < DASH ]`** (Top-Left) | Race Timer | Return to Ride Dash & Restore Previous Mode |
+| **Tap Center Button** | Race Timer | Start Launch Countdown / Abort Measuring |
+| **Tap `[ BESTZEITEN ]`** (Top-Right) | Race Timer | Toggle Personal Bests Popup Modal |
 | **Tap `[ BOOST ]`** | Ride Dash | Toggle 10-second Boost Burst |
 | **Tap `[ MODE ]`** | Ride Dash | Switch Ride Mode (`ECO` $\rightarrow$ `SPORT` $\rightarrow$ `RACE`) |
 | **Tap Badge** (Top-Right) | Ride Dash | Open Settings Menu |
@@ -99,20 +124,44 @@ Custom high-performance dashboard for VESC-driven electric scooters, e-bikes, an
 - **Memory:** 16 MB Flash, 8 MB Octal PSRAM (`qio_opi`)
 
 ### VESC & Peripheral Bus Topology
-- **CAN-Bus Multi-Drop (Recommended for Dual VESC & BT Dongles):**
-  - Connects display to VESC CAN port via onboard TJA1051 transceiver (`CAN_H` / `CAN_L` on GPIO 20 / GPIO 19).
-  - Operates as a shared multi-drop bus: supports **Dual VESC** simultaneously (reading Rear VESC ID 0 and Front VESC ID 1 for combined 35kW+ power telemetry and dual thermals).
-  - Leaves the VESC's COMM/UART port 100% free for your existing Bluetooth dongle (VESC Tool Mobile App)!
-- **GPS / BDS GNSS Module Integration:**
-  - Standard 3.3V UART GPS/BDS module connects directly to the display's free serial interface:
-    - GPS TX $\rightarrow$ ESP32 RX (GPIO 44)
-    - GPS RX $\rightarrow$ ESP32 TX (GPIO 43)
-    - VCC (3.3V/5V) and GND
-  - Provides true satellite ground speed (unaffected by tire slip or wear), real-time altitude, slope gradient (%), atomic UTC clock sync, and satellite lock status.
-- **Direct VESC UART (Alternative single-ESC mode):**
-  - ESP32 TX (GPIO 43) $\rightarrow$ VESC RX
-  - ESP32 RX (GPIO 44) $\rightarrow$ VESC TX
-  - Baudrate: `115200`
+
+The display communicates with any standard VESC (single or dual array) via either **CAN-Bus** (recommended) or **UART**. You can switch between modes at compile time in [`include/board_config.h`](include/board_config.h):
+```c
+#define VESC_USE_CAN_BUS 1   // 1 = High-Speed CAN Bus (500kbit/s), 0 = Legacy UART (115200)
+```
+
+#### 1. CAN-Bus Wiring (Recommended for Dual VESC & Bluetooth Dongles)
+Uses the onboard TJA1051 CAN transceiver. Directly connect the display's CAN port / screw terminals to any standard VESC CAN port:
+
+| Display Pin / Terminal | VESC CAN Connector | Description |
+|:---|:---|:---|
+| **5V / VCC** | `5V` | Logic power supply from VESC internal 5V BEC |
+| **GND** | `GND` | Common ground reference |
+| **CAN_H** | `CAN_H` | High-speed differential CAN High line (500 kbps) |
+| **CAN_L** | `CAN_L` | High-speed differential CAN Low line (500 kbps) |
+
+> [!NOTE]
+> Some VESC models provide 5-pin JST CAN ports where the 5th pin is `NC` (unconnected) or used for CAN shield / daisy-chaining. Only the 4 lines above (`5V`, `GND`, `CAN_H`, `CAN_L`) are required for the display.
+
+- **Dual VESC Telemetry:** Simultaneously decodes broadcast status frames for Master (ID 0) and Slave (ID 1) without polling overhead.
+- **Port Freedom:** Leaves the VESC `COMM / UART` port 100% free for your existing Bluetooth dongle (VESC Tool Mobile App)!
+
+#### 2. Direct VESC UART Wiring (Alternative single-ESC mode)
+If CAN is not used (`#define VESC_USE_CAN_BUS 0`):
+
+| Display Pin | VESC COMM Port | Description |
+|:---|:---|:---|
+| **5V / VCC** | `5V` | Logic power supply |
+| **GND** | `GND` | Common ground |
+| **TX (GPIO 43)** | `RX` | Serial transmit (115200 baud) |
+| **RX (GPIO 44)** | `TX` | Serial receive (115200 baud) |
+
+#### 3. GPS / BDS GNSS Module Integration
+Standard 3.3V UART GPS/BDS module connects directly to the display's secondary serial interface:
+- GPS TX $\rightarrow$ ESP32 RX (GPIO 44, when CAN mode is active)
+- GPS RX $\rightarrow$ ESP32 TX (GPIO 43, when CAN mode is active)
+- VCC (3.3V/5V) and GND
+- Provides satellite ground speed (unaffected by tire slip or wear), real-time altitude, slope gradient (%), atomic UTC clock sync, and satellite lock status.
 
 ---
 
@@ -143,13 +192,21 @@ Compiles and executes automated unit tests (touch hitbox tests, speedometer star
 ## ⚡ Flashing to the ESP32-S3
 
 1. Connect the Waveshare ESP32-S3 board to your PC via the **USB** port.
-2. Build and upload using PlatformIO:
+2. Configure your hardware setup in [`include/board_config.h`](include/board_config.h):
+   - Set `#define SIMULATION_MODE 0` for live vehicle operation.
+   - Set `#define VESC_USE_CAN_BUS 1` for CAN-Bus mode (or `0` for UART mode).
+3. Build and upload using PlatformIO:
 ```bash
 pio run -t upload
 ```
-3. To switch between simulation mode and real VESC UART hardware, set `#define SIMULATION_MODE 0` in [include/board_config.h](include/board_config.h).
 
 ---
 
 ## 📄 License
 MIT License. Free for personal and commercial electric vehicle projects.
+
+---
+
+## 🙏 Credits & Acknowledgments
+- **Development:** Engineered with AI pair-programming assistance.
+- **Inspiration:** Telemetry architecture, dashboard concepts, and UI inspirations courtesy of [@aerosock](https://github.com/aerosock).

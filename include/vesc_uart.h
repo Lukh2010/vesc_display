@@ -38,6 +38,7 @@ public:
     void setMotorPolePairs(int poles) { _pole_pairs = poles; }
     void setWheelDiameterMm(float mm) { _wheel_diameter_mm = mm; }
     void setGearRatio(float ratio) { _gear_ratio = ratio; }
+    void resetTripOdometer(int32_t current_tacho = 0);
 
     // Dynamic Live Limit Control (Captive Portal & Ride Modes)
     void sendModeLimits(float max_speed_kmh, float max_power_watts, float max_battery_amps, float max_phase_amps, float cutoff_start = 0.0f, float cutoff_end = 0.0f);
@@ -72,6 +73,8 @@ public:
 private:
     void runSimulation(DashTelemetry &telemetry);
     void pollRealVesc(DashTelemetry &telemetry);
+    void pollCanVesc(DashTelemetry &telemetry);
+    void initCanBus();
     void sendVescGetValues();
     void sendVescGetDecodedAdc();
     bool parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &telemetry);
@@ -82,6 +85,10 @@ private:
     int _pole_pairs;            // Standard ebike hub motor: usually 15 or 23 pole pairs
     float _wheel_diameter_mm;   // e.g., 26" wheel ~ 660mm, 20" ~ 500mm
     float _gear_ratio;          // 1.0 for direct-drive hub, or gear reduction ratio
+    int32_t _tacho_trip_offset; // Trip odometer tachometer baseline offset
+    int32_t _last_tacho;        // Most recent raw tachometer reading from VESC
+    int32_t _dist_trip_offset;  // Trip odometer distance baseline offset (for COMM_GET_VALUES_SETUP)
+    int32_t _last_dist;         // Most recent raw distance reading from VESC
 
     // Simulation Engine State
     float _sim_throttle;

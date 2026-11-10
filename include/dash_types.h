@@ -10,6 +10,7 @@ enum DashboardScreen {
     SCREEN_SETTINGS_MENU = 3,  // Interactive Settings & Diagnostics Menu
     SCREEN_VESC_BRIDGE   = 4,  // Transparent USB CDC <-> UART Bridge for VESC Tool
     SCREEN_WIFI_BRIDGE   = 5,  // Transparent Wi-Fi TCP <-> UART Bridge for VESC Tool
+    SCREEN_RACE_TIMER    = 6,  // Dragy / Launch Acceleration Timer Screen
     SCREEN_ENERGY_STATS  = SCREEN_LIGHTS,
     SCREEN_PERF_STATS    = SCREEN_RT_GRAPHS,
     SCREEN_COUNT
@@ -47,7 +48,26 @@ enum NavAction {
     NAV_TUNING_ENABLE, // 4-second continuous hold on km/h number (enable tuning mode)
     NAV_TUNING_DISABLE,// Single tap on km/h number when tuning mode is active (deactivate)
     NAV_SCREEN_DASH,   // Tap on [< DASH] or [DASH [X]]: return directly to main ride dashboard
-    NAV_MENU_BACK      // Tap on [< MENÜ] / Swipe Right: back to root menu or dash
+    NAV_MENU_BACK,     // Tap on [< MENÜ] / Swipe Right: back to root menu or dash
+    NAV_SCREEN_RACE,   // Tap on [ RACE ] button on STATS screen
+    NAV_RACE_TOGGLE_POPUP, // Tap on [ BESTZEITEN ]
+    NAV_RACE_CLOSE_POPUP,  // Tap on [ X ] or [ SCHLIESSEN ]
+    NAV_RACE_RESET_RECORDS,// Tap on [ RESET ] in Bestzeiten popup
+    NAV_RACE_START_LAUNCH, // Tap on [ START LAUNCH ]
+    NAV_RACE_ABORT         // Tap center while measuring/countdown
+};
+
+// Dragy / Launch Acceleration Best Records
+struct RaceRecords {
+    float best_0_22_sec;
+    float best_0_50_sec;
+    float best_0_70_sec;
+
+    void reset() {
+        best_0_22_sec = 0.0f;
+        best_0_50_sec = 0.0f;
+        best_0_70_sec = 0.0f;
+    }
 };
 
 // Long-Term & Ride Statistics
@@ -65,6 +85,7 @@ struct TripStatistics {
     float min_voltage;       // Minimum pack voltage recorded under load (V)
     float max_voltage;       // Maximum pack voltage recorded (V)
     float dynamic_wh_km;     // Rolling window energy efficiency (Wh/km)
+    float peak_g_force;      // Peak longitudinal G-force (+/- G)
 
     void reset() {
         trip_wh = 0.0f;
@@ -80,6 +101,7 @@ struct TripStatistics {
         max_temp_esc = 0.0f;
         min_voltage = 0.0f;
         max_voltage = 0.0f;
+        peak_g_force = 0.0f;
     }
 };
 
@@ -89,6 +111,7 @@ struct TripStatistics {
 struct DashTelemetry {
     // Speed & Inverter State
     float speed_kmh;           // Vehicle speed (km/h)
+    float g_force;             // Longitudinal acceleration G-force (+/- G)
     float duty_cycle_pct;      // Inverter Duty Cycle (0.0% to 120.0%, >100% = Field Weakening)
     float rpm;                 // Motor mechanical RPM
     float throttle_pct;        // Throttle input percentage (0 - 100%)
@@ -135,6 +158,7 @@ struct DashTelemetry {
 
     // Ride Modes & Hyper Boost
     RideMode ride_mode;        // Active Ride Mode: ECO, STREET, SPORT, RACE
+    RideMode saved_ride_mode;  // Restored when exiting SCREEN_RACE_TIMER
     bool     tuning_mode;      // false = Stealth / Drossel Mode (Default, red dot on), true = Custom Tuning (red dot off)
     bool     boost_active;     // Temporary 120% power boost active
     uint32_t boost_end_ms;     // Expiration timestamp of boost
@@ -164,8 +188,27 @@ struct DashTelemetry {
     // Custom Rider / Scooter Tag (default: empty)
     char rider_tag[24];
 
+    // Dragy / Launch Acceleration Timer
+    bool        race_popup_open;
+    uint8_t     race_state; // 0=IDLE/READY, 1=COUNTDOWN (5s), 2=MEASURING, 3=FINISHED
+    uint32_t    race_countdown_start_ms;
+    uint32_t    race_launch_start_ms;
+    float       race_elapsed_sec;
+    float       race_split_0_22;
+    float       race_split_0_50;
+    float       race_split_0_70;
+    RaceRecords race_records;
+
     // System Status
     DashboardScreen screen;    // Currently active screen
     bool vesc_connected;       // UART/CAN communication healthy
     uint32_t uptime_sec;       // System run time in seconds
 };
+
+// Thermal protection check for Dragy / Race Launch (> 65 °C blocks launch)
+inline bool isRaceThermalBlocked(const DashTelemetry &t) {
+    if (t.temp_motor > 65.0f || t.temp_esc > 65.0f) return true;
+    if (t.temp_fet_rear > 65.0f || t.temp_mot_rear > 65.0f) return true;
+    if (t.temp_fet_front > 65.0f || t.temp_mot_front > 65.0f) return true;
+    return false;
+}
