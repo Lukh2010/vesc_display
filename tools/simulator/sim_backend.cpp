@@ -234,6 +234,12 @@ static void runSimulationStep(float dt) {
         }
     }
 
+    float effective_power_cap = (lim.max_watt > 50.0f) ? lim.max_watt : 40000.0f;
+    float max_power_bat_a = (s_sim_voltage > 10.0f) ? (effective_power_cap / s_sim_voltage) : max_bat_a;
+    if (max_bat_a > max_power_bat_a) {
+        max_bat_a = max_power_bat_a;
+    }
+
     // 2. Realistic Speed & Dynamic Powertrain Physics
     if (sim_b > 1.0f) {
         // Active Braking: strong regenerative decelerating force
@@ -327,19 +333,20 @@ static void runSimulationStep(float dt) {
 
     // 3. Realistic Duty Cycle
     float base_duty = (s_sim_speed_kmh / 48.0f) * 92.0f;
+    float target_duty = base_duty;
     if (sim_t > 85.0f && s_sim_speed_kmh > 46.0f) {
         float fw_extra = ((sim_t - 85.0f) / 15.0f) * 18.0f;
-        s_sim_duty_cycle_pct = 96.0f + fw_extra;
-    } else {
-        s_sim_duty_cycle_pct = base_duty;
+        target_duty = 96.0f + fw_extra;
     }
     if (sim_t == 0.0f && sim_b <= 1.0f) {
-        s_sim_duty_cycle_pct = (s_sim_speed_kmh / 52.0f) * 85.0f;
+        target_duty = (s_sim_speed_kmh / 52.0f) * 85.0f;
     }
-    if (s_sim_duty_cycle_pct > 118.0f) s_sim_duty_cycle_pct = 118.0f;
-    if (s_sim_duty_cycle_pct < 0.0f) s_sim_duty_cycle_pct = 0.0f;
+    if (target_duty > 118.0f) target_duty = 118.0f;
+    if (target_duty < 0.0f) target_duty = 0.0f;
+    s_sim_duty_cycle_pct += (target_duty - s_sim_duty_cycle_pct) * (dt * 8.0f);
 
-    s_sim_rpm = (s_sim_speed_kmh / 45.0f) * 130.0f * 35.0f;
+    float wheel_rpm = (s_sim_speed_kmh * 1000.0f / 60.0f) / wheel_circ_m;
+    s_sim_rpm = wheel_rpm * gear_ratio;
 
     // 4. Physical Invariant: Phase (motor) current must ALWAYS be >= |Battery current|
     if (s_sim_phase_amps < fabsf(s_sim_current_amps)) {
@@ -361,7 +368,6 @@ static void runSimulationStep(float dt) {
     }
 
     // Dynamic Power Limiting governed by Virtual VESC watt limit
-    float effective_power_cap = lim.max_watt;
     if (s_sim_current_amps > 0.0f && s_sim_power_watts > effective_power_cap) {
         s_sim_power_watts = effective_power_cap;
         if (s_sim_voltage > 10.0f) {
@@ -1239,12 +1245,25 @@ void sim_touch_event(int is_down, int x, int y) {
         }
     } else if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
         if (is_new_down) {
-            if (x <= 150 && y <= 65) {
+            if (x <= 130 && y <= 65) {
                 // Top Left [< DASH] button returns to Ride Dash
                 g_telemetry.screen = SCREEN_RIDE_DASH;
                 Renderer.markScreenDirty();
                 Display.setSimTouch(false, -1, -1);
                 Buttons.setActiveScreen(SCREEN_RIDE_DASH);
+                return;
+            } else if (g_telemetry.tuning_mode && x >= 135 && x <= 255 && y <= 65) {
+                // Top Left [ RACE ] button opens Launch Control screen
+                g_telemetry.screen = SCREEN_RACE_TIMER;
+                g_telemetry.saved_ride_mode = g_telemetry.ride_mode;
+                g_telemetry.ride_mode = MODE_RACE;
+                ModeManager::instance().setRideMode(MODE_RACE);
+                g_telemetry.boost_active = true;
+                g_telemetry.race_state = 0;
+                Buttons.setRaceState(0);
+                Buttons.setActiveScreen(SCREEN_RACE_TIMER);
+                Renderer.markScreenDirty();
+                Display.setSimTouch(false, -1, -1);
                 return;
             } else if (x >= 600 && y <= 65) {
                 // Top Right [RESET TRIP] button
