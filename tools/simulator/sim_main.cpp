@@ -645,15 +645,28 @@ void testTouchGestures() {
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 0);
 
-    // Tap on Tab 1 [ SPORT ] at x=400, y=95
-    touchHandled = Renderer.handleSettingsTouch(400, 95, tTest);
+    // Tap on Tab 1 [ SPORT ] at x=300, y=95
+    touchHandled = Renderer.handleSettingsTouch(300, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 1);
 
-    // Tap on Tab 2 [ RACE ] at x=650, y=95
-    touchHandled = Renderer.handleSettingsTouch(650, 95, tTest);
+    // Tap on Tab 2 [ RACE ] at x=495, y=95
+    touchHandled = Renderer.handleSettingsTouch(495, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 2);
+
+    // Tap on Tab 3 [ VESC TOOL ] at x=690, y=95
+    touchHandled = Renderer.handleSettingsTouch(690, 95, tTest);
+    assert(touchHandled == true);
+    assert(Renderer.getSettingsTab() == 3);
+
+    // Tap on [ WI-FI BRIDGE STARTEN ] at x=200, y=400 while on Tab 3
+    touchHandled = Renderer.handleSettingsTouch(200, 400, tTest);
+    assert(touchHandled == true);
+    assert(tTest.screen == SCREEN_WIFI_BRIDGE);
+    Vesc.exitWifiBridgeMode();
+    tTest.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(2); // Switch back to RACE for limit tests
 
     // 2. Adjust RACE mode limits via [-] and [+] buttons and slider track
     VehicleModeConfig &cfg = ModeManager::instance().getConfig();
@@ -728,7 +741,7 @@ void testTouchGestures() {
     assert(Renderer.getSettingsTab() == 0);
 
     // 2. Tap Tab 2 [ RACE ]
-    runMainLoopTouch(650, 95);
+    runMainLoopTouch(495, 95);
     assert(Renderer.getSettingsTab() == 2);
 
     // 3. Tap [+] Speed button at x=720, y=210
@@ -2015,10 +2028,10 @@ int main(int argc, char **argv) {
     renderAndSave("10_settings_edit_mode", t);
 
     // ----------------------------------------------------
-    // Scenario 11: Screen 3 - Mode Configurator (SPORT Tab Custom)
+    // Scenario 11: Screen 3 - Mode Configurator (VESC TOOL Bridge Hub Tab)
     // ----------------------------------------------------
     t.screen = SCREEN_SETTINGS_MENU;
-    Renderer.setSettingsTab(1);
+    Renderer.setSettingsTab(3);
     Renderer.markScreenDirty();
     renderAndSave("11_settings_display_style", t);
 

@@ -90,7 +90,7 @@ DashboardRenderer::DashboardRenderer()
       _active_style(STYLE_HYPER_35KW),
       _screen_dirty(true),
       _mode_banner_active(false),
-      _settings_tab_idx(1),
+      _settings_tab_idx(255),
       _menu_dirty(true),
       _is_sweeping(false),
       _sweep_phase(0),
@@ -1537,8 +1537,10 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
 // ==============================================================================
 void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
     _canvas->fillScreen(COLOR_BG);
-    _settings_tab_idx = (uint8_t)telemetry.ride_mode;
-    if (_settings_tab_idx >= 3) _settings_tab_idx = 0;
+    if (_settings_tab_idx >= 4) {
+        _settings_tab_idx = (uint8_t)telemetry.ride_mode;
+        if (_settings_tab_idx >= 4) _settings_tab_idx = 0;
+    }
     _menu_dirty = true;
 }
 
@@ -1567,37 +1569,107 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     _canvas->setFont(&fonts::Font2);
     _canvas->drawString("FERTIG", 725, 30);
 
-    // 2. Mode Selection Touch Tabs: [ ECO ] | [ SPORT ] | [ RACE ]
-    const char *tabNames[3] = { "ECO", "SPORT", "RACE" };
-    const char *tabSub[3]   = { "Sparsam", "Dynamisch", "Unlimited 35kW+" };
-    uint16_t tabCols[3]     = { COLOR_GREEN, COLOR_CYAN, COLOR_RACE };
-    uint16_t tabBgCols[3]   = { 0x0200, 0x0188, 0x4002 };
+    // 2. Mode Selection Touch Tabs: [ ECO ] | [ SPORT ] | [ RACE ] | [ VESC TOOL ]
+    const char *tabNames[4] = { "ECO", "SPORT", "RACE", "VESC TOOL" };
+    const char *tabSub[4]   = { "Sparsam", "Dynamisch", "35kW+ Boost", "Bridge & Tools" };
+    uint16_t tabCols[4]     = { COLOR_GREEN, COLOR_CYAN, COLOR_RACE, COLOR_AMBER };
+    uint16_t tabBgCols[4]   = { 0x0200, 0x0188, 0x4002, 0x31A0 };
 
-    int tabX[3] = { 20, 280, 540 };
-    int tabW = 240;
+    int tabX[4] = { 20, 210, 400, 590 };
+    int tabW[4] = { 178, 178, 178, 190 };
     int tabH = 54;
     int tabY = 62;
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         bool isSel = (i == _settings_tab_idx);
         uint16_t borderCol = isSel ? tabCols[i] : COLOR_BORDER;
         uint16_t bgCol     = isSel ? tabBgCols[i] : COLOR_SURFACE;
         uint16_t txtCol    = isSel ? tabCols[i] : COLOR_MUTED_GRAY;
 
-        _canvas->fillRoundRect(tabX[i], tabY, tabW, tabH, 10, bgCol);
-        _canvas->drawRoundRect(tabX[i], tabY, tabW, tabH, 10, borderCol);
+        _canvas->fillRoundRect(tabX[i], tabY, tabW[i], tabH, 10, bgCol);
+        _canvas->drawRoundRect(tabX[i], tabY, tabW[i], tabH, 10, borderCol);
         if (isSel) {
-            _canvas->drawRoundRect(tabX[i] + 1, tabY + 1, tabW - 2, tabH - 2, 9, borderCol);
+            _canvas->drawRoundRect(tabX[i] + 1, tabY + 1, tabW[i] - 2, tabH - 2, 9, borderCol);
         }
 
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(txtCol, bgCol);
-        _canvas->drawString(tabNames[i], tabX[i] + tabW / 2, tabY + 20);
+        _canvas->drawString(tabNames[i], tabX[i] + tabW[i] / 2, tabY + 20);
 
         _canvas->setFont(&fonts::Font0);
         _canvas->setTextColor(isSel ? COLOR_WHITE : 0x52AA, bgCol);
-        _canvas->drawString(tabSub[i], tabX[i] + tabW / 2, tabY + 41);
+        _canvas->drawString(tabSub[i], tabX[i] + tabW[i] / 2, tabY + 41);
+    }
+
+    if (_settings_tab_idx == 3) {
+        // VESC TOOL CONNECTION CENTER (y: 130..450)
+        // Left Card: Wireless Wi-Fi Bridge (AP)
+        drawCard(20, 130, 370, 315, COLOR_SURFACE, COLOR_BORDER);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
+        _canvas->drawString("WI-FI BRIDGE (AP)", 38, 145);
+        _canvas->setFont(&fonts::Font0);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+        _canvas->drawString("KABELLOS ZU VESC TOOL MOBILE & PC", 38, 175);
+
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+        _canvas->drawString("SSID:   VESC-DASH-AP", 38, 205);
+        _canvas->drawString("IP:     192.168.4.1", 38, 235);
+        _canvas->drawString("Port:   6510 (TCP Standard)", 38, 265);
+        _canvas->drawString("Passw:  Kein Passwort (Open)", 38, 295);
+
+        _canvas->setFont(&fonts::Font0);
+        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
+        _canvas->drawString("1. Smartphone / PC mit WiFi verbinden", 38, 330);
+        _canvas->drawString("2. In VESC Tool: TCP -> 192.168.4.1:6510", 38, 348);
+
+        // Action Button: [ WI-FI BRIDGE STARTEN ]
+        _canvas->fillRoundRect(38, 375, 334, 52, 10, 0x0A82);
+        _canvas->drawRoundRect(38, 375, 334, 52, 10, COLOR_GREEN);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setTextColor(COLOR_WHITE, 0x0A82);
+        _canvas->drawString("WI-FI BRIDGE STARTEN", 38 + 167, 375 + 26);
+
+        // Right Card: USB-C Passthrough Bridge
+        drawCard(410, 130, 370, 315, COLOR_SURFACE, COLOR_BORDER);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
+        _canvas->drawString("USB PASSTHROUGH", 428, 145);
+        _canvas->setFont(&fonts::Font0);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+        _canvas->drawString("DIREKTKABEL PC <-> VESC", 428, 175);
+
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+        _canvas->drawString("Port:   USB CDC (/dev/ttyACM0)", 428, 205);
+        _canvas->drawString("Baud:   115200 (CDC <-> UART)", 428, 235);
+        _canvas->drawString("Pins:   TX=43, RX=44 (Serial1)", 428, 265);
+        _canvas->drawString("Status: 1:1 Live Hardware Bridge", 428, 295);
+
+        _canvas->setFont(&fonts::Font0);
+        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
+        _canvas->drawString("1. PC per USB-C an Display anschliessen", 428, 330);
+        _canvas->drawString("2. In VESC Tool: Serial / COM Port waehlen", 428, 348);
+
+        // Action Button: [ USB BRIDGE STARTEN ]
+        _canvas->fillRoundRect(428, 375, 334, 52, 10, 0x0188);
+        _canvas->drawRoundRect(428, 375, 334, 52, 10, COLOR_CYAN);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setTextColor(COLOR_WHITE, 0x0188);
+        _canvas->drawString("USB BRIDGE STARTEN", 428 + 167, 375 + 26);
+
+        // Footer Strip
+        _canvas->setFont(&fonts::Font0);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
+        _canvas->drawString("Simulator TCP: 127.0.0.1:6510 aktiv  |  Zurueck mit [< DASH]", 400, 462);
+        return;
     }
 
     // 3. Current Mode Configuration Data
@@ -1754,6 +1826,7 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
         Settings.save();
         ModeManager::instance().applyCurrentMode();
 
+        _settings_tab_idx = 255;
         telemetry.screen = SCREEN_RIDE_DASH;
         _screen_dirty = true;
         _cache.invalidate();
@@ -1765,8 +1838,8 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
     ModeLimits &lim = cfg.tuned_modes[m];
 
     if (action == NAV_BOTH_PRESSED) {
-        // Cycle tab: ECO -> SPORT -> RACE -> ECO
-        _settings_tab_idx = (_settings_tab_idx + 1) % 3;
+        // Cycle tab: ECO -> SPORT -> RACE -> VESC TOOL -> ECO
+        _settings_tab_idx = (_settings_tab_idx + 1) % 4;
         _menu_dirty = true;
         return;
     }
@@ -1800,19 +1873,45 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
 
     // 2. TABS (y: 58..125)
     if (ty >= 58 && ty <= 125) {
-        if (tx >= 20 && tx <= 265) {
+        if (tx >= 20 && tx < 205) {
             _settings_tab_idx = 0; // ECO
             _menu_dirty = true;
             return true;
-        } else if (tx >= 270 && tx <= 530) {
+        } else if (tx >= 205 && tx < 395) {
             _settings_tab_idx = 1; // SPORT
             _menu_dirty = true;
             return true;
-        } else if (tx >= 535 && tx <= 780) {
+        } else if (tx >= 395 && tx < 585) {
             _settings_tab_idx = 2; // RACE
             _menu_dirty = true;
             return true;
+        } else if (tx >= 585 && tx <= 780) {
+            _settings_tab_idx = 3; // VESC TOOL
+            _menu_dirty = true;
+            return true;
         }
+    }
+
+    if (_settings_tab_idx == 3) {
+        // Left Card Button: Start Wi-Fi Bridge
+        if (tx >= 35 && tx <= 375 && ty >= 370 && ty <= 435) {
+            Vesc.enterWifiBridgeMode();
+            telemetry.screen = SCREEN_WIFI_BRIDGE;
+            _screen_dirty = true;
+            _cache.invalidate();
+            Buttons.setActiveScreen(SCREEN_WIFI_BRIDGE);
+            return true;
+        }
+        // Right Card Button: Start USB Bridge
+        if (tx >= 425 && tx <= 765 && ty >= 370 && ty <= 435) {
+            Vesc.enterBridgeMode();
+            telemetry.screen = SCREEN_VESC_BRIDGE;
+            _screen_dirty = true;
+            _cache.invalidate();
+            Buttons.setActiveScreen(SCREEN_VESC_BRIDGE);
+            return true;
+        }
+        return false;
     }
 
     VehicleModeConfig &cfg = ModeManager::instance().getConfig();

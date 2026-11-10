@@ -1331,6 +1331,15 @@ void sim_touch_event(int is_down, int x, int y) {
             Buttons.setActiveScreen(SCREEN_RT_GRAPHS);
             return;
         }
+    } else if (is_new_down && (g_telemetry.screen == SCREEN_VESC_BRIDGE || g_telemetry.screen == SCREEN_WIFI_BRIDGE)) {
+        Vesc.exitBridgeMode();
+        Vesc.exitWifiBridgeMode();
+        g_telemetry.screen = SCREEN_SETTINGS_MENU;
+        Renderer.markScreenDirty();
+        Renderer.invalidateCache();
+        Display.setSimTouch(false, -1, -1);
+        Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
+        return;
     }
 
     Buttons.setActiveScreen(g_telemetry.screen);
@@ -1348,6 +1357,15 @@ void sim_touch_event(int is_down, int x, int y) {
 }
 
 void sim_trigger_nav(int nav_action) {
+    if (g_telemetry.screen == SCREEN_VESC_BRIDGE || g_telemetry.screen == SCREEN_WIFI_BRIDGE) {
+        Vesc.exitBridgeMode();
+        Vesc.exitWifiBridgeMode();
+        g_telemetry.screen = SCREEN_SETTINGS_MENU;
+        Renderer.markScreenDirty();
+        Renderer.invalidateCache();
+        Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
+        return;
+    }
     if (g_telemetry.screen == SCREEN_SETTINGS_MENU) {
         Renderer.handleMenuNav((NavAction)nav_action, g_telemetry);
     } else {

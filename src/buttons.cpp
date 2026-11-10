@@ -341,6 +341,9 @@ void ButtonHandler::processTouch(uint32_t now) {
                             _pending_action = NAV_SCREEN_DASH; // Top Right [FERTIG / X] -> Return to Ride Dash
                         }
                         // Detailed tab selection and slider touches are forwarded to Renderer.handleSettingsTouch via getLastTap()
+                    } else if (_active_screen == SCREEN_VESC_BRIDGE || _active_screen == SCREEN_WIFI_BRIDGE) {
+                        // On VESC Tool Bridge Screens: tapping anywhere exits back to Dash
+                        _pending_action = NAV_SCREEN_DASH;
                     } else {
                         // On SCREEN_RIDE_DASH / Default:
                         // 1. Top Left [ STATS ] Navigation Touch Button -> Open Statistics Screen (SCREEN_RT_GRAPHS)
