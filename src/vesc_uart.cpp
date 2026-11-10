@@ -379,6 +379,10 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         uint8_t controller_id = (uint8_t)(msg.identifier & 0xFF);
         uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
 
+        static uint8_t s_primary_vesc_id = VESC_CAN_ID_DEFAULT;
+        bool is_primary = (controller_id == s_primary_vesc_id || controller_id == 76 || controller_id == 0);
+        bool is_secondary = (!is_primary && (controller_id == 1 || controller_id == 77));
+
         if (cmd_id == 9 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS
             int32_t erpm = (int32_t)(((uint32_t)msg.data[0] << 24) |
                                      ((uint32_t)msg.data[1] << 16) |
@@ -390,7 +394,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
             float mot_i = fabsf((float)cur_raw / 10.0f);
             float duty = fabsf((float)duty_raw / 10.0f);
 
-            if (controller_id == 0) {
+            if (is_primary) {
                 int pole_pairs = Settings.get().motor_pole_pairs > 1 ? Settings.get().motor_pole_pairs : 15;
                 float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
                 float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
@@ -403,7 +407,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 telemetry.duty_cycle_pct = duty;
                 telemetry.vesc_connected = true;
                 s_last_can_rx_ms = now;
-            } else if (controller_id == 1) {
+            } else if (is_secondary) {
                 telemetry.vesc2_max_phase = mot_i;
                 telemetry.vesc_connected = true;
                 s_last_can_rx_ms = now;
@@ -418,7 +422,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
             float t_mot = (float)mot_raw / 10.0f;
             float bat_i = (float)in_raw / 10.0f;
 
-            if (controller_id == 0) {
+            if (is_primary) {
                 telemetry.temp_esc = t_fet;
                 telemetry.temp_motor = t_mot;
                 telemetry.temp_fet_rear = t_fet;
@@ -427,7 +431,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
                 telemetry.vesc_connected = true;
                 s_last_can_rx_ms = now;
-            } else if (controller_id == 1) {
+            } else if (is_secondary) {
                 telemetry.temp_fet_front = t_fet;
                 telemetry.temp_mot_front = t_mot;
                 telemetry.vesc2_max_power = telemetry.voltage * bat_i;
@@ -442,7 +446,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
             int16_t v_raw = (int16_t)(((uint16_t)msg.data[4] << 8) | msg.data[5]);
             float v_in = ((float)v_raw / 10.0f) + Settings.get().voltage_trim_v;
 
-            if (controller_id == 0) {
+            if (is_primary) {
                 telemetry.voltage = v_in;
                 telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
 
@@ -466,7 +470,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                                        ((uint32_t)msg.data[1] << 16) |
                                        ((uint32_t)msg.data[2] << 8)  |
                                        (uint32_t)msg.data[3]);
-            if (controller_id == 0) {
+            if (is_primary) {
                 telemetry.amphours_used = (float)ah_raw / 10000.0f;
             }
         }
@@ -1245,7 +1249,7 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     if (s_can_initialized) {
         twai_message_t can_lim;
         can_lim.extd = 1;
-        can_lim.identifier = (21 << 8) | 0; // CAN_PACKET_CONF_CURRENT_LIMITS -> VESC ID 0
+        can_lim.identifier = (21 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC (76)
         can_lim.data_length_code = 8;
         int32_t min_mot = (int32_t)(-max_phase_amps * 1000.0f);
         int32_t max_mot = (int32_t)(max_phase_amps * 1000.0f);
@@ -1258,12 +1262,14 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         can_lim.data[6] = (max_mot >> 8) & 0xFF;
         can_lim.data[7] = max_mot & 0xFF;
         twai_transmit(&can_lim, pdMS_TO_TICKS(10));
+        can_lim.identifier = (21 << 8) | 0; // Also dispatch to ID 0
+        twai_transmit(&can_lim, pdMS_TO_TICKS(10));
         can_lim.identifier = (21 << 8) | 1; // Also dispatch to VESC ID 1 (Dual VESC)
         twai_transmit(&can_lim, pdMS_TO_TICKS(10));
 
         twai_message_t can_lim_in;
         can_lim_in.extd = 1;
-        can_lim_in.identifier = (23 << 8) | 0; // CAN_PACKET_CONF_CURRENT_LIMITS_IN -> VESC ID 0
+        can_lim_in.identifier = (23 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS_IN -> Target VESC (76)
         can_lim_in.data_length_code = 8;
         int32_t min_bat = (int32_t)(-max_battery_amps * 1000.0f);
         int32_t max_bat = (int32_t)(max_battery_amps * 1000.0f);
@@ -1275,6 +1281,8 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         can_lim_in.data[5] = (max_bat >> 16) & 0xFF;
         can_lim_in.data[6] = (max_bat >> 8) & 0xFF;
         can_lim_in.data[7] = max_bat & 0xFF;
+        twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
+        can_lim_in.identifier = (23 << 8) | 0; // Also dispatch to ID 0
         twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
         can_lim_in.identifier = (23 << 8) | 1; // Also dispatch to VESC ID 1 (Dual VESC)
         twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
