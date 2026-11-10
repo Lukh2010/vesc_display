@@ -516,8 +516,10 @@ void loop() {
                         telemetry.ride_mode = MODE_RACE;
                         ModeManager::instance().setRideMode(MODE_RACE);
                         telemetry.boost_active = true;
+                        ModeManager::instance().setBoostActive(true);
                     } else {
                         telemetry.boost_active = false;
+                        ModeManager::instance().setBoostActive(false);
                     }
                     telemetry.boost_end_ms = now + 60000;
                     Renderer.markScreenDirty();
@@ -552,6 +554,7 @@ void loop() {
                     telemetry.ride_mode = MODE_RACE;
                     ModeManager::instance().setRideMode(MODE_RACE);
                     telemetry.boost_active = true;
+                    ModeManager::instance().setBoostActive(true);
                     telemetry.boost_end_ms = now + 60000;
                     telemetry.race_state = 1; // COUNTDOWN (5s)
                     telemetry.race_countdown_start_ms = now;
@@ -569,6 +572,7 @@ void loop() {
                     telemetry.ride_mode = telemetry.saved_ride_mode;
                     ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                     telemetry.boost_active = false;
+                    ModeManager::instance().setBoostActive(false);
                     Buttons.setRaceState(0);
                     Renderer.markScreenDirty();
                     Serial.println("[RACE] Launch timer stopped/aborted (restored mode & boost off)");
@@ -580,6 +584,7 @@ void loop() {
                         telemetry.ride_mode = telemetry.saved_ride_mode;
                         ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                         telemetry.boost_active = false;
+                        ModeManager::instance().setBoostActive(false);
                         telemetry.race_popup_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
@@ -602,6 +607,7 @@ void loop() {
                     if (telemetry.boost_active) {
                         telemetry.boost_end_ms = now + 10000;
                     }
+                    ModeManager::instance().setBoostActive(telemetry.boost_active);
                     if (telemetry.throttle_pct <= 0.01f && telemetry.speed_kmh <= 0.5f) {
                         telemetry.speed_kmh = 0.0f;
                         telemetry.power_watts = 0.0f;
@@ -609,7 +615,9 @@ void loop() {
                         telemetry.phase_amps = 0.0f;
                     }
                     Renderer.markScreenDirty();
-                    Serial.printf("[NAV] Toggled Hyper Boost: %s\n", telemetry.boost_active ? "ACTIVE" : "OFF");
+                    Serial.printf("[NAV] Toggled Hyper Boost: %s (Battery Limit: %.1f A)\n",
+                                  telemetry.boost_active ? "ACTIVE (70A)" : "OFF (60A)",
+                                  ModeManager::instance().getActiveLimits().max_battery_amps);
                     break;
 
                 case NAV_TUNING_ENABLE:
@@ -625,13 +633,14 @@ void loop() {
                     telemetry.tuning_mode = false;
                     Buttons.setTuningMode(false);
                     ModeManager::instance().setTuningMode(false);
+                    telemetry.boost_active = false;
+                    ModeManager::instance().setBoostActive(false);
                     telemetry.mode_badge_until = now + 2500;
                     if (telemetry.screen == SCREEN_RACE_TIMER) {
                         telemetry.screen = SCREEN_RIDE_DASH;
                         telemetry.race_state = 0;
                         telemetry.ride_mode = telemetry.saved_ride_mode;
                         ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
-                        telemetry.boost_active = false;
                         telemetry.race_popup_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
@@ -684,7 +693,9 @@ void loop() {
     // Boost timer expiration check (10s max duration on ride dash)
     if (telemetry.screen != SCREEN_RACE_TIMER && telemetry.boost_active && now > telemetry.boost_end_ms) {
         telemetry.boost_active = false;
+        ModeManager::instance().setBoostActive(false);
         Renderer.markScreenDirty();
+        Serial.println("[TIMER] Hyper Boost timed out (10s limit reached, restored 60A battery limit)");
     }
 
     // Record waveform curves every 1000ms
