@@ -51,7 +51,8 @@ enum VescCommPacketId : uint8_t {
     COMM_GET_VALUES_SELECTIVE   = 50,
     COMM_GET_VALUES_SETUP_SELECTIVE = 51,
     COMM_SET_MCCONF_TEMP        = 62,
-    COMM_SET_MCCONF_TEMP_SETUP  = 63
+    COMM_SET_MCCONF_TEMP_SETUP  = 63,
+    COMM_GET_STATS              = 128
 };
 
 struct VirtualVescLimits {
@@ -217,6 +218,7 @@ private:
     void handleSetHandbrake(const uint8_t *payload, size_t len);
     void handleForwardCan(const uint8_t *payload, size_t len);
     void handleTerminalCmd(const uint8_t *payload, size_t len);
+    void handleGetStats(const uint8_t *payload, size_t len);
 
     IVescTransport *_transport;
     VescPacketParser _parser;

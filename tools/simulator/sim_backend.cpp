@@ -112,7 +112,7 @@ static float s_sim_incline_deg = 0.0f;
 
 static void ensureZeroSpeedIfIdle() {
     bool has_ext = g_virtual_vesc.hasExternalControl() && g_virtual_vesc.getExternalThrottle() > 0.01f;
-    if (g_manual_throttle <= 0.01f && !has_ext) {
+    if (s_sim_speed_kmh <= 0.5f && g_manual_throttle <= 0.01f && !has_ext) {
         s_sim_speed_kmh = 0.0f;
         s_sim_current_amps = 0.0f;
         s_sim_phase_amps = 0.0f;
@@ -331,15 +331,19 @@ static void runSimulationStep(float dt) {
         }
     }
 
-    // 3. Realistic Duty Cycle
-    float base_duty = (s_sim_speed_kmh / 48.0f) * 92.0f;
+    // 3. Realistic Duty Cycle (Inverter PWM modulation index)
+    // Duty cycle tracks back-EMF relative to maximum achievable speed in current mode
+    float speed_ref = (max_possible_speed > 5.0f) ? max_possible_speed : 48.0f;
+    float base_duty = (s_sim_speed_kmh / speed_ref) * 92.0f;
     float target_duty = base_duty;
-    if (sim_t > 85.0f && s_sim_speed_kmh > 46.0f) {
+    if (sim_t > 85.0f && s_sim_speed_kmh > (speed_ref * 0.90f)) {
+        // Field Weakening engaged: duty cycle pushes beyond 100% (up to 114%)
         float fw_extra = ((sim_t - 85.0f) / 15.0f) * 18.0f;
         target_duty = 96.0f + fw_extra;
     }
     if (sim_t == 0.0f && sim_b <= 1.0f) {
-        target_duty = (s_sim_speed_kmh / 52.0f) * 85.0f;
+        // Coasting: duty cycle follows back-EMF of spinning rotor
+        target_duty = (s_sim_speed_kmh / speed_ref) * 85.0f;
     }
     if (target_duty > 118.0f) target_duty = 118.0f;
     if (target_duty < 0.0f) target_duty = 0.0f;
@@ -481,7 +485,6 @@ static void runSimulationStep(float dt) {
     vt.brake_pct = sim_b;
     g_virtual_vesc.setPhysicsTelemetry(vt);
     g_telemetry.incline_deg = s_sim_incline_deg;
-    ensureZeroSpeedIfIdle();
 }
 
 // -------------------------------------------------------------

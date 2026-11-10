@@ -170,6 +170,10 @@ void VirtualVesc::handlePacket(const uint8_t *payload, size_t len, const Respons
             handleTerminalCmd(payload, len);
             break;
 
+        case COMM_GET_STATS:
+            handleGetStats(payload, len);
+            break;
+
         case COMM_ALIVE:
             if (_has_ext_ctrl) {
                 _last_ext_ctrl_time = std::chrono::steady_clock::now();
@@ -515,8 +519,14 @@ void VirtualVesc::handleSetCurrent(const uint8_t *payload, size_t len) {
     _has_ext_current_ctrl = true;
 
     if (current_a >= 0.0f) {
-        _ext_throttle_pct = (current_a / max_a) * 100.0f;
-        if (_ext_throttle_pct > 100.0f) _ext_throttle_pct = 100.0f;
+        if (current_a <= 0.05f) {
+            _ext_throttle_pct = 0.0f;
+        } else {
+            // Torque control: even modest test currents (e.g. 3-5A in VESC Tool) produce positive accelerating torque
+            float norm = (current_a / max_a);
+            if (norm > 1.0f) norm = 1.0f;
+            _ext_throttle_pct = 25.0f + norm * 75.0f;
+        }
         _ext_brake_pct = 0.0f;
     } else {
         _ext_throttle_pct = 0.0f;
@@ -642,4 +652,38 @@ void VirtualVesc::handleTerminalCmd(const uint8_t *payload, size_t len) {
         resp.push_back(0); // Null terminator
         sendResponse(resp.data(), resp.size());
     }
+}
+
+void VirtualVesc::handleGetStats(const uint8_t *payload, size_t len) {
+    uint8_t buf[128];
+    int32_t idx = 0;
+    buf[idx++] = COMM_GET_STATS;
+
+    uint32_t mask = 0xFFFF;
+    if (len >= 3) {
+        int32_t p_ind = 1;
+        mask = (uint32_t)buffer_get_uint16(payload, &p_ind);
+    }
+    buffer_append_uint32(buf, mask, &idx);
+
+    int pole_pairs = (_telem.pole_pairs < 2) ? 15 : _telem.pole_pairs;
+    float erpm_max = _telem.rpm * (float)pole_pairs;
+    float erpm_avg = erpm_max * 0.75f;
+    float pwr_avg  = _telem.voltage * _telem.current_in * 0.7f;
+    float pwr_max  = _telem.voltage * _telem.current_in;
+    float cur_avg  = _telem.current_in * 0.7f;
+    float cur_max  = _telem.current_in;
+
+    if (mask & ((uint32_t)1 << 0)) buffer_append_float32_auto(buf, erpm_avg, &idx);
+    if (mask & ((uint32_t)1 << 1)) buffer_append_float32_auto(buf, erpm_max, &idx);
+    if (mask & ((uint32_t)1 << 2)) buffer_append_float32_auto(buf, pwr_avg, &idx);
+    if (mask & ((uint32_t)1 << 3)) buffer_append_float32_auto(buf, pwr_max, &idx);
+    if (mask & ((uint32_t)1 << 4)) buffer_append_float32_auto(buf, cur_avg, &idx);
+    if (mask & ((uint32_t)1 << 5)) buffer_append_float32_auto(buf, cur_max, &idx);
+    if (mask & ((uint32_t)1 << 6)) buffer_append_float32_auto(buf, _telem.temp_mos, &idx);
+    if (mask & ((uint32_t)1 << 7)) buffer_append_float32_auto(buf, _telem.temp_mos, &idx);
+    if (mask & ((uint32_t)1 << 8)) buffer_append_float32_auto(buf, _telem.temp_mot, &idx);
+    if (mask & ((uint32_t)1 << 9)) buffer_append_float32_auto(buf, _telem.temp_mot, &idx);
+
+    sendResponse(buf, idx);
 }
