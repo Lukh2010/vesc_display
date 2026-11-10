@@ -1504,6 +1504,46 @@ void testVirtualVescEmulator() {
         printf("[PASS] 6. COMM_GET_VALUES_SETUP response with mm/s ground speed verified.\n");
     }
 
+    // 6b. COMM_GET_VALUES_SETUP_SELECTIVE responses (modern VESC Tool RT streaming)
+    {
+        VirtualVescTelemetry vt;
+        vt.current_mot = 42.5f;
+        vt.speed_kmh = 36.0f; // 10,000 mm/s ground speed
+        virtual_vesc.setPhysicsTelemetry(vt);
+
+        // Request selective with mask: bit 2 (current_mot) and bit 6 (speed)
+        uint32_t req_mask = (1 << 2) | (1 << 6);
+        uint8_t req[5];
+        req[0] = COMM_GET_VALUES_SETUP_SELECTIVE;
+        int32_t midx = 1;
+        buffer_append_uint32(req, req_mask, &midx);
+
+        uint8_t req_packet[32];
+        size_t req_len = vesc_encode_packet(req, sizeof(req), req_packet, sizeof(req_packet));
+        loopback.getSideA().write(req_packet, req_len);
+
+        virtual_vesc.process();
+
+        VescPacketParser parser;
+        bool resp_ok = false;
+        uint8_t rx_buf[256];
+        size_t n_rx = loopback.getSideA().readBytes(rx_buf, sizeof(rx_buf));
+        parser.processBuffer(rx_buf, n_rx, [&](const uint8_t *p, size_t l) {
+            assert(l >= 13);
+            assert(p[0] == COMM_GET_VALUES_SETUP_SELECTIVE);
+            int32_t idx = 1;
+            uint32_t echoed_mask = buffer_get_uint32(p, &idx);
+            assert(echoed_mask == req_mask);
+            int32_t c_mot = buffer_get_int32(p, &idx);
+            int32_t spd = buffer_get_int32(p, &idx);
+            assert(c_mot == 4250);
+            assert(spd == 10000); // 36.0 km/h = 10,000 mm/s
+            resp_ok = true;
+        });
+        assert(resp_ok);
+        printf("[PASS] 6b. COMM_GET_VALUES_SETUP_SELECTIVE RT streaming verified.\n");
+    }
+
     // 7. Correct telemetry scaling
     {
         VirtualVescTelemetry vt;
@@ -1829,7 +1869,7 @@ void testVirtualVescEmulator() {
             assert(len >= 3);
             assert(payload[0] == COMM_FW_VERSION);
             assert(payload[1] == 6); // fw_major
-            assert(payload[2] == 5); // fw_minor
+            assert(payload[2] == 6); // fw_minor (6.06 matching VESC Tool 7.00)
             got_fw = true;
         });
         assert(got_fw);

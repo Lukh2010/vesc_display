@@ -48,6 +48,8 @@ enum VescCommPacketId : uint8_t {
     COMM_SET_CHUCK_DATA         = 35,
     COMM_CUSTOM_APP_DATA        = 36,
     COMM_GET_VALUES_SETUP       = 47,
+    COMM_GET_VALUES_SELECTIVE   = 50,
+    COMM_GET_VALUES_SETUP_SELECTIVE = 51,
     COMM_SET_MCCONF_TEMP        = 62,
     COMM_SET_MCCONF_TEMP_SETUP  = 63
 };
@@ -199,8 +201,8 @@ private:
 
     // Command Handlers
     void handleFwVersion();
-    void handleGetValues();
-    void handleGetValuesSetup();
+    void handleGetValues(uint8_t cmd_id, const uint8_t *payload, size_t len);
+    void handleGetValuesSetup(uint8_t cmd_id, const uint8_t *payload, size_t len);
     void handleGetDecodedAdc();
     void handleGetDecodedPpm();
     void handleGetDecodedChuk();
