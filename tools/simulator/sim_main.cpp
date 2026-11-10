@@ -1544,6 +1544,49 @@ void testVirtualVescEmulator() {
         printf("[PASS] 6b. COMM_GET_VALUES_SETUP_SELECTIVE RT streaming verified.\n");
     }
 
+    // 6c. COMM_GET_STATS responses (VESC Tool runtime statistics)
+    {
+        VirtualVescTelemetry vt;
+        vt.rpm = 3000.0f;
+        vt.pole_pairs = 15;
+        vt.voltage = 75.0f;
+        vt.current_in = 20.0f;
+        vt.temp_mos = 45.0f;
+        vt.temp_mot = 55.0f;
+        virtual_vesc.setPhysicsTelemetry(vt);
+
+        uint16_t req_mask = 0x0003; // speed_avg, speed_max
+        uint8_t req[3];
+        req[0] = COMM_GET_STATS;
+        int32_t midx = 1;
+        buffer_append_uint16(req, req_mask, &midx);
+
+        uint8_t req_packet[32];
+        size_t req_len = vesc_encode_packet(req, sizeof(req), req_packet, sizeof(req_packet));
+        loopback.getSideA().write(req_packet, req_len);
+
+        virtual_vesc.process();
+
+        VescPacketParser parser;
+        bool resp_ok = false;
+        uint8_t rx_buf[256];
+        size_t n_rx = loopback.getSideA().readBytes(rx_buf, sizeof(rx_buf));
+        parser.processBuffer(rx_buf, n_rx, [&](const uint8_t *p, size_t l) {
+            assert(l >= 5);
+            assert(p[0] == COMM_GET_STATS);
+            int32_t idx = 1;
+            uint32_t echoed_mask = buffer_get_uint32(p, &idx);
+            assert(echoed_mask == (uint32_t)req_mask);
+            float spd_avg = buffer_get_float32_auto(p, &idx);
+            float spd_max = buffer_get_float32_auto(p, &idx);
+            assert(spd_max == 45000.0f); // 3000 RPM * 15 pole pairs
+            assert(spd_avg == 45000.0f * 0.75f);
+            resp_ok = true;
+        });
+        assert(resp_ok);
+        printf("[PASS] 6c. COMM_GET_STATS response verified.\n");
+    }
+
     // 7. Correct telemetry scaling
     {
         VirtualVescTelemetry vt;

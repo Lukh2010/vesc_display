@@ -696,6 +696,8 @@ class DesktopDemoApp:
         self.root.resizable(False, False)
 
         self.touch_active = False
+        self._up_release_timer = None
+        self._down_release_timer = None
 
         # 800x480 Canvas (Display Screen Only)
         self.canvas = tk.Canvas(root, width=LCD_W, height=LCD_H, bg="#000000", highlightthickness=0)
@@ -756,16 +758,29 @@ class DesktopDemoApp:
         self.update_loop()
 
     def on_up_press(self):
+        if self._up_release_timer:
+            self.root.after_cancel(self._up_release_timer)
+            self._up_release_timer = None
         if current_telemetry.screen == SCREEN_SETTINGS_MENU:
             self.trigger_nav(NAV_BTN1_SHORT)
         else:
             self.set_throttle(100.0)
 
     def on_up_release(self):
+        if self._up_release_timer:
+            self.root.after_cancel(self._up_release_timer)
+        # 60ms buffer absorbs X11 auto-repeat release/press flutter while holding key
+        self._up_release_timer = self.root.after(60, self._do_up_release)
+
+    def _do_up_release(self):
+        self._up_release_timer = None
         if current_telemetry.screen != SCREEN_SETTINGS_MENU:
             self.set_throttle(0.0)
 
     def on_down_press(self):
+        if self._down_release_timer:
+            self.root.after_cancel(self._down_release_timer)
+            self._down_release_timer = None
         if current_telemetry.screen == SCREEN_SETTINGS_MENU:
             self.trigger_nav(NAV_BTN2_SHORT)
         else:
@@ -773,6 +788,12 @@ class DesktopDemoApp:
             self.set_brake(75.0)
 
     def on_down_release(self):
+        if self._down_release_timer:
+            self.root.after_cancel(self._down_release_timer)
+        self._down_release_timer = self.root.after(60, self._do_down_release)
+
+    def _do_down_release(self):
+        self._down_release_timer = None
         if current_telemetry.screen != SCREEN_SETTINGS_MENU:
             self.set_brake(0.0)
 
