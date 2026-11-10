@@ -380,7 +380,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
 
         static uint8_t s_primary_vesc_id = VESC_CAN_ID_DEFAULT;
-        bool is_primary = (controller_id == s_primary_vesc_id || controller_id == 76 || controller_id == 0);
+        bool is_primary = (controller_id == 76 || (controller_id == s_primary_vesc_id && s_primary_vesc_id != 0));
         bool is_secondary = (!is_primary && (controller_id == 1 || controller_id == 77));
 
         if (cmd_id == 9 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS
@@ -405,6 +405,16 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
                 telemetry.phase_amps = mot_i;
                 telemetry.duty_cycle_pct = duty;
+
+                // High-frequency (50Hz) power fallback if battery current in Status 4 is temporarily 0 or lagging
+                if (telemetry.voltage > 10.0f && mot_i > 0.5f && duty > 0.5f) {
+                    float est_bat_i = mot_i * (duty / 100.0f);
+                    if (telemetry.current_amps < 0.1f && est_bat_i > 0.2f) {
+                        telemetry.current_amps = est_bat_i;
+                        telemetry.power_watts = telemetry.voltage * est_bat_i;
+                    }
+                }
+
                 telemetry.vesc_connected = true;
                 s_last_can_rx_ms = now;
             } else if (is_secondary) {
@@ -428,7 +438,9 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 telemetry.temp_fet_rear = t_fet;
                 telemetry.temp_mot_rear = t_mot;
                 telemetry.current_amps = bat_i;
-                telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
+                if (telemetry.voltage > 10.0f) {
+                    telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
+                }
                 telemetry.vesc_connected = true;
                 s_last_can_rx_ms = now;
             } else if (is_secondary) {
@@ -448,7 +460,9 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
 
             if (is_primary) {
                 telemetry.voltage = v_in;
-                telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
+                if (telemetry.voltage > 10.0f) {
+                    telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
+                }
 
                 static bool s_can_tacho_init = false;
                 if (!s_can_tacho_init) {
@@ -494,6 +508,10 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         telemetry.phase_amps = 0.0f;
         telemetry.power_watts = 0.0f;
         telemetry.duty_cycle_pct = 0.0f;
+    } else if (telemetry.speed_kmh < 0.5f && fabsf(telemetry.current_amps) < 0.25f && fabsf(telemetry.phase_amps) < 0.5f) {
+        telemetry.power_watts = 0.0f;
+        telemetry.current_amps = 0.0f;
+        telemetry.phase_amps = 0.0f;
     }
 
     if (dt > 0.001f && dt < 1.0f) {

@@ -531,12 +531,13 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         if (dt < 0.001f) dt = 0.016f;
         if (dt > 0.1f) dt = 0.1f;
         float k = 1.0f - expf(-18.0f * dt);
+        float k_pwr = 1.0f - expf(-12.0f * dt);
         _anim_speed += (telemetry.speed_kmh - _anim_speed) * k;
-        _anim_power += (telemetry.power_watts - _anim_power) * k;
+        _anim_power += (telemetry.power_watts - _anim_power) * k_pwr;
         _anim_duty  += (telemetry.duty_cycle_pct - _anim_duty) * k;
     }
     if (telemetry.speed_kmh == 0.0f) _anim_speed = 0.0f;
-    if (telemetry.power_watts == 0.0f) _anim_power = 0.0f;
+    if (fabsf(_anim_power) < 15.0f && telemetry.speed_kmh < 0.5f) _anim_power = 0.0f;
     if (telemetry.duty_cycle_pct == 0.0f) _anim_duty = 0.0f;
 
     int cx = 240, cy = 215;
@@ -670,7 +671,10 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     }
 
     // 5. Right Column: Hero Power Readout (Only redrawn when watts change)
-    int cur_watts = (int)roundf(telemetry.power_watts);
+    int cur_watts = (int)roundf(_anim_power);
+    if (fabsf(_anim_power) < 15.0f && (telemetry.speed_kmh < 0.5f || fabsf(telemetry.power_watts) < 10.0f)) {
+        cur_watts = 0;
+    }
     if (!_hyper_inited || cur_watts != _cache.watts || telemetry.boost_active != _cache.boost_active) {
         _cache.watts = cur_watts;
         if (telemetry.fault_code == 0) {
