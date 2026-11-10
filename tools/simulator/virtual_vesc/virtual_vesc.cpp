@@ -139,6 +139,7 @@ void VirtualVesc::handlePacket(const uint8_t *payload, size_t len, const Respons
 
         case COMM_SET_MCCONF_TEMP:
         case COMM_SET_MCCONF_TEMP_SETUP:
+        case COMM_SET_MCCONF_TEMP_LEGACY:
             handleSetMcconfTemp(payload, len, _limits);
             break;
 
@@ -469,17 +470,31 @@ void VirtualVesc::handleGetAppconf(uint8_t cmd_id) {
 void VirtualVesc::handleSetMcconfTemp(const uint8_t *payload, size_t len, VirtualVescLimits &target_limits) {
     if (len < 37) return;
 
-    int32_t idx = 1;
-    target_limits.min_phase_amps   = buffer_get_float32_auto(payload, &idx);
-    target_limits.max_phase_amps   = buffer_get_float32_auto(payload, &idx);
-    target_limits.min_erpm         = buffer_get_float32_auto(payload, &idx);
-    target_limits.max_erpm         = buffer_get_float32_auto(payload, &idx);
-    target_limits.min_battery_amps = buffer_get_float32_auto(payload, &idx);
-    target_limits.max_battery_amps = buffer_get_float32_auto(payload, &idx);
-    target_limits.duty_min         = buffer_get_int16(payload, &idx) / 1000.0f;
-    target_limits.duty_max         = buffer_get_int16(payload, &idx) / 1000.0f;
-    target_limits.min_watt         = buffer_get_float32_auto(payload, &idx);
-    target_limits.max_watt         = buffer_get_float32_auto(payload, &idx);
+    if (len >= 45) {
+        int32_t idx = 5; // Skip store, forward_can, ack, divide_by_controllers
+        target_limits.min_phase_amps   = buffer_get_float32_auto(payload, &idx);
+        target_limits.max_phase_amps   = buffer_get_float32_auto(payload, &idx);
+        target_limits.min_erpm         = buffer_get_float32_auto(payload, &idx);
+        target_limits.max_erpm         = buffer_get_float32_auto(payload, &idx);
+        target_limits.duty_min         = buffer_get_float32_auto(payload, &idx);
+        target_limits.duty_max         = buffer_get_float32_auto(payload, &idx);
+        target_limits.min_watt         = buffer_get_float32_auto(payload, &idx);
+        target_limits.max_watt         = buffer_get_float32_auto(payload, &idx);
+        target_limits.min_battery_amps = buffer_get_float32_auto(payload, &idx);
+        target_limits.max_battery_amps = buffer_get_float32_auto(payload, &idx);
+    } else {
+        int32_t idx = 1;
+        target_limits.min_phase_amps   = buffer_get_float32_auto(payload, &idx);
+        target_limits.max_phase_amps   = buffer_get_float32_auto(payload, &idx);
+        target_limits.min_erpm         = buffer_get_float32_auto(payload, &idx);
+        target_limits.max_erpm         = buffer_get_float32_auto(payload, &idx);
+        target_limits.min_battery_amps = buffer_get_float32_auto(payload, &idx);
+        target_limits.max_battery_amps = buffer_get_float32_auto(payload, &idx);
+        target_limits.duty_min         = buffer_get_int16(payload, &idx) / 1000.0f;
+        target_limits.duty_max         = buffer_get_int16(payload, &idx) / 1000.0f;
+        target_limits.min_watt         = buffer_get_float32_auto(payload, &idx);
+        target_limits.max_watt         = buffer_get_float32_auto(payload, &idx);
+    }
 }
 
 void VirtualVesc::handleSetDuty(const uint8_t *payload, size_t len) {
@@ -593,7 +608,7 @@ void VirtualVesc::handleForwardCan(const uint8_t *payload, size_t len) {
     const uint8_t *inner = &payload[2];
     size_t inner_len = len - 2;
 
-    if (inner[0] == COMM_SET_MCCONF_TEMP || inner[0] == COMM_SET_MCCONF_TEMP_SETUP) {
+    if (inner[0] == COMM_SET_MCCONF_TEMP || inner[0] == COMM_SET_MCCONF_TEMP_SETUP || inner[0] == COMM_SET_MCCONF_TEMP_LEGACY) {
         if (can_id == 1) {
             handleSetMcconfTemp(inner, inner_len, _can1_limits);
         } else {
