@@ -38,6 +38,7 @@ ButtonHandler::ButtonHandler()
       _speed_touch_held(false),
       _speed_touch_fired(false),
       _race_popup_open(false),
+      _race_dyno_open(false),
       _race_state(0) {
     _btn1 = { PIN_BTN_1, false, false, 0, 0, 0, false, false, 0 };
     _btn2 = { PIN_BTN_2, false, false, 0, 0, 0, false, false, 0 };
@@ -295,8 +296,10 @@ void ButtonHandler::processTouch(uint32_t now) {
                         // On SCREEN_RACE_TIMER:
                         if (_last_tap_x <= 130 && _last_tap_y <= 65) {
                             _pending_action = NAV_SCREEN_DASH; // Top Left -> Return to Ride Dash / STATS
-                        } else if (_last_tap_x >= 600 && _last_tap_y <= 65) {
+                        } else if (_last_tap_x >= 630 && _last_tap_y <= 65) {
                             _pending_action = NAV_RACE_TOGGLE_POPUP; // Top Right -> Toggle Bestzeiten Popup
+                        } else if (_last_tap_x >= 470 && _last_tap_x < 630 && _last_tap_y <= 65) {
+                            _pending_action = NAV_RACE_TOGGLE_DYNO; // Top Right -> Toggle Dyno / Diagramm
                         } else if (_race_popup_open) {
                             // Popup is open: modal bounds (x:140..660, y:70..410)
                             if (_last_tap_x >= 585 && _last_tap_x <= 645 && _last_tap_y >= 80 && _last_tap_y <= 135) {
@@ -307,6 +310,15 @@ void ButtonHandler::processTouch(uint32_t now) {
                                 _pending_action = NAV_RACE_CLOSE_POPUP; // [ SCHLIESSEN ]
                             } else if (_last_tap_x < 140 || _last_tap_x > 660 || _last_tap_y < 70 || _last_tap_y > 410) {
                                 _pending_action = NAV_RACE_CLOSE_POPUP; // Tap outside modal closes it
+                            }
+                        } else if (_race_dyno_open) {
+                            // Dyno modal bounds (x:100..700, y:45..435)
+                            if (_last_tap_x >= 620 && _last_tap_x <= 695 && _last_tap_y >= 45 && _last_tap_y <= 105) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP; // Top-Right [ X ]
+                            } else if (_last_tap_x >= 280 && _last_tap_x <= 520 && _last_tap_y >= 365 && _last_tap_y <= 435) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP; // [ SCHLIESSEN ]
+                            } else if (_last_tap_x < 100 || _last_tap_x > 700 || _last_tap_y < 45 || _last_tap_y > 435) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP; // Tap outside closes
                             }
                         } else {
                             // Popup is closed

@@ -51,6 +51,7 @@ enum NavAction {
     NAV_MENU_BACK,     // Tap on [< MENÜ] / Swipe Right: back to root menu or dash
     NAV_SCREEN_RACE,   // Tap on [ RACE ] button on STATS screen
     NAV_RACE_TOGGLE_POPUP, // Tap on [ BESTZEITEN ]
+    NAV_RACE_TOGGLE_DYNO,  // Tap on [ DIAGRAMM ]
     NAV_RACE_CLOSE_POPUP,  // Tap on [ X ] or [ SCHLIESSEN ]
     NAV_RACE_RESET_RECORDS,// Tap on [ RESET ] in Bestzeiten popup
     NAV_RACE_START_LAUNCH, // Tap on [ START LAUNCH ]
@@ -68,6 +69,35 @@ struct RaceRecords {
         best_0_22_sec = 0.0f;
         best_0_50_sec = 0.0f;
         best_0_70_sec = 0.0f;
+    }
+};
+
+#define RACE_DYNO_SAMPLES 60
+
+// Dragy Launch Dyno / Power & Acceleration Curve
+struct RaceDynoData {
+    float peak_watts;
+    float peak_g_force;
+    float peak_speed_kmh;
+    float peak_phase_amps;
+    float samples_power[RACE_DYNO_SAMPLES];
+    float samples_speed[RACE_DYNO_SAMPLES];
+    float samples_g[RACE_DYNO_SAMPLES];
+    uint8_t sample_count;
+    uint32_t last_sample_ms;
+
+    void reset() {
+        peak_watts = 0.0f;
+        peak_g_force = 0.0f;
+        peak_speed_kmh = 0.0f;
+        peak_phase_amps = 0.0f;
+        sample_count = 0;
+        last_sample_ms = 0;
+        for (int i = 0; i < RACE_DYNO_SAMPLES; i++) {
+            samples_power[i] = 0.0f;
+            samples_speed[i] = 0.0f;
+            samples_g[i] = 0.0f;
+        }
     }
 };
 
@@ -191,15 +221,17 @@ struct DashTelemetry {
     char rider_tag[24];
 
     // Dragy / Launch Acceleration Timer
-    bool        race_popup_open;
-    uint8_t     race_state; // 0=IDLE/READY, 1=COUNTDOWN (5s), 2=MEASURING, 3=FINISHED
-    uint32_t    race_countdown_start_ms;
-    uint32_t    race_launch_start_ms;
-    float       race_elapsed_sec;
-    float       race_split_0_22;
-    float       race_split_0_50;
-    float       race_split_0_70;
-    RaceRecords race_records;
+    bool         race_popup_open;
+    bool         race_dyno_open;
+    uint8_t      race_state; // 0=IDLE/READY, 1=COUNTDOWN (5s), 2=MEASURING, 3=FINISHED
+    uint32_t     race_countdown_start_ms;
+    uint32_t     race_launch_start_ms;
+    float        race_elapsed_sec;
+    float        race_split_0_22;
+    float        race_split_0_50;
+    float        race_split_0_70;
+    RaceRecords  race_records;
+    RaceDynoData race_dyno;
 
     // System Status
     DashboardScreen screen;    // Currently active screen

@@ -422,6 +422,11 @@ void testTouchGestures() {
     assert(actRaceBestzeiten == NAV_RACE_TOGGLE_POPUP);
     printf("[PASS] Race Screen [ BESTZEITEN ] Tap triggered NAV_RACE_TOGGLE_POPUP.\n");
 
+    // Top [ DIAGRAMM ]
+    NavAction actRaceDyno = simTouchAction(545, 30, 545, 30, 50);
+    assert(actRaceDyno == NAV_RACE_TOGGLE_DYNO);
+    printf("[PASS] Race Screen [ DIAGRAMM ] Tap triggered NAV_RACE_TOGGLE_DYNO.\n");
+
     // Center [ START LAUNCH ] when IDLE
     NavAction actRaceStart = simTouchAction(310, 255, 310, 255, 50);
     assert(actRaceStart == NAV_RACE_START_LAUNCH);
@@ -451,6 +456,20 @@ void testTouchGestures() {
     printf("[PASS] Race Popup [ RESET ] Tap triggered NAV_RACE_RESET_RECORDS.\n");
 
     Buttons.setRacePopupOpen(false);
+
+    // When Dyno modal is open:
+    Buttons.setRaceDynoOpen(true);
+    // Tap [ X ]
+    NavAction actDynoCloseX = simTouchAction(650, 70, 650, 70, 50);
+    assert(actDynoCloseX == NAV_RACE_CLOSE_POPUP);
+    printf("[PASS] Race Dyno Modal [ X ] Tap triggered NAV_RACE_CLOSE_POPUP.\n");
+
+    // Tap [ SCHLIESSEN ]
+    NavAction actDynoCloseBtn = simTouchAction(400, 395, 400, 395, 50);
+    assert(actDynoCloseBtn == NAV_RACE_CLOSE_POPUP);
+    printf("[PASS] Race Dyno Modal [ SCHLIESSEN ] Tap triggered NAV_RACE_CLOSE_POPUP.\n");
+
+    Buttons.setRaceDynoOpen(false);
     Buttons.setRaceState(0);
     Buttons.setTuningMode(false);
     Buttons.setActiveScreen(SCREEN_RT_GRAPHS);
@@ -2246,6 +2265,19 @@ int main(int argc, char **argv) {
     t.race_popup_open = true;
     Renderer.markScreenDirty();
     renderAndSave("20_race_records_modal", t);
+
+    // ----------------------------------------------------
+    // Scenario 21: Screen 6 - Dyno Diagramm Modal
+    // ----------------------------------------------------
+    t.race_popup_open = false;
+    t.race_dyno_open = true;
+    t.race_dyno.reset();
+    t.race_dyno.peak_watts = 3520.0f;
+    t.race_dyno.peak_g_force = 1.15f;
+    t.race_dyno.peak_phase_amps = 85.0f;
+    t.race_split_0_70 = 4.25f;
+    Renderer.markScreenDirty();
+    renderAndSave("21_race_dyno_modal", t);
 
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");
     return 0;

@@ -536,6 +536,8 @@ void sim_init() {
     g_telemetry.hazard_active = false;
     g_telemetry.rider_tag[0] = '\0';
     g_telemetry.race_popup_open = false;
+    g_telemetry.race_dyno_open = false;
+    g_telemetry.race_dyno.reset();
     g_telemetry.race_state = 0;
     g_telemetry.race_countdown_start_ms = 0;
     g_telemetry.race_launch_start_ms = 0;
@@ -629,6 +631,7 @@ void sim_step(uint32_t step_ms) {
     // 1. Update buttons & touch gesture recognition
     Buttons.setActiveScreen(g_telemetry.screen);
     Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+    Buttons.setRaceDynoOpen(g_telemetry.race_dyno_open);
     Buttons.setRaceState(g_telemetry.race_state);
     Buttons.update();
     Renderer.updateRaceTimer(g_telemetry, g_sim_uptime_ms);
@@ -829,8 +832,10 @@ void sim_step(uint32_t step_ms) {
                         ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                         g_telemetry.boost_active = false;
                         g_telemetry.race_popup_open = false;
+                        g_telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
+                        Buttons.setRaceDynoOpen(false);
                     }
                     g_telemetry.screen = SCREEN_RIDE_DASH;
                     Renderer.markScreenDirty();
@@ -845,8 +850,10 @@ void sim_step(uint32_t step_ms) {
                                 ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                                 g_telemetry.boost_active = false;
                                 g_telemetry.race_popup_open = false;
+                                g_telemetry.race_dyno_open = false;
                                 Buttons.setRaceState(0);
                                 Buttons.setRacePopupOpen(false);
+                                Buttons.setRaceDynoOpen(false);
                             }
                             g_telemetry.screen = SCREEN_RIDE_DASH;
                             Renderer.markScreenDirty();
@@ -869,8 +876,10 @@ void sim_step(uint32_t step_ms) {
                             ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                             g_telemetry.boost_active = false;
                             g_telemetry.race_popup_open = false;
+                            g_telemetry.race_dyno_open = false;
                             Buttons.setRaceState(0);
                             Buttons.setRacePopupOpen(false);
+                            Buttons.setRaceDynoOpen(false);
                             g_telemetry.screen = SCREEN_RIDE_DASH;
                         } else if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
                             g_telemetry.screen = SCREEN_RIDE_DASH;
@@ -892,8 +901,10 @@ void sim_step(uint32_t step_ms) {
                         ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                         g_telemetry.boost_active = false;
                         g_telemetry.race_popup_open = false;
+                        g_telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
+                        Buttons.setRaceDynoOpen(false);
                     }
                     g_telemetry.screen = SCREEN_RT_GRAPHS;
                     Renderer.markScreenDirty();
@@ -918,12 +929,23 @@ void sim_step(uint32_t step_ms) {
                     break;
                 case NAV_RACE_TOGGLE_POPUP:
                     g_telemetry.race_popup_open = !g_telemetry.race_popup_open;
+                    if (g_telemetry.race_popup_open) g_telemetry.race_dyno_open = false;
                     Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+                    Buttons.setRaceDynoOpen(g_telemetry.race_dyno_open);
+                    Renderer.markScreenDirty();
+                    break;
+                case NAV_RACE_TOGGLE_DYNO:
+                    g_telemetry.race_dyno_open = !g_telemetry.race_dyno_open;
+                    if (g_telemetry.race_dyno_open) g_telemetry.race_popup_open = false;
+                    Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+                    Buttons.setRaceDynoOpen(g_telemetry.race_dyno_open);
                     Renderer.markScreenDirty();
                     break;
                 case NAV_RACE_CLOSE_POPUP:
                     g_telemetry.race_popup_open = false;
+                    g_telemetry.race_dyno_open = false;
                     Buttons.setRacePopupOpen(false);
+                    Buttons.setRaceDynoOpen(false);
                     Renderer.markScreenDirty();
                     break;
                 case NAV_RACE_RESET_RECORDS:
@@ -964,8 +986,10 @@ void sim_step(uint32_t step_ms) {
                         ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                         g_telemetry.boost_active = false;
                         g_telemetry.race_popup_open = false;
+                        g_telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
+                        Buttons.setRaceDynoOpen(false);
                     }
                     g_telemetry.screen = SCREEN_SETTINGS_MENU;
                     Renderer.markScreenDirty();
@@ -1005,8 +1029,10 @@ void sim_step(uint32_t step_ms) {
                         ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                         g_telemetry.boost_active = false;
                         g_telemetry.race_popup_open = false;
+                        g_telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
+                        Buttons.setRaceDynoOpen(false);
                         Renderer.invalidateCache();
                     }
                     ensureZeroSpeedIfIdle();
@@ -1257,6 +1283,7 @@ void sim_touch_event(int is_down, int x, int y) {
 
     Buttons.setActiveScreen(g_telemetry.screen);
     Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+    Buttons.setRaceDynoOpen(g_telemetry.race_dyno_open);
     Buttons.setRaceState(g_telemetry.race_state);
     Buttons.setTuningMode(g_telemetry.tuning_mode);
     Display.setSimTouch(is_down != 0, (int16_t)x, (int16_t)y);
@@ -1291,8 +1318,10 @@ void sim_trigger_nav(int nav_action) {
                         ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                         g_telemetry.boost_active = false;
                         g_telemetry.race_popup_open = false;
+                        g_telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
+                        Buttons.setRaceDynoOpen(false);
                     }
                     g_telemetry.screen = SCREEN_RIDE_DASH;
                 } else {
@@ -1313,8 +1342,10 @@ void sim_trigger_nav(int nav_action) {
                     ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                     g_telemetry.boost_active = false;
                     g_telemetry.race_popup_open = false;
+                    g_telemetry.race_dyno_open = false;
                     Buttons.setRaceState(0);
                     Buttons.setRacePopupOpen(false);
+                    Buttons.setRaceDynoOpen(false);
                     g_telemetry.screen = SCREEN_RIDE_DASH;
                 } else if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
                     g_telemetry.screen = SCREEN_RIDE_DASH;
@@ -1336,8 +1367,10 @@ void sim_trigger_nav(int nav_action) {
                     ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                     g_telemetry.boost_active = false;
                     g_telemetry.race_popup_open = false;
+                    g_telemetry.race_dyno_open = false;
                     Buttons.setRaceState(0);
                     Buttons.setRacePopupOpen(false);
+                    Buttons.setRaceDynoOpen(false);
                 }
                 g_telemetry.screen = SCREEN_RT_GRAPHS;
                 break;
@@ -1361,12 +1394,23 @@ void sim_trigger_nav(int nav_action) {
                 break;
             case NAV_RACE_TOGGLE_POPUP:
                 g_telemetry.race_popup_open = !g_telemetry.race_popup_open;
+                if (g_telemetry.race_popup_open) g_telemetry.race_dyno_open = false;
                 Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+                Buttons.setRaceDynoOpen(g_telemetry.race_dyno_open);
+                Renderer.markScreenDirty();
+                break;
+            case NAV_RACE_TOGGLE_DYNO:
+                g_telemetry.race_dyno_open = !g_telemetry.race_dyno_open;
+                if (g_telemetry.race_dyno_open) g_telemetry.race_popup_open = false;
+                Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
+                Buttons.setRaceDynoOpen(g_telemetry.race_dyno_open);
                 Renderer.markScreenDirty();
                 break;
             case NAV_RACE_CLOSE_POPUP:
                 g_telemetry.race_popup_open = false;
+                g_telemetry.race_dyno_open = false;
                 Buttons.setRacePopupOpen(false);
+                Buttons.setRaceDynoOpen(false);
                 Renderer.markScreenDirty();
                 break;
             case NAV_RACE_RESET_RECORDS:
@@ -1407,8 +1451,10 @@ void sim_trigger_nav(int nav_action) {
                     ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                     g_telemetry.boost_active = false;
                     g_telemetry.race_popup_open = false;
+                    g_telemetry.race_dyno_open = false;
                     Buttons.setRaceState(0);
                     Buttons.setRacePopupOpen(false);
+                    Buttons.setRaceDynoOpen(false);
                 }
                 g_telemetry.screen = SCREEN_RIDE_DASH;
                 Renderer.markScreenDirty();
@@ -1421,8 +1467,10 @@ void sim_trigger_nav(int nav_action) {
                     ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                     g_telemetry.boost_active = false;
                     g_telemetry.race_popup_open = false;
+                    g_telemetry.race_dyno_open = false;
                     Buttons.setRaceState(0);
                     Buttons.setRacePopupOpen(false);
+                    Buttons.setRaceDynoOpen(false);
                 }
                 g_telemetry.screen = SCREEN_SETTINGS_MENU;
                 break;
@@ -1464,8 +1512,10 @@ void sim_trigger_nav(int nav_action) {
                     ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
                     g_telemetry.boost_active = false;
                     g_telemetry.race_popup_open = false;
+                    g_telemetry.race_dyno_open = false;
                     Buttons.setRaceState(0);
                     Buttons.setRacePopupOpen(false);
+                    Buttons.setRaceDynoOpen(false);
                     Renderer.invalidateCache();
                 }
                 ensureZeroSpeedIfIdle();
@@ -1549,8 +1599,10 @@ void sim_set_tuning_mode(int enable) {
         ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
         g_telemetry.boost_active = false;
         g_telemetry.race_popup_open = false;
+        g_telemetry.race_dyno_open = false;
         Buttons.setRaceState(0);
         Buttons.setRacePopupOpen(false);
+        Buttons.setRaceDynoOpen(false);
         Renderer.invalidateCache();
     }
     ensureZeroSpeedIfIdle();
@@ -1568,8 +1620,10 @@ void sim_toggle_tuning_mode() {
         ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
         g_telemetry.boost_active = false;
         g_telemetry.race_popup_open = false;
+        g_telemetry.race_dyno_open = false;
         Buttons.setRaceState(0);
         Buttons.setRacePopupOpen(false);
+        Buttons.setRaceDynoOpen(false);
         Renderer.invalidateCache();
     }
     ensureZeroSpeedIfIdle();

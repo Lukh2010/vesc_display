@@ -53,6 +53,8 @@ public:
     // Race / Dragy Timer Input State
     void setRacePopupOpen(bool open) { _race_popup_open = open; }
     bool isRacePopupOpen() const { return _race_popup_open; }
+    void setRaceDynoOpen(bool open) { _race_dyno_open = open; }
+    bool isRaceDynoOpen() const { return _race_dyno_open; }
     void setRaceState(uint8_t state) { _race_state = state; }
     uint8_t getRaceState() const { return _race_state; }
 
@@ -100,6 +102,7 @@ private:
 
     // Race State
     bool        _race_popup_open;
+    bool        _race_dyno_open;
     uint8_t     _race_state;
 
     void processDebounce(ButtonState &btn, bool raw, uint32_t now);

@@ -78,6 +78,8 @@ void setup() {
     telemetry.fault_start_ms      = 0;
     telemetry.dynamic_wh_km       = Battery.getDynamicWhKm();
     telemetry.race_popup_open     = false;
+    telemetry.race_dyno_open      = false;
+    telemetry.race_dyno.reset();
     telemetry.race_state          = 0;
     telemetry.race_countdown_start_ms = 0;
     telemetry.race_launch_start_ms = 0;
@@ -158,8 +160,10 @@ void loop() {
             ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
             telemetry.boost_active = false;
             telemetry.race_popup_open = false;
+            telemetry.race_dyno_open = false;
             Buttons.setRaceState(0);
             Buttons.setRacePopupOpen(false);
+            Buttons.setRaceDynoOpen(false);
             Renderer.invalidateCache();
         }
         Renderer.markScreenDirty();
@@ -183,6 +187,7 @@ void loop() {
     // 1. Process Touch & Button Navigation Inputs
     Buttons.setActiveScreen(telemetry.screen);
     Buttons.setRacePopupOpen(telemetry.race_popup_open);
+    Buttons.setRaceDynoOpen(telemetry.race_dyno_open);
     Buttons.setRaceState(telemetry.race_state);
     Buttons.update();
     Renderer.updateRaceTimer(telemetry, now);
@@ -314,8 +319,10 @@ void loop() {
                         ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                         telemetry.boost_active = false;
                         telemetry.race_popup_open = false;
+                        telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
+                        Buttons.setRaceDynoOpen(false);
                     }
                     telemetry.screen = SCREEN_RIDE_DASH;
                     Renderer.markScreenDirty();
@@ -356,8 +363,10 @@ void loop() {
                             ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                             telemetry.boost_active = false;
                             telemetry.race_popup_open = false;
+                            telemetry.race_dyno_open = false;
                             Buttons.setRaceState(0);
                             Buttons.setRacePopupOpen(false);
+                            Buttons.setRaceDynoOpen(false);
                             telemetry.screen = SCREEN_RIDE_DASH;
                             Renderer.markScreenDirty();
                         } else if (telemetry.screen == SCREEN_RT_GRAPHS) {
@@ -381,8 +390,10 @@ void loop() {
                         ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                         telemetry.boost_active = false;
                         telemetry.race_popup_open = false;
+                        telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
+                        Buttons.setRaceDynoOpen(false);
                     }
                     telemetry.screen = SCREEN_RT_GRAPHS;
                     Renderer.markScreenDirty();
@@ -414,13 +425,25 @@ void loop() {
 
                 case NAV_RACE_TOGGLE_POPUP:
                     telemetry.race_popup_open = !telemetry.race_popup_open;
+                    if (telemetry.race_popup_open) telemetry.race_dyno_open = false;
                     Buttons.setRacePopupOpen(telemetry.race_popup_open);
+                    Buttons.setRaceDynoOpen(telemetry.race_dyno_open);
+                    Renderer.markScreenDirty();
+                    break;
+
+                case NAV_RACE_TOGGLE_DYNO:
+                    telemetry.race_dyno_open = !telemetry.race_dyno_open;
+                    if (telemetry.race_dyno_open) telemetry.race_popup_open = false;
+                    Buttons.setRacePopupOpen(telemetry.race_popup_open);
+                    Buttons.setRaceDynoOpen(telemetry.race_dyno_open);
                     Renderer.markScreenDirty();
                     break;
 
                 case NAV_RACE_CLOSE_POPUP:
                     telemetry.race_popup_open = false;
+                    telemetry.race_dyno_open = false;
                     Buttons.setRacePopupOpen(false);
+                    Buttons.setRaceDynoOpen(false);
                     Renderer.markScreenDirty();
                     break;
 
@@ -472,8 +495,10 @@ void loop() {
                         telemetry.boost_active = false;
                         ModeManager::instance().setBoostActive(false);
                         telemetry.race_popup_open = false;
+                        telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
+                        Buttons.setRaceDynoOpen(false);
                     }
                     telemetry.screen = SCREEN_SETTINGS_MENU;
                     Serial.println("[NAV] Opened Settings Menu");
@@ -528,8 +553,10 @@ void loop() {
                         telemetry.ride_mode = telemetry.saved_ride_mode;
                         ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                         telemetry.race_popup_open = false;
+                        telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
+                        Buttons.setRaceDynoOpen(false);
                         Renderer.invalidateCache();
                     }
                     Renderer.markScreenDirty();

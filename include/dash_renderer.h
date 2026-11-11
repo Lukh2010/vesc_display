@@ -64,6 +64,7 @@ private:
     void initRaceTimerScreen(const DashTelemetry &telemetry);
     void renderRaceTimerScreen(const DashTelemetry &telemetry);
     void drawRaceRecordsModal(const DashTelemetry &telemetry);
+    void drawRaceDynoModal(const DashTelemetry &telemetry);
 
     // PIN-Lockscreen & VESC Alarm Banner (Requirements 1 & 7)
     void renderPinLockScreen(const DashTelemetry &telemetry);
