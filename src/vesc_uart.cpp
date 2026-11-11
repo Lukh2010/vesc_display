@@ -409,7 +409,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 // High-frequency (50Hz) power fallback if battery current in Status 4 is temporarily 0 or lagging
                 if (telemetry.voltage > 10.0f && mot_i > 0.5f && duty > 0.5f) {
                     float est_bat_i = mot_i * (duty / 100.0f);
-                    if (telemetry.current_amps < 0.1f && est_bat_i > 0.2f) {
+                    if (telemetry.current_amps < 0.15f && est_bat_i > 0.2f) {
                         telemetry.current_amps = est_bat_i;
                         telemetry.power_watts = telemetry.voltage * est_bat_i;
                     }
@@ -437,7 +437,12 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 telemetry.temp_motor = t_mot;
                 telemetry.temp_fet_rear = t_fet;
                 telemetry.temp_mot_rear = t_mot;
-                telemetry.current_amps = bat_i;
+
+                // Protect against zero-current frames while motor is actively drawing current
+                bool motor_active = (telemetry.phase_amps > 1.0f && telemetry.duty_cycle_pct > 1.5f);
+                if (fabsf(bat_i) > 0.15f || !motor_active) {
+                    telemetry.current_amps = bat_i;
+                }
                 if (telemetry.voltage > 10.0f) {
                     telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
                 }

@@ -675,7 +675,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
     // 5. Right Column: Hero Power Readout (Only redrawn when watts change)
     int cur_watts = (int)roundf(_anim_power);
-    if (fabsf(_anim_power) < 15.0f && (telemetry.speed_kmh < 0.5f || fabsf(telemetry.power_watts) < 10.0f)) {
+    if (fabsf(_anim_power) < 15.0f && telemetry.phase_amps < 1.0f && (telemetry.speed_kmh < 0.5f || fabsf(telemetry.power_watts) < 10.0f)) {
         cur_watts = 0;
     }
     if (!_hyper_inited || cur_watts != _cache.watts || telemetry.boost_active != _cache.boost_active) {
