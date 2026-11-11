@@ -91,6 +91,8 @@ DashboardRenderer::DashboardRenderer()
       _screen_dirty(true),
       _mode_banner_active(false),
       _settings_tab_idx(255),
+      _last_rendered_tab(255),
+      _settings_inited(false),
       _menu_dirty(true),
       _is_sweeping(false),
       _sweep_phase(0),
@@ -249,10 +251,8 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
 
         case SCREEN_SETTINGS_MENU:
             if (_screen_dirty) {
-                _canvas->fillScreen(COLOR_BG);
                 initSettingsScreen(telemetry);
                 _screen_dirty = false;
-                _menu_dirty = true;
             }
             renderSettingsScreen(telemetry);
             break;
@@ -1514,12 +1514,13 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
 // SCREEN 3: TOUCH RIDE MODE CONFIGURATOR (800x480 Optimized)
 // ==============================================================================
 void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
-    _canvas->fillScreen(COLOR_BG);
     if (_settings_tab_idx >= 5) {
         _settings_tab_idx = (uint8_t)telemetry.ride_mode;
         if (_settings_tab_idx >= 5) _settings_tab_idx = 0;
     }
     _pin_modal_open = false;
+    _settings_inited = false;
+    _last_rendered_tab = 255;
     _menu_dirty = true;
 }
 
@@ -1527,26 +1528,32 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     if (!_menu_dirty) return;
     _menu_dirty = false;
 
-    _canvas->fillScreen(COLOR_BG);
+    bool tabChanged = (_last_rendered_tab != _settings_tab_idx);
 
-    // 1. Header Bar: [< DASH], Title, [FERTIG]
-    _canvas->fillRoundRect(20, 12, 110, 36, 18, 0x18C3);
-    _canvas->drawRoundRect(20, 12, 110, 36, 18, 0x39C7);
-    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
-    _canvas->setTextDatum(textdatum_t::middle_center);
-    _canvas->setFont(&fonts::Font2);
-    _canvas->drawString("< DASH", 75, 30);
+    if (!_settings_inited) {
+        _canvas->fillScreen(COLOR_BG);
 
-    _canvas->setTextDatum(textdatum_t::middle_center);
-    _canvas->setFont(&fonts::Font4);
-    _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-    _canvas->drawString("EINSTELLUNGEN", 400, 30);
+        // 1. Header Bar: [< DASH], Title, [FERTIG]
+        _canvas->fillRoundRect(20, 12, 110, 36, 18, 0x18C3);
+        _canvas->drawRoundRect(20, 12, 110, 36, 18, 0x39C7);
+        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->drawString("< DASH", 75, 30);
 
-    _canvas->fillRoundRect(670, 12, 110, 36, 18, 0x18C3);
-    _canvas->drawRoundRect(670, 12, 110, 36, 18, 0x39C7);
-    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
-    _canvas->setFont(&fonts::Font2);
-    _canvas->drawString("FERTIG", 725, 30);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+        _canvas->drawString("EINSTELLUNGEN", 400, 30);
+
+        _canvas->fillRoundRect(670, 12, 110, 36, 18, 0x18C3);
+        _canvas->drawRoundRect(670, 12, 110, 36, 18, 0x39C7);
+        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->drawString("FERTIG", 725, 30);
+
+        _settings_inited = true;
+    }
 
     // 2. Touch Tabs: [ ECO ] | [ SPORT ] | [ RACE ] | [ DRAGY ] | [ PIN ]
     const char *tabNames[5] = { "ECO", "SPORT", "RACE", "DRAGY", "PIN" };
@@ -1559,26 +1566,33 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     int tabH = 54;
     int tabY = 62;
 
-    for (int i = 0; i < 5; i++) {
-        bool isSel = (i == _settings_tab_idx);
-        uint16_t borderCol = isSel ? tabCols[i] : COLOR_BORDER;
-        uint16_t bgCol     = isSel ? tabBgCols[i] : COLOR_SURFACE;
-        uint16_t txtCol    = isSel ? tabCols[i] : COLOR_MUTED_GRAY;
+    if (tabChanged) {
+        _last_rendered_tab = _settings_tab_idx;
 
-        _canvas->fillRoundRect(tabX[i], tabY, tabW[i], tabH, 10, bgCol);
-        _canvas->drawRoundRect(tabX[i], tabY, tabW[i], tabH, 10, borderCol);
-        if (isSel) {
-            _canvas->drawRoundRect(tabX[i] + 1, tabY + 1, tabW[i] - 2, tabH - 2, 9, borderCol);
+        for (int i = 0; i < 5; i++) {
+            bool isSel = (i == _settings_tab_idx);
+            uint16_t borderCol = isSel ? tabCols[i] : COLOR_BORDER;
+            uint16_t bgCol     = isSel ? tabBgCols[i] : COLOR_SURFACE;
+            uint16_t txtCol    = isSel ? tabCols[i] : COLOR_MUTED_GRAY;
+
+            _canvas->fillRoundRect(tabX[i], tabY, tabW[i], tabH, 10, bgCol);
+            _canvas->drawRoundRect(tabX[i], tabY, tabW[i], tabH, 10, borderCol);
+            if (isSel) {
+                _canvas->drawRoundRect(tabX[i] + 1, tabY + 1, tabW[i] - 2, tabH - 2, 9, borderCol);
+            }
+
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextColor(txtCol, bgCol);
+            _canvas->drawString(tabNames[i], tabX[i] + tabW[i] / 2, tabY + 20);
+
+            _canvas->setFont(&fonts::Font0);
+            _canvas->setTextColor(isSel ? COLOR_WHITE : 0x52AA, bgCol);
+            _canvas->drawString(tabSub[i], tabX[i] + tabW[i] / 2, tabY + 41);
         }
 
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(txtCol, bgCol);
-        _canvas->drawString(tabNames[i], tabX[i] + tabW[i] / 2, tabY + 20);
-
-        _canvas->setFont(&fonts::Font0);
-        _canvas->setTextColor(isSel ? COLOR_WHITE : 0x52AA, bgCol);
-        _canvas->drawString(tabSub[i], tabX[i] + tabW[i] / 2, tabY + 41);
+        // Clear content area below the tabs with background color
+        _canvas->fillRect(0, 122, 800, 358, COLOR_BG);
     }
 
     if (_settings_tab_idx == 3) {
@@ -1950,6 +1964,8 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
         ModeManager::instance().applyCurrentMode();
 
         _settings_tab_idx = 255;
+        _settings_inited = false;
+        _last_rendered_tab = 255;
         telemetry.screen = SCREEN_RIDE_DASH;
         _screen_dirty = true;
         _cache.invalidate();
@@ -1991,12 +2007,14 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         // Top-Right [ X ] button
         if (tx >= mx + mw - 55 && tx <= mx + mw && ty >= my && ty <= my + 50) {
             _pin_modal_open = false;
+            _last_rendered_tab = 255;
             _menu_dirty = true;
             return true;
         }
 
         if (_pin_modal_success) {
             _pin_modal_open = false;
+            _last_rendered_tab = 255;
             _menu_dirty = true;
             return true;
         }
@@ -2004,6 +2022,7 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         // Tap outside modal closes it
         if (tx < mx || tx > mx + mw || ty < my || ty > my + mh) {
             _pin_modal_open = false;
+            _last_rendered_tab = 255;
             _menu_dirty = true;
             return true;
         }
@@ -2100,41 +2119,53 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
 
     // Tab 3: DRAGY SPLITS CONFIGURATION
     if (_settings_tab_idx == 3) {
-        if (ty >= 340 && ty <= 415) {
+        if (ty >= 335 && ty <= 425) {
             // Col 0: Split 1
-            if (tx >= 30 && tx <= 120) {
-                if (Settings.get().race_split1_kmh > 10) Settings.get().race_split1_kmh--;
-                Settings.save();
-                _menu_dirty = true;
+            if (tx >= 25 && tx <= 135) { // [-]
+                if (Settings.get().race_split1_kmh > 10) {
+                    Settings.get().race_split1_kmh--;
+                    Settings.save();
+                    _menu_dirty = true;
+                }
                 return true;
-            } else if (tx >= 135 && tx <= 235) {
-                if (Settings.get().race_split1_kmh < Settings.get().race_split2_kmh - 1) Settings.get().race_split1_kmh++;
-                Settings.save();
-                _menu_dirty = true;
+            } else if (tx >= 140 && tx <= 250) { // [+]
+                if (Settings.get().race_split1_kmh < Settings.get().race_split2_kmh - 1) {
+                    Settings.get().race_split1_kmh++;
+                    Settings.save();
+                    _menu_dirty = true;
+                }
                 return true;
             }
             // Col 1: Split 2
-            else if (tx >= 290 && tx <= 385) {
-                if (Settings.get().race_split2_kmh > Settings.get().race_split1_kmh + 1) Settings.get().race_split2_kmh--;
-                Settings.save();
-                _menu_dirty = true;
+            else if (tx >= 285 && tx <= 395) { // [-]
+                if (Settings.get().race_split2_kmh > Settings.get().race_split1_kmh + 1) {
+                    Settings.get().race_split2_kmh--;
+                    Settings.save();
+                    _menu_dirty = true;
+                }
                 return true;
-            } else if (tx >= 400 && tx <= 500) {
-                if (Settings.get().race_split2_kmh < Settings.get().race_split3_kmh - 1) Settings.get().race_split2_kmh++;
-                Settings.save();
-                _menu_dirty = true;
+            } else if (tx >= 400 && tx <= 510) { // [+]
+                if (Settings.get().race_split2_kmh < Settings.get().race_split3_kmh - 1) {
+                    Settings.get().race_split2_kmh++;
+                    Settings.save();
+                    _menu_dirty = true;
+                }
                 return true;
             }
             // Col 2: Split 3
-            else if (tx >= 550 && tx <= 645) {
-                if (Settings.get().race_split3_kmh > Settings.get().race_split2_kmh + 1) Settings.get().race_split3_kmh--;
-                Settings.save();
-                _menu_dirty = true;
+            else if (tx >= 550 && tx <= 660) { // [-]
+                if (Settings.get().race_split3_kmh > Settings.get().race_split2_kmh + 1) {
+                    Settings.get().race_split3_kmh--;
+                    Settings.save();
+                    _menu_dirty = true;
+                }
                 return true;
-            } else if (tx >= 660 && tx <= 760) {
-                if (Settings.get().race_split3_kmh < 130) Settings.get().race_split3_kmh++;
-                Settings.save();
-                _menu_dirty = true;
+            } else if (tx >= 665 && tx <= 775) { // [+]
+                if (Settings.get().race_split3_kmh < 130) {
+                    Settings.get().race_split3_kmh++;
+                    Settings.save();
+                    _menu_dirty = true;
+                }
                 return true;
             }
         }
@@ -2143,15 +2174,15 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
 
     // Tab 4: PIN & SECURITY
     if (_settings_tab_idx == 4) {
-        // Card 1: Toggle PIN lock on boot (ty: 130..270)
-        if (ty >= 130 && ty <= 270) {
+        // Card 1: Toggle PIN lock on boot (button bounds: x: 480..770, y: 145..220)
+        if (tx >= 480 && tx <= 770 && ty >= 145 && ty <= 220) {
             Settings.get().pin_lock_enabled = !Settings.get().pin_lock_enabled;
             Settings.save();
             _menu_dirty = true;
             return true;
         }
-        // Card 2: [ PIN JETZT AENDERN ] Button (tx: 30..340, ty: 350..425)
-        if (tx >= 30 && tx <= 340 && ty >= 350 && ty <= 425) {
+        // Card 2: [ PIN JETZT AENDERN ] Button (tx: 30..350, ty: 350..430)
+        if (tx >= 30 && tx <= 350 && ty >= 350 && ty <= 430) {
             _pin_modal_open = true;
             _pin_modal_buf[0] = '\0';
             _pin_modal_success = false;
@@ -2181,7 +2212,7 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             _menu_dirty = true;
             return true;
         }
-        // Slider Track tap / drag
+        // Slider Track tap
         if (tx >= 120 && tx <= 680) {
             float frac = (float)(tx - 125) / 550.0f;
             if (frac < 0.0f) frac = 0.0f;
@@ -2210,7 +2241,7 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             _menu_dirty = true;
             return true;
         }
-        // Slider Track tap / drag
+        // Slider Track tap
         if (tx >= 120 && tx <= 680) {
             float frac = (float)(tx - 125) / 550.0f;
             if (frac < 0.0f) frac = 0.0f;
@@ -2225,6 +2256,45 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         }
     }
 
+    return false;
+}
+
+bool DashboardRenderer::handleSettingsSliderDrag(int16_t cx, int16_t cy, DashTelemetry &telemetry) {
+    if (_pin_modal_open) return false;
+    // Slider drag only exists on Mode limit tabs (ECO:0, SPORT:1, RACE:2)
+    if (_settings_tab_idx >= 3) return false;
+
+    VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+    ModeLimits &lim = cfg.tuned_modes[_settings_tab_idx];
+
+    // Speed Slider track y: 175..245, x: 120..680
+    if (cy >= 175 && cy <= 245 && cx >= 120 && cx <= 680) {
+        float frac = (float)(cx - 125) / 550.0f;
+        if (frac < 0.0f) frac = 0.0f;
+        if (frac > 1.0f) frac = 1.0f;
+        float new_spd = roundf(15.0f + frac * (95.0f - 15.0f));
+        if (new_spd != lim.max_speed_kmh) {
+            lim.max_speed_kmh = new_spd;
+            _menu_dirty = true;
+            return true;
+        }
+    }
+    // Watt Slider track y: 340..410, x: 120..680
+    else if (cy >= 340 && cy <= 410 && cx >= 120 && cx <= 680) {
+        float frac = (float)(cx - 125) / 550.0f;
+        if (frac < 0.0f) frac = 0.0f;
+        if (frac > 1.0f) frac = 1.0f;
+        float rawWatt = 250.0f + frac * (25000.0f - 250.0f);
+        float new_watt = roundf(rawWatt / 50.0f) * 50.0f;
+        if (new_watt < 250.0f) new_watt = 250.0f;
+        if (new_watt > 25000.0f) new_watt = 25000.0f;
+        if (new_watt != lim.max_power_watts) {
+            lim.max_power_watts = new_watt;
+            lim.max_pull_watts = lim.max_power_watts * 1.25f;
+            _menu_dirty = true;
+            return true;
+        }
+    }
     return false;
 }
 

@@ -19,6 +19,7 @@ public:
     // Menu Navigation Handler (called by main when in SCREEN_SETTINGS_MENU)
     void handleMenuNav(NavAction action, DashTelemetry &telemetry);
     bool handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
+    bool handleSettingsSliderDrag(int16_t cx, int16_t cy, DashTelemetry &telemetry);
     bool isInEditMode() const { return false; }
     uint8_t getSettingsTab() const { return _settings_tab_idx; }
     void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 5) ? tab : 0; _menu_dirty = true; }
@@ -83,7 +84,9 @@ private:
     bool            _mode_banner_active;
 
     // Menu / Settings Configurator State
-    uint8_t  _settings_tab_idx; // 0 = ECO, 1 = SPORT, 2 = RACE, 3 = VESC TOOL
+    uint8_t  _settings_tab_idx; // 0 = ECO, 1 = SPORT, 2 = RACE, 3 = DRAGY, 4 = PIN
+    uint8_t  _last_rendered_tab;
+    bool     _settings_inited;
     bool     _menu_dirty;
 
     // Differential Render Cache
