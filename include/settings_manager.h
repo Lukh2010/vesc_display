@@ -20,6 +20,9 @@ struct DashSettings {
     uint8_t throttle_adc_channel;   // 0 = ADC1, 1 = ADC2 (default 0 = ADC1)
     bool    pin_lock_enabled;       // Enable 4-digit PIN lock at startup (default true)
     char    pin_code[8];            // 4-digit PIN code (default "1234")
+    uint8_t race_split1_kmh;        // Target speed for Split 1 (default 22 km/h)
+    uint8_t race_split2_kmh;        // Target speed for Split 2 (default 50 km/h)
+    uint8_t race_split3_kmh;        // Target speed for Split 3 (default 70 km/h)
 };
 
 class SettingsManager {

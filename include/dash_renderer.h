@@ -21,7 +21,7 @@ public:
     bool handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
     bool isInEditMode() const { return false; }
     uint8_t getSettingsTab() const { return _settings_tab_idx; }
-    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 4) ? tab : 0; _menu_dirty = true; }
+    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 5) ? tab : 0; _menu_dirty = true; }
 
     // Race / Dragy Timer Logic
     void updateRaceTimer(DashTelemetry &telemetry, uint32_t now);
@@ -65,6 +65,7 @@ private:
     void renderRaceTimerScreen(const DashTelemetry &telemetry);
     void drawRaceRecordsModal(const DashTelemetry &telemetry);
     void drawRaceDynoModal(const DashTelemetry &telemetry);
+    void drawPinChangeModal();
 
     // PIN-Lockscreen & VESC Alarm Banner (Requirements 1 & 7)
     void renderPinLockScreen(const DashTelemetry &telemetry);
@@ -254,6 +255,12 @@ private:
     bool     _pin_screen_drawn;
     int      _last_pin_len;
     bool     _last_pin_err;
+
+    // PIN Change Modal State (in Settings)
+    bool     _pin_modal_open;
+    char     _pin_modal_buf[8];
+    bool     _pin_modal_success;
+    uint32_t _pin_modal_success_ms;
 };
 
 extern DashboardRenderer Renderer;

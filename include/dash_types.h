@@ -56,7 +56,8 @@ enum NavAction {
     NAV_RACE_RESET_RECORDS,// Tap on [ RESET ] in Bestzeiten popup
     NAV_RACE_START_LAUNCH, // Tap on [ START LAUNCH ]
     NAV_RACE_ABORT,        // Tap center while measuring/countdown
-    NAV_LIGHT_TOGGLE       // Tap on Light Switch Badge (Hauptschalter)
+    NAV_LIGHT_TOGGLE,      // Tap on Light Switch Badge (Hauptschalter)
+    NAV_PIN_EMERGENCY_RESET // 5s continuous hold on lockscreen: emergency reset PIN to 1234
 };
 
 // Dragy / Launch Acceleration Best Records

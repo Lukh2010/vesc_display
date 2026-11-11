@@ -683,27 +683,33 @@ void testTouchGestures() {
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 0);
 
-    // Tap on Tab 1 [ SPORT ] at x=300, y=95
-    touchHandled = Renderer.handleSettingsTouch(300, 95, tTest);
+    // Tap on Tab 1 [ SPORT ] at x=250, y=95
+    touchHandled = Renderer.handleSettingsTouch(250, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 1);
 
-    // Tap on Tab 2 [ RACE ] at x=495, y=95
-    touchHandled = Renderer.handleSettingsTouch(495, 95, tTest);
+    // Tap on Tab 2 [ RACE ] at x=400, y=95
+    touchHandled = Renderer.handleSettingsTouch(400, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 2);
 
-    // Tap on Tab 3 [ VESC TOOL ] at x=690, y=95
-    touchHandled = Renderer.handleSettingsTouch(690, 95, tTest);
+    // Tap on Tab 3 [ DRAGY ] at x=550, y=95
+    touchHandled = Renderer.handleSettingsTouch(550, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 3);
 
-    // Tap on [ WI-FI BRIDGE STARTEN ] at x=200, y=400 while on Tab 3
-    touchHandled = Renderer.handleSettingsTouch(200, 400, tTest);
+    // Tap on Tab 4 [ PIN ] at x=700, y=95
+    touchHandled = Renderer.handleSettingsTouch(700, 95, tTest);
     assert(touchHandled == true);
-    assert(tTest.screen == SCREEN_WIFI_BRIDGE);
-    Vesc.exitWifiBridgeMode();
-    tTest.screen = SCREEN_SETTINGS_MENU;
+    assert(Renderer.getSettingsTab() == 4);
+
+    // Test Dragy Split adjustments on Tab 3
+    Renderer.setSettingsTab(3);
+    uint8_t old_sp1 = Settings.get().race_split1_kmh;
+    touchHandled = Renderer.handleSettingsTouch(180, 380, tTest); // Split 1 [+]
+    assert(touchHandled == true);
+    assert(Settings.get().race_split1_kmh == old_sp1 + 1);
+
     Renderer.setSettingsTab(2); // Switch back to RACE for limit tests
 
     // 2. Adjust RACE mode limits via [-] and [+] buttons and slider track
@@ -779,7 +785,7 @@ void testTouchGestures() {
     assert(Renderer.getSettingsTab() == 0);
 
     // 2. Tap Tab 2 [ RACE ]
-    runMainLoopTouch(495, 95);
+    runMainLoopTouch(400, 95);
     assert(Renderer.getSettingsTab() == 2);
 
     // 3. Tap [+] Speed button at x=720, y=210
@@ -2146,7 +2152,7 @@ int main(int argc, char **argv) {
     renderAndSave("10_settings_edit_mode", t);
 
     // ----------------------------------------------------
-    // Scenario 11: Screen 3 - Mode Configurator (VESC TOOL Bridge Hub Tab)
+    // Scenario 11: Screen 3 - Mode Configurator (DRAGY Splits Tab)
     // ----------------------------------------------------
     t.screen = SCREEN_SETTINGS_MENU;
     Renderer.setSettingsTab(3);
@@ -2154,10 +2160,10 @@ int main(int argc, char **argv) {
     renderAndSave("11_settings_display_style", t);
 
     // ----------------------------------------------------
-    // Scenario 12: Screen 3 - Mode Configurator (RACE Tab Custom)
+    // Scenario 12: Screen 3 - Mode Configurator (PIN & Security Tab)
     // ----------------------------------------------------
     t.screen = SCREEN_SETTINGS_MENU;
-    Renderer.setSettingsTab(2);
+    Renderer.setSettingsTab(4);
     Renderer.markScreenDirty();
     renderAndSave("12_settings_battery_profiles", t);
 

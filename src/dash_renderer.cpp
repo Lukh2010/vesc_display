@@ -110,7 +110,11 @@ DashboardRenderer::DashboardRenderer()
       _last_arc_col(0),
       _pin_screen_drawn(false),
       _last_pin_len(-1),
-      _last_pin_err(false) {
+      _last_pin_err(false),
+      _pin_modal_open(false),
+      _pin_modal_success(false),
+      _pin_modal_success_ms(0) {
+    _pin_modal_buf[0] = '\0';
     _last_needle.valid = false;
     _cache.invalidate();
     _stats_cache.invalidate();
@@ -1468,7 +1472,7 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
         // Footer Info
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(0x52AA, 0x0823);
-        _canvas->drawString("PIN aenderbar im Captive Portal / HyperDash Einstellungen", 400, 455);
+        _canvas->drawString("Notfall-Reset: Bildschirm 5s gedrueckt halten setzt PIN auf 1234", 400, 455);
     }
 
     // Only update PIN Circles and Status Hint if state changed (Zero Flicker!)
@@ -1511,10 +1515,11 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
 // ==============================================================================
 void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
     _canvas->fillScreen(COLOR_BG);
-    if (_settings_tab_idx >= 4) {
+    if (_settings_tab_idx >= 5) {
         _settings_tab_idx = (uint8_t)telemetry.ride_mode;
-        if (_settings_tab_idx >= 4) _settings_tab_idx = 0;
+        if (_settings_tab_idx >= 5) _settings_tab_idx = 0;
     }
+    _pin_modal_open = false;
     _menu_dirty = true;
 }
 
@@ -1535,7 +1540,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     _canvas->setTextDatum(textdatum_t::middle_center);
     _canvas->setFont(&fonts::Font4);
     _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-    _canvas->drawString("MODUS KONFIGURATION", 400, 30);
+    _canvas->drawString("EINSTELLUNGEN", 400, 30);
 
     _canvas->fillRoundRect(670, 12, 110, 36, 18, 0x18C3);
     _canvas->drawRoundRect(670, 12, 110, 36, 18, 0x39C7);
@@ -1543,18 +1548,18 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     _canvas->setFont(&fonts::Font2);
     _canvas->drawString("FERTIG", 725, 30);
 
-    // 2. Mode Selection Touch Tabs: [ ECO ] | [ SPORT ] | [ RACE ] | [ VESC TOOL ]
-    const char *tabNames[4] = { "ECO", "SPORT", "RACE", "VESC TOOL" };
-    const char *tabSub[4]   = { "Sparsam", "Dynamisch", "35kW+ Boost", "Bridge & Tools" };
-    uint16_t tabCols[4]     = { COLOR_GREEN, COLOR_CYAN, COLOR_RACE, COLOR_AMBER };
-    uint16_t tabBgCols[4]   = { 0x0200, 0x0188, 0x4002, 0x31A0 };
+    // 2. Touch Tabs: [ ECO ] | [ SPORT ] | [ RACE ] | [ DRAGY ] | [ PIN ]
+    const char *tabNames[5] = { "ECO", "SPORT", "RACE", "DRAGY", "PIN" };
+    const char *tabSub[5]   = { "Sparsam", "Dynamisch", "Boost", "Splits", "Sicherheit" };
+    uint16_t tabCols[5]     = { COLOR_GREEN, COLOR_CYAN, COLOR_RACE, COLOR_AMBER, COLOR_WHITE };
+    uint16_t tabBgCols[5]   = { 0x0200, 0x0188, 0x4002, 0x31A0, 0x18C3 };
 
-    int tabX[4] = { 20, 210, 400, 590 };
-    int tabW[4] = { 178, 178, 178, 190 };
+    int tabX[5] = { 16, 172, 328, 484, 640 };
+    int tabW[5] = { 146, 146, 146, 146, 146 };
     int tabH = 54;
     int tabY = 62;
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         bool isSel = (i == _settings_tab_idx);
         uint16_t borderCol = isSel ? tabCols[i] : COLOR_BORDER;
         uint16_t bgCol     = isSel ? tabBgCols[i] : COLOR_SURFACE;
@@ -1577,72 +1582,126 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     }
 
     if (_settings_tab_idx == 3) {
-        // VESC TOOL CONNECTION CENTER (y: 130..450)
-        // Left Card: Wireless Wi-Fi Bridge (AP)
-        drawCard(20, 130, 370, 315, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
-        _canvas->drawString("WI-FI BRIDGE (AP)", 38, 145);
-        _canvas->setFont(&fonts::Font0);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("KABELLOS ZU VESC TOOL MOBILE & PC", 38, 175);
+        // DRAGY SPLIT TARGET CONFIGURATION (y: 130..450)
+        auto drawSplitCol = [&](int col_idx, const char *title, uint8_t split_spd, uint16_t col) {
+            int cx = 20 + col_idx * 262;
+            int cw = 236, ch = 315;
+            drawCard(cx, 130, cw, ch, COLOR_SURFACE, COLOR_BORDER);
 
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->drawString("SSID:   VESC-DASH-AP", 38, 205);
-        _canvas->drawString("IP:     192.168.4.1", 38, 235);
-        _canvas->drawString("Port:   6510 (TCP Standard)", 38, 265);
-        _canvas->drawString("Passw:  Kein Passwort (Open)", 38, 295);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setTextColor(col, COLOR_SURFACE);
+            _canvas->drawString(title, cx + 18, 145);
 
-        _canvas->setFont(&fonts::Font0);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("1. Smartphone / PC mit WiFi verbinden", 38, 330);
-        _canvas->drawString("2. In VESC Tool: TCP -> 192.168.4.1:6510", 38, 348);
+            _canvas->setFont(&fonts::Font0);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            char subBuf[32];
+            snprintf(subBuf, sizeof(subBuf), "ZIEL: 0 - %d km/h", split_spd);
+            _canvas->drawString(subBuf, cx + 18, 175);
 
-        // Action Button: [ WI-FI BRIDGE STARTEN ]
-        _canvas->fillRoundRect(38, 375, 334, 52, 10, 0x0A82);
-        _canvas->drawRoundRect(38, 375, 334, 52, 10, COLOR_GREEN);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setTextColor(COLOR_WHITE, 0x0A82);
-        _canvas->drawString("WI-FI BRIDGE STARTEN", 38 + 167, 375 + 26);
+            // Big Speed Number in Center
+            char numBuf[16];
+            snprintf(numBuf, sizeof(numBuf), "%d", split_spd);
+            drawHeroDigitText(_canvas, numBuf, cx + cw / 2, 235, textdatum_t::middle_center, col, COLOR_SURFACE);
 
-        // Right Card: USB-C Passthrough Bridge
-        drawCard(410, 130, 370, 315, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("USB PASSTHROUGH", 428, 145);
-        _canvas->setFont(&fonts::Font0);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("DIREKTKABEL PC <-> VESC", 428, 175);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->setTextDatum(textdatum_t::top_center);
+            _canvas->drawString("km/h Zielwert", cx + cw / 2, 280);
 
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->drawString("Port:   USB CDC (/dev/ttyACM0)", 428, 205);
-        _canvas->drawString("Baud:   115200 (CDC <-> UART)", 428, 235);
-        _canvas->drawString("Pins:   TX=43, RX=44 (Serial1)", 428, 265);
-        _canvas->drawString("Status: 1:1 Live Hardware Bridge", 428, 295);
+            // [-] Button
+            _canvas->fillRoundRect(cx + 18, 350, 92, 54, 10, 0x18C3);
+            _canvas->drawRoundRect(cx + 18, 350, 92, 54, 10, 0x39C7);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+            _canvas->drawString("-", cx + 18 + 46, 350 + 27);
 
-        _canvas->setFont(&fonts::Font0);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("1. PC per USB-C an Display anschliessen", 428, 330);
-        _canvas->drawString("2. In VESC Tool: Serial / COM Port waehlen", 428, 348);
+            // [+] Button
+            _canvas->fillRoundRect(cx + cw - 110, 350, 92, 54, 10, 0x18C3);
+            _canvas->drawRoundRect(cx + cw - 110, 350, 92, 54, 10, 0x39C7);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+            _canvas->drawString("+", cx + cw - 110 + 46, 350 + 27);
+        };
 
-        // Action Button: [ USB BRIDGE STARTEN ]
-        _canvas->fillRoundRect(428, 375, 334, 52, 10, 0x0188);
-        _canvas->drawRoundRect(428, 375, 334, 52, 10, COLOR_CYAN);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setTextColor(COLOR_WHITE, 0x0188);
-        _canvas->drawString("USB BRIDGE STARTEN", 428 + 167, 375 + 26);
+        drawSplitCol(0, "SPLIT 1", Settings.get().race_split1_kmh, COLOR_GREEN);
+        drawSplitCol(1, "SPLIT 2", Settings.get().race_split2_kmh, COLOR_CYAN);
+        drawSplitCol(2, "SPLIT 3 (ZIEL)", Settings.get().race_split3_kmh, COLOR_RACE);
 
         // Footer Strip
         _canvas->setFont(&fonts::Font0);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
-        _canvas->drawString("Simulator TCP: 127.0.0.1:6510 aktiv  |  Zurueck mit [< DASH]", 400, 462);
+        _canvas->drawString("Split-Ziele fuer Launch Control & Bestzeiten  |  Auto-Save bei [< DASH]", 400, 462);
+        return;
+    }
+
+    if (_settings_tab_idx == 4) {
+        // PIN / SECURITY SETTINGS (y: 130..450)
+        // Card 1: PIN-Sperre beim Start (y: 130..270)
+        drawCard(20, 130, 760, 140, COLOR_SURFACE, COLOR_BORDER);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
+        _canvas->drawString("PIN-SPERRE BEIM EINSCHALTEN", 40, 148);
+
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+        _canvas->drawString("Blockiert Motor & Gasgriff auf 0A beim Start bis zur PIN-Eingabe", 40, 180);
+
+        // Toggle Button
+        bool pin_en = Settings.get().pin_lock_enabled;
+        uint16_t tog_bg  = pin_en ? 0x0380 : 0x18C3;
+        uint16_t tog_brd = pin_en ? COLOR_GREEN : 0x39C7;
+        uint16_t tog_txt = pin_en ? COLOR_GREEN : COLOR_MUTED_GRAY;
+        _canvas->fillRoundRect(500, 155, 255, 52, 12, tog_bg);
+        _canvas->drawRoundRect(500, 155, 255, 52, 12, tog_brd);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(tog_txt, tog_bg);
+        _canvas->drawString(pin_en ? "AKTIVIERT" : "DEAKTIVIERT", 500 + 127, 155 + 26);
+
+        // Card 2: PIN Code Aendern (y: 285..440)
+        drawCard(20, 285, 760, 155, COLOR_SURFACE, COLOR_BORDER);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
+        _canvas->drawString("4-STELLIGER SICHERHEITS-PIN", 40, 302);
+
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+        _canvas->drawString("PIN-Code direkt hier am Display neu festlegen", 40, 332);
+
+        // [ PIN AENDERN ] Button
+        _canvas->fillRoundRect(40, 365, 290, 54, 12, 0x1084);
+        _canvas->drawRoundRect(40, 365, 290, 54, 12, COLOR_CYAN);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(COLOR_WHITE, 0x1084);
+        _canvas->drawString("PIN JETZT AENDERN", 40 + 145, 365 + 27);
+
+        // Emergency Recovery Info Box
+        _canvas->fillRoundRect(360, 350, 400, 74, 8, 0x0823);
+        _canvas->drawRoundRect(360, 350, 400, 74, 8, 0x2965);
+        _canvas->setFont(&fonts::Font0);
+        _canvas->setTextColor(COLOR_AMBER, 0x0823);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->drawString("NOTFALL-RESET (5s DISPLAY GEDRUECKT HALTEN):", 375, 358);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, 0x0823);
+        _canvas->drawString("PIN vergessen? Beim Einschalten Display 5 Sekunden gedrueckt", 375, 378);
+        _canvas->drawString("halten -> PIN wird automatisch auf 1234 zurueckgesetzt.", 375, 396);
+
+        // Footer Strip
+        _canvas->setFont(&fonts::Font0);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
+        _canvas->drawString("Sicherheitseinstellungen 100% autark im NVS Flash  |  Zurueck mit [< DASH]", 400, 462);
+
+        if (_pin_modal_open) {
+            drawPinChangeModal();
+        }
         return;
     }
 
@@ -1771,6 +1830,96 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     _canvas->setTextDatum(textdatum_t::middle_center);
     _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
     _canvas->drawString("Phasen- & Batteriestrom auf Maximum / Headroom  |  Auto-Save bei [< DASH]", 400, 462);
+
+    if (_pin_modal_open) {
+        drawPinChangeModal();
+    }
+}
+
+void DashboardRenderer::drawPinChangeModal() {
+    int mx = 160, my = 35, mw = 480, mh = 410;
+    // Dark modal surface card with glowing cyan border
+    drawCard(mx, my, mw, mh, 0x0823, COLOR_CYAN);
+
+    // Header Title
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_CYAN, 0x0823);
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->drawString("NEUEN PIN FESTLEGEN", mx + 20, my + 16);
+
+    // Top-Right [ X ] Close / Cancel Button
+    _canvas->fillRoundRect(mx + mw - 48, my + 12, 36, 32, 8, 0x2124);
+    _canvas->drawRoundRect(mx + mw - 48, my + 12, 36, 32, 8, COLOR_MUTED_GRAY);
+    _canvas->setTextColor(COLOR_WHITE, 0x2124);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->drawString("X", mx + mw - 30, my + 28);
+
+    if (_pin_modal_success) {
+        // Success state!
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(COLOR_GREEN, 0x0823);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->drawString("PIN ERFOLGREICH GESPEICHERT!", mx + mw / 2, my + 130);
+
+        char savedBuf[32];
+        snprintf(savedBuf, sizeof(savedBuf), "Neuer PIN: %s", Settings.get().pin_code);
+        _canvas->setFont(&fonts::Font6);
+        _canvas->setTextColor(COLOR_WHITE, 0x0823);
+        _canvas->drawString(savedBuf, mx + mw / 2, my + 200);
+
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, 0x0823);
+        _canvas->drawString("Im NVS Flash gesichert. Schliesst in Kuerze...", mx + mw / 2, my + 260);
+        return;
+    }
+
+    // Subtitle
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_WHITE, 0x0823);
+    _canvas->setTextDatum(textdatum_t::top_center);
+    _canvas->drawString("Gib 4 neue Ziffern ein:", mx + mw / 2, my + 54);
+
+    // 4 PIN Dots (y: 82)
+    int entered_len = strlen(_pin_modal_buf);
+    int dot_xs[4] = { mx + mw / 2 - 60, mx + mw / 2 - 20, mx + mw / 2 + 20, mx + mw / 2 + 60 };
+    int dot_y = my + 92;
+    for (int i = 0; i < 4; i++) {
+        if (i < entered_len) {
+            _canvas->fillCircle(dot_xs[i], dot_y, 11, COLOR_CYAN);
+            _canvas->fillCircle(dot_xs[i], dot_y, 4, COLOR_WHITE);
+        } else {
+            _canvas->fillCircle(dot_xs[i], dot_y, 11, 0x1084);
+            _canvas->drawCircle(dot_xs[i], dot_y, 11, 0x39C7);
+        }
+    }
+
+    // Keypad (3 cols x 4 rows)
+    static const char *KEYS[4][3] = {
+        { "1", "2", "3" },
+        { "4", "5", "6" },
+        { "7", "8", "9" },
+        { "DEL", "0", "OK" }
+    };
+    int kw = 96, kh = 46;
+    int kx0 = mx + (mw - (3 * kw + 2 * 14)) / 2;
+    int ky0 = my + 125;
+
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 3; c++) {
+            int bx = kx0 + c * (kw + 14);
+            int by = ky0 + r * (kh + 8);
+            uint16_t bg = 0x141F, border = 0x2965, txt = COLOR_WHITE;
+            if (r == 3 && c == 0) { border = 0xB800; txt = 0xFCA5; }
+            else if (r == 3 && c == 2) { border = 0x05E0; txt = COLOR_GREEN; }
+
+            drawCard(bx, by, kw, kh, bg, border);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextColor(txt, bg);
+            _canvas->drawString(KEYS[r][c], bx + kw / 2, by + kh / 2);
+        }
+    }
 }
 
 void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry) {
@@ -1812,8 +1961,8 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
     ModeLimits &lim = cfg.tuned_modes[m];
 
     if (action == NAV_BOTH_PRESSED) {
-        // Cycle tab: ECO -> SPORT -> RACE -> VESC TOOL -> ECO
-        _settings_tab_idx = (_settings_tab_idx + 1) % 4;
+        // Cycle tab: ECO -> SPORT -> RACE -> DRAGY -> PIN -> ECO
+        _settings_tab_idx = (_settings_tab_idx + 1) % 5;
         _menu_dirty = true;
         return;
     }
@@ -1836,6 +1985,85 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
 bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry) {
     if (tx < 0 || ty < 0) return false;
 
+    // 0. PIN Change Modal Touch Handling
+    if (_pin_modal_open) {
+        int mx = 160, my = 35, mw = 480, mh = 410;
+        // Top-Right [ X ] button
+        if (tx >= mx + mw - 55 && tx <= mx + mw && ty >= my && ty <= my + 50) {
+            _pin_modal_open = false;
+            _menu_dirty = true;
+            return true;
+        }
+
+        if (_pin_modal_success) {
+            _pin_modal_open = false;
+            _menu_dirty = true;
+            return true;
+        }
+
+        // Tap outside modal closes it
+        if (tx < mx || tx > mx + mw || ty < my || ty > my + mh) {
+            _pin_modal_open = false;
+            _menu_dirty = true;
+            return true;
+        }
+
+        // Keypad (3 cols x 4 rows)
+        int kw = 96, kh = 46;
+        int kx0 = mx + (mw - (3 * kw + 2 * 14)) / 2;
+        int ky0 = my + 125;
+
+        int c = -1;
+        for (int col = 0; col < 3; col++) {
+            int bx = kx0 + col * (kw + 14);
+            if (tx >= bx && tx <= bx + kw) { c = col; break; }
+        }
+        int r = -1;
+        for (int row = 0; row < 4; row++) {
+            int by = ky0 + row * (kh + 8);
+            if (ty >= by && ty <= by + kh) { r = row; break; }
+        }
+
+        if (r >= 0 && c >= 0) {
+            static const char KEY_MAP[4][3] = {
+                { '1', '2', '3' },
+                { '4', '5', '6' },
+                { '7', '8', '9' },
+                { '<', '0', '#' }
+            };
+            char key = KEY_MAP[r][c];
+            int len = strlen(_pin_modal_buf);
+            if (key == '<') { // DEL
+                if (len > 0) {
+                    _pin_modal_buf[len - 1] = '\0';
+                    _menu_dirty = true;
+                }
+            } else if (key == '#') { // OK
+                if (len == 4) {
+                    strncpy(Settings.get().pin_code, _pin_modal_buf, sizeof(Settings.get().pin_code));
+                    Settings.save();
+                    _pin_modal_success = true;
+                    _pin_modal_success_ms = millis() + 1400;
+                    _menu_dirty = true;
+                }
+            } else if (key >= '0' && key <= '9') {
+                if (len < 4) {
+                    _pin_modal_buf[len] = key;
+                    _pin_modal_buf[len + 1] = '\0';
+                    len++;
+                    _menu_dirty = true;
+                    if (len == 4) {
+                        strncpy(Settings.get().pin_code, _pin_modal_buf, sizeof(Settings.get().pin_code));
+                        Settings.save();
+                        _pin_modal_success = true;
+                        _pin_modal_success_ms = millis() + 1400;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
     // 1. TOP BAR (y <= 55): Return to Dash & Auto-Save
     if (ty <= 55) {
         if (tx <= 180 || tx >= 620) {
@@ -1845,44 +2073,89 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         return false;
     }
 
-    // 2. TABS (y: 58..125)
+    // 2. TABS (y: 58..125) - 5 Tabs: ECO, SPORT, RACE, DRAGY, PIN
     if (ty >= 58 && ty <= 125) {
-        if (tx >= 20 && tx < 205) {
+        if (tx >= 10 && tx < 168) {
             _settings_tab_idx = 0; // ECO
             _menu_dirty = true;
             return true;
-        } else if (tx >= 205 && tx < 395) {
+        } else if (tx >= 168 && tx < 324) {
             _settings_tab_idx = 1; // SPORT
             _menu_dirty = true;
             return true;
-        } else if (tx >= 395 && tx < 585) {
+        } else if (tx >= 324 && tx < 480) {
             _settings_tab_idx = 2; // RACE
             _menu_dirty = true;
             return true;
-        } else if (tx >= 585 && tx <= 780) {
-            _settings_tab_idx = 3; // VESC TOOL
+        } else if (tx >= 480 && tx < 636) {
+            _settings_tab_idx = 3; // DRAGY
+            _menu_dirty = true;
+            return true;
+        } else if (tx >= 636 && tx <= 790) {
+            _settings_tab_idx = 4; // PIN
             _menu_dirty = true;
             return true;
         }
     }
 
+    // Tab 3: DRAGY SPLITS CONFIGURATION
     if (_settings_tab_idx == 3) {
-        // Left Card Button: Start Wi-Fi Bridge
-        if (tx >= 35 && tx <= 375 && ty >= 370 && ty <= 435) {
-            Vesc.enterWifiBridgeMode();
-            telemetry.screen = SCREEN_WIFI_BRIDGE;
-            _screen_dirty = true;
-            _cache.invalidate();
-            Buttons.setActiveScreen(SCREEN_WIFI_BRIDGE);
+        if (ty >= 340 && ty <= 415) {
+            // Col 0: Split 1
+            if (tx >= 30 && tx <= 120) {
+                if (Settings.get().race_split1_kmh > 10) Settings.get().race_split1_kmh--;
+                Settings.save();
+                _menu_dirty = true;
+                return true;
+            } else if (tx >= 135 && tx <= 235) {
+                if (Settings.get().race_split1_kmh < Settings.get().race_split2_kmh - 1) Settings.get().race_split1_kmh++;
+                Settings.save();
+                _menu_dirty = true;
+                return true;
+            }
+            // Col 1: Split 2
+            else if (tx >= 290 && tx <= 385) {
+                if (Settings.get().race_split2_kmh > Settings.get().race_split1_kmh + 1) Settings.get().race_split2_kmh--;
+                Settings.save();
+                _menu_dirty = true;
+                return true;
+            } else if (tx >= 400 && tx <= 500) {
+                if (Settings.get().race_split2_kmh < Settings.get().race_split3_kmh - 1) Settings.get().race_split2_kmh++;
+                Settings.save();
+                _menu_dirty = true;
+                return true;
+            }
+            // Col 2: Split 3
+            else if (tx >= 550 && tx <= 645) {
+                if (Settings.get().race_split3_kmh > Settings.get().race_split2_kmh + 1) Settings.get().race_split3_kmh--;
+                Settings.save();
+                _menu_dirty = true;
+                return true;
+            } else if (tx >= 660 && tx <= 760) {
+                if (Settings.get().race_split3_kmh < 130) Settings.get().race_split3_kmh++;
+                Settings.save();
+                _menu_dirty = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Tab 4: PIN & SECURITY
+    if (_settings_tab_idx == 4) {
+        // Card 1: Toggle PIN lock on boot (ty: 130..270)
+        if (ty >= 130 && ty <= 270) {
+            Settings.get().pin_lock_enabled = !Settings.get().pin_lock_enabled;
+            Settings.save();
+            _menu_dirty = true;
             return true;
         }
-        // Right Card Button: Start USB Bridge
-        if (tx >= 425 && tx <= 765 && ty >= 370 && ty <= 435) {
-            Vesc.enterBridgeMode();
-            telemetry.screen = SCREEN_VESC_BRIDGE;
-            _screen_dirty = true;
-            _cache.invalidate();
-            Buttons.setActiveScreen(SCREEN_VESC_BRIDGE);
+        // Card 2: [ PIN JETZT AENDERN ] Button (tx: 30..340, ty: 350..425)
+        if (tx >= 30 && tx <= 340 && ty >= 350 && ty <= 425) {
+            _pin_modal_open = true;
+            _pin_modal_buf[0] = '\0';
+            _pin_modal_success = false;
+            _menu_dirty = true;
             return true;
         }
         return false;
@@ -2215,8 +2488,13 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             telemetry.race_dyno.peak_phase_amps = telemetry.phase_amps;
         }
 
-        // Check 0 - 22 km/h split
-        if (telemetry.race_split_0_22 <= 0.0f && telemetry.speed_kmh >= 22.0f) {
+        // Check configured Dragy splits
+        uint8_t sp1 = Settings.get().race_split1_kmh;
+        uint8_t sp2 = Settings.get().race_split2_kmh;
+        uint8_t sp3 = Settings.get().race_split3_kmh;
+
+        // Check Split 1
+        if (telemetry.race_split_0_22 <= 0.0f && telemetry.speed_kmh >= (float)sp1) {
             telemetry.race_split_0_22 = (telemetry.race_elapsed_sec > 0.01f) ? telemetry.race_elapsed_sec : 0.01f;
             if (telemetry.race_records.best_0_22_sec <= 0.01f || telemetry.race_split_0_22 < telemetry.race_records.best_0_22_sec) {
                 telemetry.race_records.best_0_22_sec = telemetry.race_split_0_22;
@@ -2224,8 +2502,8 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             }
         }
 
-        // Check 0 - 50 km/h split
-        if (telemetry.race_split_0_50 <= 0.0f && telemetry.speed_kmh >= 50.0f) {
+        // Check Split 2
+        if (telemetry.race_split_0_50 <= 0.0f && telemetry.speed_kmh >= (float)sp2) {
             telemetry.race_split_0_50 = (telemetry.race_elapsed_sec > 0.01f) ? telemetry.race_elapsed_sec : 0.01f;
             if (telemetry.race_records.best_0_50_sec <= 0.01f || telemetry.race_split_0_50 < telemetry.race_records.best_0_50_sec) {
                 telemetry.race_records.best_0_50_sec = telemetry.race_split_0_50;
@@ -2233,8 +2511,8 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             }
         }
 
-        // Check 0 - 70 km/h split
-        if (telemetry.race_split_0_70 <= 0.0f && telemetry.speed_kmh >= 70.0f) {
+        // Check Split 3 (Final Target Split -> Finishes Run)
+        if (telemetry.race_split_0_70 <= 0.0f && telemetry.speed_kmh >= (float)sp3) {
             telemetry.race_split_0_70 = (telemetry.race_elapsed_sec > 0.01f) ? telemetry.race_elapsed_sec : 0.01f;
             if (telemetry.race_records.best_0_70_sec <= 0.01f || telemetry.race_split_0_70 < telemetry.race_records.best_0_70_sec) {
                 telemetry.race_records.best_0_70_sec = telemetry.race_split_0_70;
@@ -2324,16 +2602,21 @@ void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
     drawCard(530, 70, 250, 390, COLOR_SURFACE, COLOR_BORDER);
 
     // Clean, spaced-out split rows with subtle dividers (no "RUN SPLITS" banner)
+    char label1[24], label2[24], label3[24];
+    snprintf(label1, sizeof(label1), "0 - %d km/h", Settings.get().race_split1_kmh);
+    snprintf(label2, sizeof(label2), "0 - %d km/h", Settings.get().race_split2_kmh);
+    snprintf(label3, sizeof(label3), "0 - %d km/h", Settings.get().race_split3_kmh);
+
     _canvas->setFont(&fonts::Font2);
     _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
     _canvas->setTextDatum(textdatum_t::top_left);
-    _canvas->drawString("0 - 22 km/h", 548, 100);
+    _canvas->drawString(label1, 548, 100);
     _canvas->drawFastHLine(548, 185, 214, COLOR_SURFACE_LIGHT);
 
-    _canvas->drawString("0 - 50 km/h", 548, 205);
+    _canvas->drawString(label2, 548, 205);
     _canvas->drawFastHLine(548, 290, 214, COLOR_SURFACE_LIGHT);
 
-    _canvas->drawString("0 - 70 km/h", 548, 310);
+    _canvas->drawString(label3, 548, 310);
 }
 
 void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
@@ -2543,9 +2826,14 @@ void DashboardRenderer::drawRaceRecordsModal(const DashTelemetry &telemetry) {
         _canvas->drawFastHLine(mx + 30, y + 36, mw - 70, 0x2124);
     };
 
-    drawRecordRow(my + 70, "0 - 22 km/h", telemetry.race_records.best_0_22_sec);
-    drawRecordRow(my + 130, "0 - 50 km/h", telemetry.race_records.best_0_50_sec);
-    drawRecordRow(my + 190, "0 - 70 km/h", telemetry.race_records.best_0_70_sec);
+    char rec1[24], rec2[24], rec3[24];
+    snprintf(rec1, sizeof(rec1), "0 - %d km/h", Settings.get().race_split1_kmh);
+    snprintf(rec2, sizeof(rec2), "0 - %d km/h", Settings.get().race_split2_kmh);
+    snprintf(rec3, sizeof(rec3), "0 - %d km/h", Settings.get().race_split3_kmh);
+
+    drawRecordRow(my + 70, rec1, telemetry.race_records.best_0_22_sec);
+    drawRecordRow(my + 130, rec2, telemetry.race_records.best_0_50_sec);
+    drawRecordRow(my + 190, rec3, telemetry.race_records.best_0_70_sec);
 
     // Bottom Action Buttons: [ RESET ] (left) and [ SCHLIESSEN ] (right)
     int btnY = my + 265;
@@ -2641,7 +2929,9 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
 
     drawStatTile(0, "MAX WATT", b1, sub_b1, COLOR_CYAN);
     drawStatTile(1, "MAX G-FORCE", b2, nullptr, COLOR_AMBER);
-    drawStatTile(2, "0 - 70 KM/H", b3, nullptr, COLOR_GREEN);
+    char dynoSplitLabel[24];
+    snprintf(dynoSplitLabel, sizeof(dynoSplitLabel), "0 - %d KM/H", Settings.get().race_split3_kmh);
+    drawStatTile(2, dynoSplitLabel, b3, nullptr, COLOR_GREEN);
     drawStatTile(3, "MAX PHASEN-I", b4, nullptr, COLOR_WHITE);
 
     // Dyno Chart Area

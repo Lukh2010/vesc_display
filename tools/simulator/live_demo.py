@@ -388,25 +388,11 @@ HTML_PAGE = """<!DOCTYPE html>
 PORTAL_HTML_CACHE = None
 
 def get_captive_portal_html():
-    global PORTAL_HTML_CACHE
-    if PORTAL_HTML_CACHE is not None:
-        return PORTAL_HTML_CACHE
-    cpp_path = os.path.join(SCRIPT_DIR, "../../src/captive_portal.cpp")
-    try:
-        with open(cpp_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        start_tag = 'static const char INDEX_HTML[] PROGMEM = R"rawliteral('
-        end_tag = ')rawliteral";'
-        start_idx = content.find(start_tag)
-        if start_idx != -1:
-            start_idx += len(start_tag)
-            end_idx = content.find(end_tag, start_idx)
-            if end_idx != -1:
-                PORTAL_HTML_CACHE = content[start_idx:end_idx]
-                return PORTAL_HTML_CACHE
-    except Exception as e:
-        print(f"[PORTAL] Error reading captive portal HTML: {e}")
-    return "<h1>Captive Portal HTML Not Found</h1>"
+    return """<!DOCTYPE html><html><head><meta charset="utf-8"><title>HyperDash Autark</title>
+    <style>body{background:#0a0c10;color:#fff;font-family:sans-serif;text-align:center;padding:50px;}</style></head>
+    <body><h2>VESC Touch Display (100% Autark)</h2>
+    <p style="color:#00e5ff;">Das HyperDash-Webportal wurde entfernt. Alle Einstellungen (Modi, PIN, Dragy-Splits) erfolgen jetzt direkt & autark am Touch-Display!</p>
+    <p><a href="http://localhost:8080" style="color:#00ff88;text-decoration:none;font-weight:bold;">Zurueck zum Live Display Stream</a></p></body></html>"""
 
 class WebDemoHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
