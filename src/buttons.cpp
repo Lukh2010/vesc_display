@@ -294,26 +294,21 @@ void ButtonHandler::processTouch(uint32_t now) {
                         // do NOT exit back to Dash! Only pressing < DASH returns.
                     } else if (_active_screen == SCREEN_RACE_TIMER) {
                         // On SCREEN_RACE_TIMER:
-                        if (_last_tap_x <= 130 && _last_tap_y <= 65) {
-                            _pending_action = NAV_SCREEN_DASH; // Top Left -> Return to Ride Dash / STATS
-                        } else if (_last_tap_x >= 630 && _last_tap_y <= 65) {
-                            _pending_action = NAV_RACE_TOGGLE_POPUP; // Top Right -> Toggle Bestzeiten Popup
-                        } else if (_last_tap_x >= 470 && _last_tap_x < 630 && _last_tap_y <= 65) {
-                            _pending_action = NAV_RACE_TOGGLE_DYNO; // Top Right -> Toggle Dyno / Diagramm
-                        } else if (_race_popup_open) {
-                            // Popup is open: modal bounds (x:140..660, y:70..410)
-                            if (_last_tap_x >= 585 && _last_tap_x <= 645 && _last_tap_y >= 80 && _last_tap_y <= 135) {
+                        // 1. Modals have strict touch priority when open (prevents accidental trigger of background buttons)
+                        if (_race_popup_open) {
+                            // Bestzeiten modal bounds (x:140..660, y:70..410)
+                            if (_last_tap_x >= 585 && _last_tap_x <= 655 && _last_tap_y >= 70 && _last_tap_y <= 135) {
                                 _pending_action = NAV_RACE_CLOSE_POPUP; // Top-Right [ X ]
-                            } else if (_last_tap_x >= 170 && _last_tap_x <= 340 && _last_tap_y >= 325 && _last_tap_y <= 390) {
+                            } else if (_last_tap_x >= 160 && _last_tap_x <= 340 && _last_tap_y >= 320 && _last_tap_y <= 395) {
                                 _pending_action = NAV_RACE_RESET_RECORDS; // [ RESET ]
-                            } else if (_last_tap_x >= 430 && _last_tap_x <= 630 && _last_tap_y >= 325 && _last_tap_y <= 390) {
+                            } else if (_last_tap_x >= 430 && _last_tap_x <= 640 && _last_tap_y >= 320 && _last_tap_y <= 395) {
                                 _pending_action = NAV_RACE_CLOSE_POPUP; // [ SCHLIESSEN ]
                             } else if (_last_tap_x < 140 || _last_tap_x > 660 || _last_tap_y < 70 || _last_tap_y > 410) {
                                 _pending_action = NAV_RACE_CLOSE_POPUP; // Tap outside modal closes it
                             }
                         } else if (_race_dyno_open) {
                             // Dyno modal bounds (x:100..700, y:45..435)
-                            if (_last_tap_x >= 620 && _last_tap_x <= 695 && _last_tap_y >= 45 && _last_tap_y <= 105) {
+                            if (_last_tap_x >= 630 && _last_tap_x <= 700 && _last_tap_y >= 45 && _last_tap_y <= 105) {
                                 _pending_action = NAV_RACE_CLOSE_POPUP; // Top-Right [ X ]
                             } else if (_last_tap_x >= 280 && _last_tap_x <= 520 && _last_tap_y >= 365 && _last_tap_y <= 435) {
                                 _pending_action = NAV_RACE_CLOSE_POPUP; // [ SCHLIESSEN ]
@@ -321,8 +316,14 @@ void ButtonHandler::processTouch(uint32_t now) {
                                 _pending_action = NAV_RACE_CLOSE_POPUP; // Tap outside closes
                             }
                         } else {
-                            // Popup is closed
-                            if (_race_state == 1 || _race_state == 2) {
+                            // Base SCREEN_RACE_TIMER buttons (when no modal is open)
+                            if (_last_tap_x <= 130 && _last_tap_y <= 65) {
+                                _pending_action = NAV_SCREEN_DASH; // Top Left -> Return to Ride Dash / STATS
+                            } else if (_last_tap_x >= 630 && _last_tap_y <= 65) {
+                                _pending_action = NAV_RACE_TOGGLE_POPUP; // Top Right -> Toggle Bestzeiten Popup
+                            } else if (_last_tap_x >= 470 && _last_tap_x < 630 && _last_tap_y <= 65) {
+                                _pending_action = NAV_RACE_TOGGLE_DYNO; // Top Right -> Toggle Dyno / Diagramm
+                            } else if (_race_state == 1 || _race_state == 2) {
                                 // If COUNTDOWN or MEASURING: tapping center aborts
                                 if (_last_tap_x >= 150 && _last_tap_x <= 510 && _last_tap_y >= 100 && _last_tap_y <= 420) {
                                     _pending_action = NAV_RACE_ABORT;
