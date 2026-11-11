@@ -170,9 +170,9 @@ void ButtonHandler::processTouch(uint32_t now) {
                         } else if (_touch_start_y <= 65 && _touch_start_x >= 640) {
                             _pending_action = NAV_SCREEN_DASH; // Top-right [X] returns to Ride Dash
                         }
-                    } else if (_touch_start_y > 390 && _touch_start_x >= 65 && _touch_start_x < 400) {
-                        // Long press on bottom-left status strip (x=65..400) -> Reset Trip Odometer
-                        // (Touches on x < 65 are Light Switch; x >= 400 are action buttons, prevent accidental reset)
+                    } else if (_touch_start_y > 390 && _touch_start_x < 400) {
+                        // Long press on bottom-left status strip -> Reset Trip Odometer
+                        // (Touches on x >= 400 are action buttons [ BOOST ] / [ MODE ], prevent accidental reset)
                         _pending_action = NAV_BTN2_LONG;
                     } else if (_touch_start_y < 80 && _touch_start_x > 620) {
                         // Long press top right -> Open Settings Menu
@@ -339,11 +339,7 @@ void ButtonHandler::processTouch(uint32_t now) {
                         if (_last_tap_x >= 18 && _last_tap_x <= 125 && _last_tap_y >= 12 && _last_tap_y <= 60) {
                             _pending_action = NAV_SCREEN_STATS;
                         }
-                        // 2. Bottom Left Light Switch Badge (Hauptschalter)
-                        else if (_last_tap_x >= 8 && _last_tap_x <= 60 && _last_tap_y >= 385 && _last_tap_y <= 445) {
-                            _pending_action = NAV_LIGHT_TOGGLE;
-                        }
-                        // 3. Action Buttons on Ride Dash (Bottom Right)
+                        // 2. Action Buttons on Ride Dash (Bottom Right)
                         else if (_last_tap_y >= 360 && _last_tap_y <= 465) {
                             if (_last_tap_x >= 430 && _last_tap_x <= 605) {
                                 _pending_action = NAV_BOOST_TOGGLE;
@@ -351,7 +347,7 @@ void ButtonHandler::processTouch(uint32_t now) {
                                 _pending_action = NAV_MODE_CYCLE;
                             }
                         }
-                        // 4. Top Right Badge -> Open Settings Menu
+                        // 3. Top Right Badge -> Open Settings Menu
                         else if (_last_tap_y < 65 && _last_tap_x > 620) {
                             _pending_action = NAV_BTN1_LONG;
                         }

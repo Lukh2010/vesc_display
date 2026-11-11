@@ -1229,13 +1229,6 @@ void sim_touch_event(int is_down, int x, int y) {
             }
         }
     } else if (is_new_down && g_telemetry.screen == SCREEN_RIDE_DASH) {
-        if (x >= 8 && x <= 60 && y >= 385 && y <= 445) {
-            // Tapping Bottom Left Light Switch Badge (Hauptschalter)
-            g_telemetry.lights_enabled = !g_telemetry.lights_enabled;
-            Renderer.markScreenDirty();
-            Display.setSimTouch(false, -1, -1);
-            return;
-        }
         if (x >= 18 && x <= 125 && y >= 12 && y <= 60) {
             // Tapping [ STATS ] button takes the rider directly to SCREEN_RT_GRAPHS
             g_telemetry.screen = SCREEN_RT_GRAPHS;
