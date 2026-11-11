@@ -809,12 +809,10 @@ void sim_step(uint32_t step_ms) {
         if (Buttons.getLastTap(&tx, &ty)) {
             Renderer.handleSettingsTouch(tx, ty, g_telemetry);
             Buttons.clearNavAction(); // Clear any pending action to prevent double-invocation
-        } else if (Buttons.isTouching()) {
+        } else if (Buttons.isTouching() && Renderer.getSettingsTab() < 3) {
             int16_t cx = Buttons.getTouchX();
             int16_t cy = Buttons.getTouchY();
-            if (cx >= 120 && cx <= 680 && ((cy >= 135 && cy <= 285) || (cy >= 295 && cy <= 445))) {
-                Renderer.handleSettingsTouch(cx, cy, g_telemetry);
-            }
+            Renderer.handleSettingsSliderDrag(cx, cy, g_telemetry);
         }
     }
 

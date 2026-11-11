@@ -281,13 +281,10 @@ void loop() {
         if (Buttons.getLastTap(&tx, &ty)) {
             Renderer.handleSettingsTouch(tx, ty, telemetry);
             Buttons.clearNavAction(); // Clear any pending action to prevent double-invocation
-        } else if (Buttons.isTouching()) {
+        } else if (Buttons.isTouching() && Renderer.getSettingsTab() < 3) {
             int16_t cx = Buttons.getTouchX();
             int16_t cy = Buttons.getTouchY();
-            // Real-time slider drag: speed track y: 135..285, watt track y: 295..445, x: 120..680
-            if (cx >= 120 && cx <= 680 && ((cy >= 135 && cy <= 285) || (cy >= 295 && cy <= 445))) {
-                Renderer.handleSettingsTouch(cx, cy, telemetry);
-            }
+            Renderer.handleSettingsSliderDrag(cx, cy, telemetry);
         }
     }
 
