@@ -147,7 +147,14 @@ void ButtonHandler::processTouch(uint32_t now) {
                 }
             }
 
-            // 2. Generic Long Press check (MUST NOT fire if touch started on speed number or while locked)
+            // 2. Emergency PIN Reset: 5 seconds continuous hold while locked
+            if (ModeManager::instance().isLocked() && !_touch_long_fired && (now - _touch_start_ms >= 5000)) {
+                _touch_long_fired = true;
+                _pending_action = NAV_PIN_EMERGENCY_RESET;
+                return;
+            }
+
+            // 3. Generic Long Press check (MUST NOT fire if touch started on speed number or while locked)
             if (!ModeManager::instance().isLocked() && !_speed_touch_started && !_touch_long_fired && (now - _touch_start_ms >= TOUCH_LONG_MS)) {
                 int16_t dx = tx - _touch_start_x;
                 int16_t dy = ty - _touch_start_y;
@@ -192,7 +199,7 @@ void ButtonHandler::processTouch(uint32_t now) {
 
             // If system is locked by PIN, directly register tap from touch_start_x/y (100% reliable keypad taps)
             if (ModeManager::instance().isLocked()) {
-                if (touch_dur >= 15) {
+                if (!_touch_long_fired && touch_dur >= 15) {
                     _has_tap = true;
                     _last_tap_x = _touch_start_x;
                     _last_tap_y = _touch_start_y;

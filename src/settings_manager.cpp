@@ -22,6 +22,9 @@ void SettingsManager::loadDefaults() {
     _settings.throttle_adc_channel   = 0; // Default to ADC1 (standard VESC throttle)
     _settings.pin_lock_enabled       = true; // Handystyle 4-digit PIN lock on startup
     strncpy(_settings.pin_code, "1234", sizeof(_settings.pin_code));
+    _settings.race_split1_kmh        = 22;
+    _settings.race_split2_kmh        = 50;
+    _settings.race_split3_kmh        = 70;
     _race_records.reset();
 }
 
@@ -55,6 +58,13 @@ void SettingsManager::begin() {
             strncpy(_settings.pin_code, "1234", sizeof(_settings.pin_code));
         }
 
+        _settings.race_split1_kmh        = _prefs.getUChar("rc_sp1", 22);
+        _settings.race_split2_kmh        = _prefs.getUChar("rc_sp2", 50);
+        _settings.race_split3_kmh        = _prefs.getUChar("rc_sp3", 70);
+        if (_settings.race_split1_kmh < 5 || _settings.race_split1_kmh > 60) _settings.race_split1_kmh = 22;
+        if (_settings.race_split2_kmh < 15 || _settings.race_split2_kmh > 90) _settings.race_split2_kmh = 50;
+        if (_settings.race_split3_kmh < 25 || _settings.race_split3_kmh > 130) _settings.race_split3_kmh = 70;
+
         _race_records.best_0_22_sec = _prefs.getFloat("rc_best22", 0.0f);
         _race_records.best_0_50_sec = _prefs.getFloat("rc_best50", 0.0f);
         _race_records.best_0_70_sec = _prefs.getFloat("rc_best70", 0.0f);
@@ -87,6 +97,9 @@ void SettingsManager::save() {
     _prefs.putUChar("adc_ch", _settings.throttle_adc_channel);
     _prefs.putBool("pin_en", _settings.pin_lock_enabled);
     _prefs.putString("pin_code", _settings.pin_code);
+    _prefs.putUChar("rc_sp1", _settings.race_split1_kmh);
+    _prefs.putUChar("rc_sp2", _settings.race_split2_kmh);
+    _prefs.putUChar("rc_sp3", _settings.race_split3_kmh);
     _prefs.putFloat("rc_best22", _race_records.best_0_22_sec);
     _prefs.putFloat("rc_best50", _race_records.best_0_50_sec);
     _prefs.putFloat("rc_best70", _race_records.best_0_70_sec);

@@ -8,7 +8,6 @@
 #include "buttons.h"
 #include "vesc_uart.h"
 #include "mode_manager.h"
-#include "captive_portal.h"
 #include "fault_manager.h"
 
 // Active Telemetry State
@@ -135,10 +134,6 @@ void setup() {
     FaultManager::instance().begin();
     Serial.printf("[OK] Fault Manager initialized (%d logged faults).\n", FaultManager::instance().getFaultCount());
 
-    // 10. Start Dual-Core SoftAP, DNS Server & WebServer on Core 0 (Requirement 4 & 5)
-    CaptivePortal::instance().begin();
-    Serial.println("[OK] Core 0 Captive Portal active (SSID: 'VESC-HyperDash', IP: 192.168.4.1).");
-
     Serial.println("[OK] Setup complete. Entering main render loop.");
 }
 
@@ -174,7 +169,7 @@ void loop() {
         Renderer.markScreenDirty();
     }
 
-    // Auto-unlock if PIN lock was disabled via Captive Portal
+    // Auto-unlock if PIN lock was disabled in Settings
     if (!Settings.get().pin_lock_enabled && telemetry.is_locked) {
         telemetry.is_locked = false;
         ModeManager::instance().setLocked(false);
@@ -182,7 +177,6 @@ void loop() {
         Renderer.invalidateCache();
         Renderer.triggerNeedleSweep();
     }
-    CaptivePortal::instance().updateTelemetry(telemetry);
 
     // 1. Process Touch & Button Navigation Inputs
     Buttons.setActiveScreen(telemetry.screen);
@@ -297,10 +291,24 @@ void loop() {
         }
     }
 
-    NavAction nav = telemetry.is_locked ? NAV_NONE : Buttons.getNavAction();
+    NavAction nav = Buttons.getNavAction();
+    if (telemetry.is_locked && nav != NAV_PIN_EMERGENCY_RESET) {
+        nav = NAV_NONE;
+    }
 
     if (nav != NAV_NONE) {
-        if (Vesc.isBridgeActive()) {
+        if (nav == NAV_PIN_EMERGENCY_RESET) {
+            strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
+            Settings.save();
+            telemetry.is_locked = false;
+            telemetry.pin_error = false;
+            telemetry.pin_entry[0] = '\0';
+            ModeManager::instance().setLocked(false);
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            Renderer.triggerNeedleSweep();
+            Serial.println("[SECURITY] NOTFALL-RESET: PIN auf 1234 zurueckgesetzt & System entsperrt!");
+        } else if (Vesc.isBridgeActive()) {
             if (nav == NAV_BTN2_LONG || nav == NAV_BOTH_PRESSED || nav == NAV_BTN1_LONG || nav == NAV_BTN1_SHORT || nav == NAV_BTN2_SHORT || nav == NAV_SCREEN_DASH) {
                 if (Vesc.isUsbBridgeActive()) Vesc.exitBridgeMode();
                 if (Vesc.isWifiBridgeActive()) Vesc.exitWifiBridgeMode();

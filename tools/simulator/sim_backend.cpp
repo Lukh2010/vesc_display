@@ -1232,13 +1232,32 @@ void sim_touch_event(int is_down, int x, int y) {
     Buttons.update();
     Renderer.updateRaceTimer(g_telemetry, g_sim_uptime_ms);
 
-    NavAction act = g_telemetry.is_locked ? NAV_NONE : Buttons.getNavAction();
+    NavAction act = Buttons.getNavAction();
+    if (g_telemetry.is_locked && act != NAV_PIN_EMERGENCY_RESET) {
+        act = NAV_NONE;
+    }
     if (act != NAV_NONE) {
         sim_trigger_nav((int)act);
     }
 }
 
 void sim_trigger_nav(int nav_action) {
+    if (nav_action == NAV_PIN_EMERGENCY_RESET) {
+        strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
+        Settings.save();
+        g_telemetry.is_locked = false;
+        g_telemetry.pin_error = false;
+        g_telemetry.pin_entry[0] = '\0';
+        g_manual_throttle = 0.0f;
+        g_manual_brake = 0.0f;
+        s_sim_speed_kmh = 0.0f;
+        ModeManager::instance().setLocked(false);
+        Renderer.markScreenDirty();
+        Renderer.invalidateCache();
+        Renderer.triggerNeedleSweep();
+        printf("[SECURITY] EMERGENCY PIN RESET: PIN set to 1234 and system UNLOCKED!\n");
+        return;
+    }
     if (g_telemetry.screen == SCREEN_VESC_BRIDGE || g_telemetry.screen == SCREEN_WIFI_BRIDGE) {
         Vesc.exitBridgeMode();
         Vesc.exitWifiBridgeMode();
