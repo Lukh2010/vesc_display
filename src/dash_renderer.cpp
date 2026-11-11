@@ -1279,15 +1279,21 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _canvas->drawString(remWh, 605, 122);
     }
 
-    // Tile 1: MAX LEISTUNG (PEAK WATT)
+    // Tile 1: MAX LEISTUNG (PEAK WATT & PS)
     int cur_pwr = (int)(telemetry.stats.peak_power_watts + 0.5f);
     if (!_stats_inited || cur_pwr != _stats_cache.peak_watts) {
         _stats_cache.peak_watts = cur_pwr;
-        _canvas->fillRect(32, 202, 220, 42, COLOR_SURFACE);
+        _canvas->fillRect(32, 202, 220, 60, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
         char pwrBuf[16]; snprintf(pwrBuf, sizeof(pwrBuf), "%.0f W", telemetry.stats.peak_power_watts);
         _canvas->drawString(pwrBuf, 32, 202);
+
+        float ps_stat = telemetry.stats.peak_power_watts * 0.00135962f;
+        char psBuf[16]; snprintf(psBuf, sizeof(psBuf), "%.1f PS", ps_stat);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
+        _canvas->drawString(psBuf, 32, 238);
     }
 
     // Tile 2: PEAK AKKU-STROM
@@ -2569,43 +2575,63 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
 
     // Determine Peak & Summary Statistics
     // Fall back to realistic scooter specs if no run has been recorded yet
-    float peak_kw = (telemetry.race_dyno.peak_watts > 100.0f) ? (telemetry.race_dyno.peak_watts / 1000.0f) : 3.52f;
+    float peak_w  = (telemetry.race_dyno.peak_watts > 100.0f) ? telemetry.race_dyno.peak_watts : 3520.0f;
+    float peak_kw = peak_w / 1000.0f;
+    float peak_ps = peak_w * 0.00135962f;
     float peak_g  = (telemetry.race_dyno.peak_g_force > 0.05f) ? telemetry.race_dyno.peak_g_force : 1.15f;
     float peak_i  = (telemetry.race_dyno.peak_phase_amps > 5.0f) ? telemetry.race_dyno.peak_phase_amps : 85.0f;
     float t_70    = (telemetry.race_split_0_70 > 0.01f) ? telemetry.race_split_0_70 :
                     (telemetry.race_records.best_0_70_sec > 0.01f ? telemetry.race_records.best_0_70_sec : 4.25f);
 
-    // 4 Stat Tiles: MAX POWER, MAX G-FORCE, 0-70 KM/H, MAX PHASEN-I
-    int tile_y = my + 52;
+    // 4 Stat Tiles: MAX WATT, MAX G-FORCE, 0-70 KM/H, MAX PHASEN-I
+    int tile_y = my + 50;
     int tile_w = 132;
-    int tile_h = 46;
+    int tile_h = 52;
     int tile_gap = 10;
     int tile_x0 = mx + 16;
 
-    auto drawStatTile = [&](int idx, const char *label, const char *val, uint16_t valColor) {
+    auto drawStatTile = [&](int idx, const char *label, const char *val, const char *sub_val, uint16_t valColor) {
         int tx = tile_x0 + idx * (tile_w + tile_gap);
         _canvas->fillRoundRect(tx, tile_y, tile_w, tile_h, 8, 0x18C3);
         _canvas->drawRoundRect(tx, tile_y, tile_w, tile_h, 8, 0x2965);
         _canvas->setFont(&fonts::Font0);
         _canvas->setTextColor(COLOR_MUTED_GRAY, 0x18C3);
         _canvas->setTextDatum(textdatum_t::top_center);
-        _canvas->drawString(label, tx + tile_w / 2, tile_y + 4);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(valColor, 0x18C3);
-        _canvas->setTextDatum(textdatum_t::bottom_center);
-        _canvas->drawString(val, tx + tile_w / 2, tile_y + tile_h - 2);
+        _canvas->drawString(label, tx + tile_w / 2, tile_y + 3);
+
+        if (sub_val && sub_val[0] != '\0') {
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextColor(valColor, 0x18C3);
+            _canvas->setTextDatum(textdatum_t::top_center);
+            _canvas->drawString(val, tx + tile_w / 2, tile_y + 13);
+
+            _canvas->setFont(&fonts::Font0);
+            _canvas->setTextColor(COLOR_AMBER, 0x18C3);
+            _canvas->setTextDatum(textdatum_t::top_center);
+            _canvas->drawString(sub_val, tx + tile_w / 2, tile_y + 39);
+        } else {
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextColor(valColor, 0x18C3);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString(val, tx + tile_w / 2, tile_y + 31);
+        }
     };
 
-    char b1[16], b2[16], b3[16], b4[16];
-    snprintf(b1, sizeof(b1), "%.1f kW", peak_kw);
+    char b1[16], sub_b1[16], b2[16], b3[16], b4[16];
+    if (peak_kw >= 1.0f) {
+        snprintf(b1, sizeof(b1), "%.1f kW", peak_kw);
+    } else {
+        snprintf(b1, sizeof(b1), "%.0f W", peak_w);
+    }
+    snprintf(sub_b1, sizeof(sub_b1), "%.1f PS", peak_ps);
     snprintf(b2, sizeof(b2), "+%.2f G", peak_g);
     snprintf(b3, sizeof(b3), "%.2f s", t_70);
     snprintf(b4, sizeof(b4), "%.0f A", peak_i);
 
-    drawStatTile(0, "MAX POWER", b1, COLOR_CYAN);
-    drawStatTile(1, "MAX G-FORCE", b2, COLOR_AMBER);
-    drawStatTile(2, "0 - 70 KM/H", b3, COLOR_GREEN);
-    drawStatTile(3, "MAX PHASEN-I", b4, COLOR_WHITE);
+    drawStatTile(0, "MAX WATT", b1, sub_b1, COLOR_CYAN);
+    drawStatTile(1, "MAX G-FORCE", b2, nullptr, COLOR_AMBER);
+    drawStatTile(2, "0 - 70 KM/H", b3, nullptr, COLOR_GREEN);
+    drawStatTile(3, "MAX PHASEN-I", b4, nullptr, COLOR_WHITE);
 
     // Dyno Chart Area
     int gx = mx + 55;
