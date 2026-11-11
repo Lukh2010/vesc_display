@@ -348,7 +348,7 @@ void ButtonHandler::processTouch(uint32_t now) {
                     } else {
                         // On SCREEN_RIDE_DASH / Default:
                         // 1. Top Left [ STATS ] Navigation Touch Button -> Open Statistics Screen (SCREEN_RT_GRAPHS)
-                        if (_last_tap_x >= 18 && _last_tap_x <= 125 && _last_tap_y >= 12 && _last_tap_y <= 60) {
+                        if (_last_tap_x <= 135 && _last_tap_y <= 65) {
                             _pending_action = NAV_SCREEN_STATS;
                         }
                         // 2. Action Buttons on Ride Dash (Bottom Right)
