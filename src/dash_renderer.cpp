@@ -324,7 +324,7 @@ static void drawHeroDigitText(LovyanGFX *canvas, const char *str, int x, int y, 
     canvas->drawString(str, x + 1, y + 1);
 }
 
-static void drawLightSwitchBadge(LovyanGFX *canvas, bool enabled, int cx, int cy, int r) {
+[[maybe_unused]] static void drawLightSwitchBadge(LovyanGFX *canvas, bool enabled, int cx, int cy, int r) {
     canvas->fillCircle(cx, cy, r, COLOR_BG);
     uint16_t ringCol = enabled ? COLOR_CYAN : COLOR_BORDER;
     uint16_t bgCol   = enabled ? 0x0A4D : COLOR_SURFACE;
@@ -368,12 +368,12 @@ static void drawGForceBadge(LovyanGFX *canvas, float g_force, int cx, int cy, in
     canvas->setTextColor(textCol, COLOR_SURFACE);
     char gBuf[12];
     snprintf(gBuf, sizeof(gBuf), "%+.1f", g_force);
-    canvas->drawString(gBuf, cx, cy - 5);
+    canvas->drawString(gBuf, cx, cy - 6);
 
     canvas->setFont(&fonts::Font0);
     canvas->setTextSize(1);
     canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-    canvas->drawString("G-FORCE", cx, cy + 13);
+    canvas->drawString("G-FORCE", cx, cy + 9);
 }
 
 static void drawInclineBadge(LovyanGFX *canvas, float incline_deg, int cx, int cy, int r) {
@@ -401,18 +401,18 @@ static void drawInclineBadge(LovyanGFX *canvas, float incline_deg, int cx, int c
     }
 
     int valW = canvas->textWidth(valBuf);
-    int totalW = valW + 7;
+    int totalW = valW + 6;
     int startX = cx - (totalW / 2);
     canvas->setTextDatum(textdatum_t::middle_left);
     canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-    canvas->drawString(valBuf, startX, cy - 5);
-    canvas->drawCircle(startX + valW + 3, cy - 8, 2, COLOR_WHITE);
+    canvas->drawString(valBuf, startX, cy - 6);
+    canvas->drawCircle(startX + valW + 3, cy - 9, 2, COLOR_WHITE);
 
     canvas->setFont(&fonts::Font0);
     canvas->setTextSize(1);
     canvas->setTextDatum(textdatum_t::middle_center);
     canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-    canvas->drawString("NEIGUNG", cx, cy + 13);
+    canvas->drawString("NEIGUNG", cx, cy + 9);
 }
 
 static void drawThermalsWithDegrees(LovyanGFX *canvas, const char *prefix, float fet, float mot, int x, int y, bool centered = false) {
@@ -691,7 +691,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (!_hyper_inited || cur_fet != _cache.temp_esc || cur_mot != _cache.temp_motor) {
         _cache.temp_esc = cur_fet;
         _cache.temp_motor = cur_mot;
-        _canvas->fillRect(170, 395, 140, 45, COLOR_BG);
+        _canvas->fillRect(150, 395, 180, 45, COLOR_BG);
         drawThermalsWithDegrees(_canvas, "", telemetry.temp_esc, telemetry.temp_motor, cx, 405, true);
     }
 
@@ -907,23 +907,17 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->drawCenterString(btnLabel, 690, 404, &fonts::Font4);
     }
 
-    // 9. Bottom Left: Light Switch Badge, G-Force Badge, and Incline Badge
-    bool cur_lights = telemetry.lights_enabled;
-    if (!_hyper_inited || cur_lights != _cache.lights_enabled) {
-        _cache.lights_enabled = cur_lights;
-        drawLightSwitchBadge(_canvas, telemetry.lights_enabled, 32, 416, 24);
-    }
-
+    // 9. Bottom Left: G-Force Badge and Incline Badge
     int cur_g10 = (int)roundf(telemetry.g_force * 10.0f);
     if (!_hyper_inited || cur_g10 != _cache.g_force_x10) {
         _cache.g_force_x10 = cur_g10;
-        drawGForceBadge(_canvas, telemetry.g_force, 84, 416, 24);
+        drawGForceBadge(_canvas, telemetry.g_force, 50, 416, 28);
     }
 
     int cur_inc_x10 = (int)roundf(telemetry.incline_deg * 10.0f);
     if (!_hyper_inited || cur_inc_x10 != _cache.incline_deg) {
         _cache.incline_deg = cur_inc_x10;
-        drawInclineBadge(_canvas, telemetry.incline_deg, 136, 416, 24);
+        drawInclineBadge(_canvas, telemetry.incline_deg, 114, 416, 28);
     }
 
     _hyper_inited = true;
@@ -2449,7 +2443,7 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     drawSplit(340, telemetry.race_split_0_70, telemetry.race_records.best_0_70_sec, active_0_70);
 
     // Bottom-Left G-Force Badge
-    drawGForceBadge(_canvas, telemetry.g_force, 52, 416, 26);
+    drawGForceBadge(_canvas, telemetry.g_force, 50, 416, 28);
 
     // 5. Bestzeiten Popup Modal (if open)
     if (telemetry.race_popup_open) {

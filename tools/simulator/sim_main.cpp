@@ -264,6 +264,7 @@ void testTouchGestures() {
     Buttons.begin();
 
     auto simTouchAction = [](int start_x, int start_y, int end_x, int end_y, uint32_t duration_ms) {
+        Buttons.getNavAction(); // Flush any stale action
         simAdvanceMs(120); // Allow 100ms debounce cooldown from previous gesture
         Display.setSimTouch(true, start_x, start_y);
         Buttons.update(); // Record initial touch-down at t=0
@@ -341,24 +342,25 @@ void testTouchGestures() {
     Display.setSimTouch(false);
     simAdvanceMs(110);
     Buttons.update();
+    Buttons.getNavAction(); // Flush release action
     printf("[PASS] Long Press on [ BOOST ] button did NOT trigger NAV_BTN2_LONG (Accidental Reset Prevented).\n");
 
-    // 7c. Test Tap on Light Switch Badge (x=32, y=416) -> NAV_LIGHT_TOGGLE
+    // 7c. Test Tap on arbitrary bottom-left area -> Must be NAV_NONE (accidental tap prevented)
     NavAction actTapLight = simTouchAction(32, 416, 32, 416, 50);
-    assert(actTapLight == NAV_LIGHT_TOGGLE);
-    printf("[PASS] Tap on Light Switch Badge triggered NAV_LIGHT_TOGGLE (Hauptschalter).\n");
+    assert(actTapLight == NAV_NONE);
+    printf("[PASS] Arbitrary tap on bottom-left area safely ignored (NAV_NONE).\n");
 
-    // 7d. Test Long Press on Light Switch Badge (x=32, y=416) -> Must NOT trigger Trip Reset!
-    Display.setSimTouch(true, 32, 416);
+    // 7d. Test Long Press on bottom-left area (x=50, y=416) -> Triggers Trip Reset (NAV_BTN2_LONG)
+    Display.setSimTouch(true, 50, 416);
     Buttons.update();
     simAdvanceMs(850);
     Buttons.update();
-    NavAction actLongLight = Buttons.getNavAction();
-    assert(actLongLight != NAV_BTN2_LONG);
+    NavAction actLongBottomLeft = Buttons.getNavAction();
+    assert(actLongBottomLeft == NAV_BTN2_LONG);
     Display.setSimTouch(false);
     simAdvanceMs(110);
     Buttons.update();
-    printf("[PASS] Long Press on Light Switch Badge did NOT trigger NAV_BTN2_LONG (Accidental Reset Prevented).\n");
+    printf("[PASS] Long Press on bottom-left strip triggered NAV_BTN2_LONG (Trip Reset).\n");
 
     // 8. Test Edit Mode: Left side decrement, Right side increment
     Buttons.setEditMode(true);
