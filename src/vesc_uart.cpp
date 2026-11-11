@@ -364,11 +364,8 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
     }
 #endif
     uint32_t now = millis();
-    static uint32_t s_last_update_ms = millis();
     static uint32_t s_last_can_rx_ms = 0;
     static uint32_t s_last_can_diag_ms = 0;
-    float dt = (now - s_last_update_ms) / 1000.0f;
-    s_last_update_ms = now;
 
     twai_message_t msg;
     int frames_read = 0;
@@ -514,46 +511,6 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         telemetry.power_watts = 0.0f;
         telemetry.current_amps = 0.0f;
         telemetry.phase_amps = 0.0f;
-    }
-
-    if (dt > 0.001f && dt < 1.0f) {
-        Battery.update(telemetry, dt);
-
-        if (telemetry.current_amps > telemetry.stats.peak_current_amps) telemetry.stats.peak_current_amps = telemetry.current_amps;
-        if (telemetry.phase_amps > telemetry.stats.peak_phase_amps) telemetry.stats.peak_phase_amps = telemetry.phase_amps;
-        if (telemetry.power_watts > telemetry.stats.peak_power_watts) telemetry.stats.peak_power_watts = telemetry.power_watts;
-        if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
-        if (telemetry.temp_motor > telemetry.stats.max_temp_motor) telemetry.stats.max_temp_motor = telemetry.temp_motor;
-        if (telemetry.temp_esc > telemetry.stats.max_temp_esc) telemetry.stats.max_temp_esc = telemetry.temp_esc;
-
-        static float s_last_spd_can = 0.0f;
-        if (dt > 0.005f) {
-            float dv_ms = (telemetry.speed_kmh - s_last_spd_can) / 3.6f;
-            float g_inst = (dv_ms / dt) / 9.80665f;
-            if (g_inst > 3.0f) g_inst = 3.0f;
-            if (g_inst < -3.0f) g_inst = -3.0f;
-            telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
-            if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
-            if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
-                telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
-            }
-            s_last_spd_can = telemetry.speed_kmh;
-        }
-
-        static float s_real_ride_time_accum = 0.0f;
-        if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
-            s_real_ride_time_accum = 0.0f;
-        }
-        if (telemetry.speed_kmh > 1.2f) {
-            s_real_ride_time_accum += dt;
-            while (s_real_ride_time_accum >= 1.0f) {
-                telemetry.stats.ride_time_sec += 1;
-                s_real_ride_time_accum -= 1.0f;
-            }
-        }
-        if (telemetry.stats.ride_time_sec > 2 && telemetry.trip_km > 0.01f) {
-            telemetry.stats.avg_speed_kmh = telemetry.trip_km / (telemetry.stats.ride_time_sec / 3600.0f);
-        }
     }
 }
 #else
