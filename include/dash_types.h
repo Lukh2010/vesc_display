@@ -54,7 +54,8 @@ enum NavAction {
     NAV_RACE_CLOSE_POPUP,  // Tap on [ X ] or [ SCHLIESSEN ]
     NAV_RACE_RESET_RECORDS,// Tap on [ RESET ] in Bestzeiten popup
     NAV_RACE_START_LAUNCH, // Tap on [ START LAUNCH ]
-    NAV_RACE_ABORT         // Tap center while measuring/countdown
+    NAV_RACE_ABORT,        // Tap center while measuring/countdown
+    NAV_LIGHT_TOGGLE       // Tap on Light Switch Badge (Hauptschalter)
 };
 
 // Dragy / Launch Acceleration Best Records

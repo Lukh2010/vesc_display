@@ -163,10 +163,12 @@ private:
             tuning_mode = false;
             boost_active = false;
             hazard_active = false;
+            lights_enabled = false;
             light_mode = 255;
             light_hue = 255;
             light_brightness = 255;
         }
+        bool lights_enabled;
     } _cache;
 
     // Analog Needle State
@@ -224,7 +226,6 @@ private:
         int live_v_x10;
         int max_temp_mot;
         int max_temp_esc;
-        int brightness_pct;
 
         void invalidate() {
             trip_x10 = -1;
@@ -245,7 +246,6 @@ private:
             live_v_x10 = -1;
             max_temp_mot = -999;
             max_temp_esc = -999;
-            brightness_pct = -1;
         }
     } _stats_cache;
 

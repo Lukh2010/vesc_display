@@ -343,6 +343,23 @@ void testTouchGestures() {
     Buttons.update();
     printf("[PASS] Long Press on [ BOOST ] button did NOT trigger NAV_BTN2_LONG (Accidental Reset Prevented).\n");
 
+    // 7c. Test Tap on Light Switch Badge (x=32, y=416) -> NAV_LIGHT_TOGGLE
+    NavAction actTapLight = simTouchAction(32, 416, 32, 416, 50);
+    assert(actTapLight == NAV_LIGHT_TOGGLE);
+    printf("[PASS] Tap on Light Switch Badge triggered NAV_LIGHT_TOGGLE (Hauptschalter).\n");
+
+    // 7d. Test Long Press on Light Switch Badge (x=32, y=416) -> Must NOT trigger Trip Reset!
+    Display.setSimTouch(true, 32, 416);
+    Buttons.update();
+    simAdvanceMs(850);
+    Buttons.update();
+    NavAction actLongLight = Buttons.getNavAction();
+    assert(actLongLight != NAV_BTN2_LONG);
+    Display.setSimTouch(false);
+    simAdvanceMs(110);
+    Buttons.update();
+    printf("[PASS] Long Press on Light Switch Badge did NOT trigger NAV_BTN2_LONG (Accidental Reset Prevented).\n");
+
     // 8. Test Edit Mode: Left side decrement, Right side increment
     Buttons.setEditMode(true);
     NavAction actEditDec = simTouchAction(200, 280, 200, 280, 50);
@@ -2056,13 +2073,10 @@ int main(int argc, char **argv) {
 
 
     // ----------------------------------------------------
-    // Scenario 6: Screen 1 - Controllable LEDs & Lights Screen (Video Exact)
+    // Scenario 6: Screen 0 - Ride Dash with Light Switch Active (Hauptschalter ON)
     // ----------------------------------------------------
-    t.screen = SCREEN_LIGHTS;
+    t.screen = SCREEN_RIDE_DASH;
     t.lights_enabled = true;
-    t.light_hue = 135;
-    t.light_mode = 3; // RAINBOW (index 3 in 3x3 grid)
-    t.light_brightness = 210;
     t.hazard_active = false;
     Renderer.markScreenDirty();
     renderAndSave("06_energy_analytics", t);

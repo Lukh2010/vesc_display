@@ -441,20 +441,6 @@ static void runSimulationStep(float dt) {
         }
     }
 
-    static float s_sim_ride_time_accum = 0.0f;
-    if (g_telemetry.stats.ride_time_sec == 0 && s_sim_trip_km == 0.0f) {
-        s_sim_ride_time_accum = 0.0f;
-    }
-    if (s_sim_speed_kmh > 1.2f) {
-        s_sim_ride_time_accum += dt;
-        while (s_sim_ride_time_accum >= 1.0f) {
-            g_telemetry.stats.ride_time_sec += 1;
-            s_sim_ride_time_accum -= 1.0f;
-        }
-    }
-    if (g_telemetry.stats.ride_time_sec > 2 && s_sim_trip_km > 0.01f) {
-        g_telemetry.stats.avg_speed_kmh = s_sim_trip_km / (g_telemetry.stats.ride_time_sec / 3600.0f);
-    }
     g_telemetry.stats.trip_wh = s_sim_wh_used;
     if (s_sim_trip_km > 0.05f) {
         g_telemetry.stats.trip_wh_km = s_sim_wh_used / s_sim_trip_km;
@@ -1063,7 +1049,6 @@ void sim_step(uint32_t step_ms) {
     Vesc.update(g_telemetry);
     g_virtual_vesc.process();
     g_tcp_server.update(g_virtual_vesc);
-    Vesc.update(g_telemetry);
 
     // Multi-ESC dual thermals sync
     g_telemetry.temp_fet_rear  = g_telemetry.temp_esc;
@@ -1206,47 +1191,7 @@ void sim_touch_event(int is_down, int x, int y) {
     }
 
     // Interactive Touch processing on special screens
-    if (is_down && g_telemetry.screen == SCREEN_LIGHTS) {
-        // Color wheel check (cx: 220, cy: 230, r_in: 88, r_out: 125)
-        int cx = 220, cy = 230;
-        float dist = sqrtf((float)((x - cx)*(x - cx) + (y - cy)*(y - cy)));
-        if (dist >= 75.0f && dist <= 138.0f) {
-            float a = atan2f((float)(y - cy), (float)(x - cx)) * 180.0f / 3.14159265f;
-            if (a < 0) a += 360.0f;
-            g_telemetry.light_hue = (uint8_t)(a * 255.0f / 360.0f);
-            Renderer.markScreenDirty();
-        } else if (dist < 72.0f && is_new_down) {
-            g_telemetry.lights_enabled = !g_telemetry.lights_enabled;
-            Renderer.markScreenDirty();
-        } else if (x >= 675 && x <= 765 && y >= 12 && y <= 55 && is_new_down) {
-            // Master Toggle Switch
-            g_telemetry.lights_enabled = !g_telemetry.lights_enabled;
-            Renderer.markScreenDirty();
-        } else if (x >= 405 && x <= 775 && y >= 60 && y <= 245 && is_new_down) {
-            // 9 Preset buttons (3x3)
-            int col = (x - 415) / 120;
-            int row = (y - 65) / 56;
-            if (col >= 0 && col < 3 && row >= 0 && row < 3) {
-                g_telemetry.light_mode = row * 3 + col;
-                Renderer.markScreenDirty();
-            }
-        } else if (x >= 405 && x <= 775 && y >= 265 && y <= 315) {
-            // Brightness Slider
-            float bPct = (float)(x - 415) / 345.0f;
-            if (bPct < 0.0f) bPct = 0.0f;
-            if (bPct > 1.0f) bPct = 1.0f;
-            g_telemetry.light_brightness = (uint8_t)(bPct * 255.0f);
-            Renderer.markScreenDirty();
-        } else if (x >= 400 && x <= 775 && y >= 320 && y <= 435 && is_new_down) {
-            // Hazard button
-            g_telemetry.hazard_active = !g_telemetry.hazard_active;
-            Renderer.markScreenDirty();
-        } else if (x >= 80 && x <= 260 && y >= 390 && y <= 450 && is_new_down) {
-            // Bottom-left Hazard Toggle Switch
-            g_telemetry.hazard_active = !g_telemetry.hazard_active;
-            Renderer.markScreenDirty();
-        }
-    } else if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
+    if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
         if (is_new_down) {
             if (x <= 130 && y <= 65) {
                 // Top Left [< DASH] button returns to Ride Dash
@@ -1283,49 +1228,14 @@ void sim_touch_event(int is_down, int x, int y) {
                 return;
             }
         }
-        // Brightness Controls on SCREEN_RT_GRAPHS
-        if (is_down && y >= 360 && y <= 465 && x >= 270 && x <= 560) {
-            float pct = (float)(x - 280) / 270.0f;
-            int val = (int)(20.0f + pct * 80.0f + 0.5f);
-            if (val < 20) val = 20;
-            if (val > 100) val = 100;
-            DashSettings &s = Settings.get();
-            if (s.brightness_pct != val) {
-                s.brightness_pct = val;
-                Display.setBrightness((uint8_t)((val * 255) / 100));
-                Renderer.markScreenDirty();
-            }
-        } else if (is_new_down && y >= 360 && y <= 465) {
-            DashSettings &s = Settings.get();
-            bool changed = false;
-            if (x >= 195 && x <= 275) {
-                if (s.brightness_pct > 20) {
-                    s.brightness_pct = (s.brightness_pct <= 30) ? 20 : (s.brightness_pct - 10);
-                    changed = true;
-                }
-            } else if (x >= 556 && x <= 628) {
-                if (s.brightness_pct < 100) {
-                    s.brightness_pct = (s.brightness_pct >= 90) ? 100 : (s.brightness_pct + 10);
-                    changed = true;
-                }
-            } else if (x >= 630 && x <= 702) {
-                if (s.brightness_pct != 25) {
-                    s.brightness_pct = 25;
-                    changed = true;
-                }
-            } else if (x >= 705 && x <= 778) {
-                if (s.brightness_pct != 100) {
-                    s.brightness_pct = 100;
-                    changed = true;
-                }
-            }
-            if (changed) {
-                Settings.save();
-                Display.setBrightness((uint8_t)((s.brightness_pct * 255) / 100));
-                Renderer.markScreenDirty();
-            }
-        }
     } else if (is_new_down && g_telemetry.screen == SCREEN_RIDE_DASH) {
+        if (x >= 8 && x <= 60 && y >= 385 && y <= 445) {
+            // Tapping Bottom Left Light Switch Badge (Hauptschalter)
+            g_telemetry.lights_enabled = !g_telemetry.lights_enabled;
+            Renderer.markScreenDirty();
+            Display.setSimTouch(false, -1, -1);
+            return;
+        }
         if (x >= 18 && x <= 125 && y >= 12 && y <= 60) {
             // Tapping [ STATS ] button takes the rider directly to SCREEN_RT_GRAPHS
             g_telemetry.screen = SCREEN_RT_GRAPHS;
@@ -1569,10 +1479,18 @@ void sim_trigger_nav(int nav_action) {
             case NAV_HAZARD_TOGGLE:
                 g_telemetry.hazard_active = !g_telemetry.hazard_active;
                 break;
+            case NAV_LIGHT_TOGGLE:
+                g_telemetry.lights_enabled = !g_telemetry.lights_enabled;
+                break;
             default:
                 break;
         }
     }
+    Renderer.markScreenDirty();
+}
+
+void sim_toggle_lights() {
+    g_telemetry.lights_enabled = !g_telemetry.lights_enabled;
     Renderer.markScreenDirty();
 }
 

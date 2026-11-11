@@ -92,6 +92,7 @@ sim_lib.sim_trigger_nav.restype = None
 sim_lib.sim_toggle_boost.restype = None
 sim_lib.sim_cycle_mode.restype = None
 sim_lib.sim_toggle_hazard.restype = None
+sim_lib.sim_toggle_lights.restype = None
 
 sim_lib.sim_set_tuning_mode.argtypes = [ctypes.c_int]
 sim_lib.sim_set_tuning_mode.restype = None
@@ -143,6 +144,7 @@ NAV_RACE_CLOSE_POPUP = 18
 NAV_RACE_RESET_RECORDS = 19
 NAV_RACE_START_LAUNCH = 20
 NAV_RACE_ABORT = 21
+NAV_LIGHT_TOGGLE = 22
 
 SCREEN_RIDE_DASH = 0
 SCREEN_LIGHTS = 1
@@ -277,6 +279,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><kbd>▼ / S</kbd> Bremse</span>
   <span><kbd>M</kbd> Mode</span>
   <span><kbd>Space / B</kbd> Boost</span>
+  <span><kbd>L</kbd> Licht (Hauptschalter)</span>
   <span><kbd>X</kbd> Tuning / Legal</span>
   <span><a href="/portal" target="_blank" style="color:#00e5ff; text-decoration:underline; font-weight:bold;">⚙️ Captive Portal</a> (<a href="http://localhost:8081" target="_blank" style="color:#00e5ff;">Port 8081</a>)</span>
 </div>
@@ -747,6 +750,8 @@ class DesktopDemoApp:
         self.root.bind("<M>", lambda e: self.cycle_mode())
         self.root.bind("<h>", lambda e: self.toggle_hazard())
         self.root.bind("<H>", lambda e: self.toggle_hazard())
+        self.root.bind("<l>", lambda e: self.toggle_lights())
+        self.root.bind("<L>", lambda e: self.toggle_lights())
         self.root.bind("<t>", lambda e: self.trigger_nav(NAV_SCREEN_STATS))
         self.root.bind("<T>", lambda e: self.trigger_nav(NAV_SCREEN_STATS))
         self.root.bind("<r>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
@@ -889,6 +894,10 @@ class DesktopDemoApp:
     def toggle_hazard(self):
         with sim_lock:
             sim_lib.sim_toggle_hazard()
+
+    def toggle_lights(self):
+        with sim_lock:
+            sim_lib.sim_toggle_lights()
 
     def adjust_throttle(self, delta):
         with sim_lock:

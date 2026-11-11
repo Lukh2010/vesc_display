@@ -227,12 +227,11 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             break;
 
         case SCREEN_LIGHTS:
-            if (_screen_dirty) {
-                _canvas->fillScreen(COLOR_BG);
-                initLightsScreen(telemetry);
-                _screen_dirty = false;
-            }
-            renderLightsScreen(telemetry);
+            // Deprecated screen: redirect directly to main Ride Dash
+            _active_screen = SCREEN_RIDE_DASH;
+            _screen_dirty = true;
+            initRideDashboard(telemetry);
+            renderRideDashboard(telemetry);
             break;
 
         case SCREEN_RT_GRAPHS:
@@ -323,6 +322,29 @@ static void drawHeroDigitText(LovyanGFX *canvas, const char *str, int x, int y, 
     canvas->drawString(str, x + 2, y);
     canvas->drawString(str, x, y + 1);
     canvas->drawString(str, x + 1, y + 1);
+}
+
+static void drawLightSwitchBadge(LovyanGFX *canvas, bool enabled, int cx, int cy, int r) {
+    canvas->fillCircle(cx, cy, r, COLOR_BG);
+    uint16_t ringCol = enabled ? COLOR_CYAN : COLOR_BORDER;
+    uint16_t bgCol   = enabled ? 0x0A4D : COLOR_SURFACE;
+    uint16_t textCol = enabled ? COLOR_WHITE : COLOR_MUTED_GRAY;
+    uint16_t subCol  = enabled ? COLOR_CYAN : COLOR_MUTED_GRAY;
+
+    canvas->fillCircle(cx, cy, r - 2, bgCol);
+    canvas->drawCircle(cx, cy, r, ringCol);
+    canvas->drawCircle(cx, cy, r - 1, ringCol);
+
+    canvas->setTextDatum(textdatum_t::middle_center);
+    canvas->setFont(&fonts::Font0);
+    canvas->setTextSize(1);
+    canvas->setTextColor(subCol, bgCol);
+    canvas->drawString("LICHT", cx, cy - 7);
+
+    canvas->setFont(&fonts::Font2);
+    canvas->setTextSize(1);
+    canvas->setTextColor(textCol, bgCol);
+    canvas->drawString(enabled ? "ON" : "OFF", cx, cy + 7);
 }
 
 static void drawGForceBadge(LovyanGFX *canvas, float g_force, int cx, int cy, int r) {
@@ -669,7 +691,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (!_hyper_inited || cur_fet != _cache.temp_esc || cur_mot != _cache.temp_motor) {
         _cache.temp_esc = cur_fet;
         _cache.temp_motor = cur_mot;
-        _canvas->fillRect(150, 395, 180, 45, COLOR_BG);
+        _canvas->fillRect(170, 395, 140, 45, COLOR_BG);
         drawThermalsWithDegrees(_canvas, "", telemetry.temp_esc, telemetry.temp_motor, cx, 405, true);
     }
 
@@ -885,18 +907,23 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->drawCenterString(btnLabel, 690, 404, &fonts::Font4);
     }
 
-    // 9. Bottom Left: G-Force Badge
+    // 9. Bottom Left: Light Switch Badge, G-Force Badge, and Incline Badge
+    bool cur_lights = telemetry.lights_enabled;
+    if (!_hyper_inited || cur_lights != _cache.lights_enabled) {
+        _cache.lights_enabled = cur_lights;
+        drawLightSwitchBadge(_canvas, telemetry.lights_enabled, 32, 416, 24);
+    }
+
     int cur_g10 = (int)roundf(telemetry.g_force * 10.0f);
     if (!_hyper_inited || cur_g10 != _cache.g_force_x10) {
         _cache.g_force_x10 = cur_g10;
-        drawGForceBadge(_canvas, telemetry.g_force, 52, 416, 26);
+        drawGForceBadge(_canvas, telemetry.g_force, 84, 416, 24);
     }
 
-    // 9b. Bottom Left: Incline Badge (Only on Standard Dashboard!)
     int cur_inc_x10 = (int)roundf(telemetry.incline_deg * 10.0f);
     if (!_hyper_inited || cur_inc_x10 != _cache.incline_deg) {
         _cache.incline_deg = cur_inc_x10;
-        drawInclineBadge(_canvas, telemetry.incline_deg, 112, 416, 26);
+        drawInclineBadge(_canvas, telemetry.incline_deg, 136, 416, 24);
     }
 
     _hyper_inited = true;
@@ -1071,87 +1098,52 @@ void DashboardRenderer::initRtGraphsScreen(const DashTelemetry &telemetry) {
     _canvas->drawString("MAX SPEED", 415, 66);
     _canvas->drawString("ENERGIE (TRIP)", 605, 66);
 
-    // Middle Performance Tile Grid (6 Tiles):
-    // Row 1: y = 156, h = 98
+    // Middle Performance Tile Grid (6 Large Tiles):
+    // Row 1: y = 160, h = 142
     // Tile 1: MAX LEISTUNG (PEAK WATT)
-    drawCard(20, 156, 244, 98, COLOR_SURFACE, 0xD400); // Glowing gold border
+    drawCard(20, 160, 244, 142, COLOR_SURFACE, 0xD400); // Glowing gold border
     _canvas->setFont(&fonts::Font2);
     _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-    _canvas->drawString("MAX LEISTUNG (PEAK)", 32, 166);
+    _canvas->drawString("MAX LEISTUNG (PEAK)", 32, 172);
     _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-    _canvas->drawString("Spitzenleistung ab Akku", 32, 226);
+    _canvas->drawString("Spitzenleistung ab Akku", 32, 268);
 
     // Tile 2: PEAK AKKU-STROM
-    drawCard(278, 156, 244, 98, COLOR_SURFACE, COLOR_BORDER);
+    drawCard(278, 160, 244, 142, COLOR_SURFACE, COLOR_BORDER);
     _canvas->setFont(&fonts::Font2);
     _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-    _canvas->drawString("PEAK AKKU-STROM", 290, 166);
+    _canvas->drawString("PEAK AKKU-STROM", 290, 172);
     _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-    _canvas->drawString("Maximaler Batterie-Strom", 290, 226);
+    _canvas->drawString("Maximaler Batterie-Strom", 290, 268);
 
     // Tile 3: PEAK PHASENSTROM
-    drawCard(536, 156, 244, 98, COLOR_SURFACE, COLOR_BORDER);
+    drawCard(536, 160, 244, 142, COLOR_SURFACE, COLOR_BORDER);
     _canvas->setFont(&fonts::Font2);
     _canvas->setTextColor(COLOR_RACE, COLOR_SURFACE);
-    _canvas->drawString("PEAK PHASENSTROM", 548, 166);
+    _canvas->drawString("PEAK PHASENSTROM", 548, 172);
     _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-    _canvas->drawString("Max. Motor-Drehmoment", 548, 226);
+    _canvas->drawString("Max. Motor-Drehmoment", 548, 268);
 
-    // Row 2: y = 262, h = 98
+    // Row 2: y = 314, h = 142
     // Tile 4: VERBRAUCH & EFFIZIENZ
-    drawCard(20, 262, 244, 98, COLOR_SURFACE, COLOR_BORDER);
+    drawCard(20, 314, 244, 142, COLOR_SURFACE, COLOR_BORDER);
     _canvas->setFont(&fonts::Font2);
     _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-    _canvas->drawString("VERBRAUCH & EFFIZIENZ", 32, 272);
+    _canvas->drawString("VERBRAUCH & EFFIZIENZ", 32, 326);
 
     // Tile 5: AKKU-SPANNUNG (MIN/MAX)
-    drawCard(278, 262, 244, 98, COLOR_SURFACE, COLOR_BORDER);
+    drawCard(278, 314, 244, 142, COLOR_SURFACE, COLOR_BORDER);
     _canvas->setFont(&fonts::Font2);
     _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-    _canvas->drawString("AKKU-SPANNUNG (MIN/MAX)", 290, 272);
+    _canvas->drawString("AKKU-SPANNUNG (MIN/MAX)", 290, 326);
 
     // Tile 6: MAX TEMPERATUR
-    drawCard(536, 262, 244, 98, COLOR_SURFACE, COLOR_BORDER);
+    drawCard(536, 314, 244, 142, COLOR_SURFACE, COLOR_BORDER);
     _canvas->setFont(&fonts::Font2);
     _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-    _canvas->drawString("MAX TEMPERATUR", 548, 272);
+    _canvas->drawString("MAX TEMPERATUR", 548, 326);
     _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-    _canvas->drawString("Motor / Inverter FETs", 548, 332);
-
-    // Bottom Card: Interactive Display Backlight Control (y = 368, h = 98)
-    drawCard(20, 368, 760, 98, COLOR_SURFACE, COLOR_BORDER);
-    _canvas->setFont(&fonts::Font2);
-    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-    _canvas->drawString("DISPLAY HELLIGKEIT", 35, 380);
-    _canvas->setTextColor(0x52AA, COLOR_SURFACE);
-    _canvas->drawString("Tippen zum Anpassen", 35, 442);
-
-    // Button [-]
-    drawCard(210, 388, 56, 56, 0x18C3, 0x39C7);
-    _canvas->setTextDatum(textdatum_t::middle_center);
-    _canvas->setFont(&fonts::Font4);
-    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
-    _canvas->drawString("-", 238, 416);
-
-    // Interactive Slider Track Outline (w=270, h=28)
-    _canvas->fillRoundRect(280, 402, 270, 28, 8, 0x1084);
-    _canvas->drawRoundRect(280, 402, 270, 28, 8, 0x2965);
-
-    // Button [+]
-    drawCard(565, 388, 56, 56, 0x18C3, 0x39C7);
-    _canvas->setTextDatum(textdatum_t::middle_center);
-    _canvas->setFont(&fonts::Font4);
-    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
-    _canvas->drawString("+", 593, 416);
-
-    // Preset Pills
-    drawCard(635, 396, 62, 40, 0x18C3, 0x39C7);
-    _canvas->setFont(&fonts::Font2);
-    _canvas->setTextColor(COLOR_WHITE, 0x18C3);
-    _canvas->drawString("25%", 666, 416);
-
-    drawCard(708, 396, 62, 40, 0x18C3, 0x39C7);
-    _canvas->drawString("100%", 739, 416);
+    _canvas->drawString("Motor / Inverter FETs", 548, 422);
 
     _stats_cache.invalidate();
     _stats_inited = false;
@@ -1297,33 +1289,33 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
     int cur_pwr = (int)(telemetry.stats.peak_power_watts + 0.5f);
     if (!_stats_inited || cur_pwr != _stats_cache.peak_watts) {
         _stats_cache.peak_watts = cur_pwr;
-        _canvas->fillRect(32, 188, 220, 34, COLOR_SURFACE);
+        _canvas->fillRect(32, 202, 220, 42, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
         char pwrBuf[16]; snprintf(pwrBuf, sizeof(pwrBuf), "%.0f W", telemetry.stats.peak_power_watts);
-        _canvas->drawString(pwrBuf, 32, 188);
+        _canvas->drawString(pwrBuf, 32, 202);
     }
 
     // Tile 2: PEAK AKKU-STROM
     int cur_curr = (int)(telemetry.stats.peak_current_amps * 10.0f + 0.5f);
     if (!_stats_inited || cur_curr != _stats_cache.peak_curr_x10) {
         _stats_cache.peak_curr_x10 = cur_curr;
-        _canvas->fillRect(290, 188, 220, 34, COLOR_SURFACE);
+        _canvas->fillRect(290, 202, 220, 42, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
         char curBuf[16]; snprintf(curBuf, sizeof(curBuf), "%.1f A", telemetry.stats.peak_current_amps);
-        _canvas->drawString(curBuf, 290, 188);
+        _canvas->drawString(curBuf, 290, 202);
     }
 
     // Tile 3: PEAK PHASENSTROM
     int cur_pha = (int)(telemetry.stats.peak_phase_amps * 10.0f + 0.5f);
     if (!_stats_inited || cur_pha != _stats_cache.peak_phase_x10) {
         _stats_cache.peak_phase_x10 = cur_pha;
-        _canvas->fillRect(548, 188, 220, 34, COLOR_SURFACE);
+        _canvas->fillRect(548, 202, 220, 42, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
         char phaBuf[16]; snprintf(phaBuf, sizeof(phaBuf), "%.1f A", telemetry.stats.peak_phase_amps);
-        _canvas->drawString(phaBuf, 548, 188);
+        _canvas->drawString(phaBuf, 548, 202);
     }
 
     // Tile 4: VERBRAUCH & EFFIZIENZ
@@ -1333,15 +1325,15 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
     if (!_stats_inited || cur_eff != _stats_cache.trip_wh_km_x10 || cur_dyn != _stats_cache.dyn_wh_km_x10) {
         _stats_cache.trip_wh_km_x10 = cur_eff;
         _stats_cache.dyn_wh_km_x10 = cur_dyn;
-        _canvas->fillRect(32, 294, 220, 60, COLOR_SURFACE);
+        _canvas->fillRect(32, 356, 220, 68, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
         char effBuf[24]; snprintf(effBuf, sizeof(effBuf), "%.1f Wh/km", telemetry.stats.trip_wh_km);
-        _canvas->drawString(effBuf, 32, 294);
+        _canvas->drawString(effBuf, 32, 356);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
         char dynBuf[32]; snprintf(dynBuf, sizeof(dynBuf), "Rollend (2km): %.1f Wh/km", dynWh);
-        _canvas->drawString(dynBuf, 32, 332);
+        _canvas->drawString(dynBuf, 32, 400);
     }
 
     // Tile 5: AKKU-SPANNUNG (MIN/MAX)
@@ -1352,15 +1344,15 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _stats_cache.min_v_x10 = cur_min_v;
         _stats_cache.max_v_x10 = cur_max_v;
         _stats_cache.live_v_x10 = cur_live_v;
-        _canvas->fillRect(290, 294, 220, 60, COLOR_SURFACE);
+        _canvas->fillRect(290, 356, 220, 68, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
         char vBuf[32]; snprintf(vBuf, sizeof(vBuf), "%.1fV / %.1fV", telemetry.stats.min_voltage, telemetry.stats.max_voltage);
-        _canvas->drawString(vBuf, 290, 294);
+        _canvas->drawString(vBuf, 290, 356);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
         char vSub[32]; snprintf(vSub, sizeof(vSub), "Live: %.1fV (Sag Check)", telemetry.voltage);
-        _canvas->drawString(vSub, 290, 332);
+        _canvas->drawString(vSub, 290, 400);
     }
 
     // Tile 6: MAX TEMPERATUR
@@ -1369,36 +1361,11 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
     if (!_stats_inited || cur_max_mot != _stats_cache.max_temp_mot || cur_max_esc != _stats_cache.max_temp_esc) {
         _stats_cache.max_temp_mot = cur_max_mot;
         _stats_cache.max_temp_esc = cur_max_esc;
-        _canvas->fillRect(548, 294, 220, 34, COLOR_SURFACE);
+        _canvas->fillRect(548, 356, 220, 42, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
         char tmpBuf[32]; snprintf(tmpBuf, sizeof(tmpBuf), "%.0f C / %.0f C", telemetry.stats.max_temp_motor, telemetry.stats.max_temp_esc);
-        _canvas->drawString(tmpBuf, 548, 294);
-    }
-
-    // Bottom Card: Interactive Display Backlight Control
-    int cur_br = Settings.get().brightness_pct;
-    if (!_stats_inited || cur_br != _stats_cache.brightness_pct) {
-        _stats_cache.brightness_pct = cur_br;
-        _canvas->fillRect(35, 404, 150, 34, COLOR_SURFACE);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        char brBuf[16]; snprintf(brBuf, sizeof(brBuf), "%d %%", cur_br);
-        _canvas->drawString(brBuf, 35, 404);
-
-        // Erase and redraw slider track & knob
-        _canvas->fillRoundRect(280, 402, 270, 28, 8, 0x1084);
-        _canvas->drawRoundRect(280, 402, 270, 28, 8, 0x2965);
-        int fill_w = (int)((cur_br / 100.0f) * 270);
-        if (fill_w > 270) fill_w = 270;
-        if (fill_w > 8) {
-            _canvas->fillRoundRect(280, 402, fill_w, 28, 8, COLOR_CYAN);
-        }
-        int knob_x = 280 + fill_w;
-        if (knob_x < 290) knob_x = 290;
-        if (knob_x > 540) knob_x = 540;
-        _canvas->fillCircle(knob_x, 416, 12, COLOR_WHITE);
-        _canvas->drawCircle(knob_x, 416, 12, 0x39C7);
+        _canvas->drawString(tmpBuf, 548, 356);
     }
 
     _stats_inited = true;

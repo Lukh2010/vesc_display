@@ -276,120 +276,6 @@ void loop() {
         }
     }
 
-    if (!telemetry.is_locked && Buttons.isTouching() && telemetry.screen == SCREEN_LIGHTS) {
-        int16_t tx = Buttons.getTouchX();
-        int16_t ty = Buttons.getTouchY();
-        int cx = 220, cy = 230;
-        float dist = sqrtf((float)((tx - cx)*(tx - cx) + (ty - cy)*(ty - cy)));
-        if (dist >= 75.0f && dist <= 138.0f) {
-            float a = atan2f((float)(ty - cy), (float)(tx - cx)) * 180.0f / 3.14159265f;
-            if (a < 0) a += 360.0f;
-            telemetry.light_hue = (uint8_t)(a * 255.0f / 360.0f);
-            Renderer.markScreenDirty();
-        } else if (dist < 72.0f) {
-            static uint32_t last_disc_toggle_ms = 0;
-            if (now - last_disc_toggle_ms > 350) {
-                last_disc_toggle_ms = now;
-                telemetry.lights_enabled = !telemetry.lights_enabled;
-                Renderer.markScreenDirty();
-            }
-        } else if (tx >= 675 && tx <= 765 && ty >= 12 && ty <= 55) {
-            static uint32_t last_sw_toggle_ms = 0;
-            if (now - last_sw_toggle_ms > 350) {
-                last_sw_toggle_ms = now;
-                telemetry.lights_enabled = !telemetry.lights_enabled;
-                Renderer.markScreenDirty();
-            }
-        } else if (tx >= 405 && tx <= 775 && ty >= 60 && ty <= 245) {
-            int col = (tx - 415) / 120;
-            int row = (ty - 65) / 56;
-            if (col >= 0 && col < 3 && row >= 0 && row < 3) {
-                uint8_t m = row * 3 + col;
-                if (telemetry.light_mode != m) {
-                    telemetry.light_mode = m;
-                    Renderer.markScreenDirty();
-                }
-            }
-        } else if (tx >= 405 && tx <= 775 && ty >= 265 && ty <= 315) {
-            float bPct = (float)(tx - 415) / 345.0f;
-            if (bPct < 0.0f) bPct = 0.0f;
-            if (bPct > 1.0f) bPct = 1.0f;
-            telemetry.light_brightness = (uint8_t)(bPct * 255.0f);
-            Renderer.markScreenDirty();
-        }
-    }
-
-    // STATS / RT Graphs Screen: Interactive Backlight adjustment
-    if (!telemetry.is_locked && telemetry.screen == SCREEN_RT_GRAPHS) {
-        static bool s_backlight_dragging = false;
-        if (Buttons.isTouching()) {
-            int16_t tx = Buttons.getTouchX();
-            int16_t ty = Buttons.getTouchY();
-            if (ty >= 360 && ty <= 465 && tx >= 270 && tx <= 560) {
-                s_backlight_dragging = true;
-                float pct = (float)(tx - 280) / 270.0f;
-                int val = (int)(20.0f + pct * 80.0f + 0.5f);
-                if (val < 20) val = 20;
-                if (val > 100) val = 100;
-                DashSettings &s = Settings.get();
-                if (s.brightness_pct != val) {
-                    s.brightness_pct = val;
-                    Display.setBrightness((uint8_t)map(s.brightness_pct, 0, 100, 0, 255));
-                }
-            }
-        } else {
-            if (s_backlight_dragging) {
-                s_backlight_dragging = false;
-                Settings.save();
-                Serial.printf("[BRIGHTNESS] Drag finished, saved %d%% to flash\n", Settings.get().brightness_pct);
-            }
-        }
-
-        int16_t tx = -1, ty = -1;
-        if (Buttons.getLastTap(&tx, &ty)) {
-            if (ty >= 360 && ty <= 465) {
-                DashSettings &s = Settings.get();
-                bool changed = false;
-                if (tx >= 195 && tx <= 275) { // Button [-]
-                    if (s.brightness_pct > 20) {
-                        s.brightness_pct = (s.brightness_pct <= 30) ? 20 : (s.brightness_pct - 10);
-                        changed = true;
-                    }
-                } else if (tx >= 556 && tx <= 628) { // Button [+]
-                    if (s.brightness_pct < 100) {
-                        s.brightness_pct = (s.brightness_pct >= 90) ? 100 : (s.brightness_pct + 10);
-                        changed = true;
-                    }
-                } else if (tx >= 276 && tx <= 555) { // Tap on slider
-                    float pct = (float)(tx - 280) / 270.0f;
-                    int val = (int)(20.0f + pct * 80.0f + 0.5f);
-                    if (val < 20) val = 20;
-                    if (val > 100) val = 100;
-                    if (s.brightness_pct != val) {
-                        s.brightness_pct = val;
-                        changed = true;
-                    }
-                } else if (tx >= 630 && tx <= 702) { // Button [25%]
-                    if (s.brightness_pct != 25) {
-                        s.brightness_pct = 25;
-                        changed = true;
-                    }
-                } else if (tx >= 705 && tx <= 778) { // Button [100%]
-                    if (s.brightness_pct != 100) {
-                        s.brightness_pct = 100;
-                        changed = true;
-                    }
-                }
-
-                if (changed) {
-                    Settings.save();
-                    Display.setBrightness((uint8_t)map(s.brightness_pct, 0, 100, 0, 255));
-                    Serial.printf("[BRIGHTNESS] Adjusted to %d%%\n", s.brightness_pct);
-                }
-            }
-        }
-    }
-
     // SCREEN_SETTINGS_MENU: Interactive Touch & Navigation Handling
     if (!telemetry.is_locked && telemetry.screen == SCREEN_SETTINGS_MENU) {
         int16_t tx = -1, ty = -1;
@@ -671,6 +557,12 @@ void loop() {
                     telemetry.hazard_active = !telemetry.hazard_active;
                     Renderer.markScreenDirty();
                     Serial.printf("[NAV] Toggled Hazard Flashers: %s\n", telemetry.hazard_active ? "ACTIVE" : "OFF");
+                    break;
+
+                case NAV_LIGHT_TOGGLE:
+                    telemetry.lights_enabled = !telemetry.lights_enabled;
+                    Renderer.markScreenDirty();
+                    Serial.printf("[NAV] Toggled Light Switch (Hauptschalter): %s\n", telemetry.lights_enabled ? "ON" : "OFF");
                     break;
 
                 case NAV_BOTH_PRESSED: // Fast Toggle Active Battery Profile
