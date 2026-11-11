@@ -406,15 +406,6 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 telemetry.phase_amps = mot_i;
                 telemetry.duty_cycle_pct = duty;
 
-                // High-frequency (50Hz) power fallback if battery current in Status 4 is temporarily 0 or lagging
-                if (telemetry.voltage > 10.0f && mot_i > 0.5f && duty > 0.5f) {
-                    float est_bat_i = mot_i * (duty / 100.0f);
-                    if (telemetry.current_amps < 0.15f && est_bat_i > 0.2f) {
-                        telemetry.current_amps = est_bat_i;
-                        telemetry.power_watts = telemetry.voltage * est_bat_i;
-                    }
-                }
-
                 telemetry.vesc_connected = true;
                 s_last_can_rx_ms = now;
             } else if (is_secondary) {
@@ -438,11 +429,8 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 telemetry.temp_fet_rear = t_fet;
                 telemetry.temp_mot_rear = t_mot;
 
-                // Protect against zero-current frames while motor is actively drawing current
-                bool motor_active = (telemetry.phase_amps > 1.0f && telemetry.duty_cycle_pct > 1.5f);
-                if (fabsf(bat_i) > 0.15f || !motor_active) {
-                    telemetry.current_amps = bat_i;
-                }
+                // Direct battery current and real-time physical power (P = V * I) from VESC
+                telemetry.current_amps = bat_i;
                 if (telemetry.voltage > 10.0f) {
                     telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
                 }
@@ -493,6 +481,15 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 telemetry.amphours_used = (float)ah_raw / 10000.0f;
             }
         }
+        else if (cmd_id == 15 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS_3
+            int32_t wh_raw = (int32_t)(((uint32_t)msg.data[0] << 24) |
+                                       ((uint32_t)msg.data[1] << 16) |
+                                       ((uint32_t)msg.data[2] << 8)  |
+                                       (uint32_t)msg.data[3]);
+            if (is_primary) {
+                telemetry.stats.trip_wh = (float)wh_raw / 10000.0f;
+            }
+        }
     }
 
     if (now - s_last_can_rx_ms > 1500) {
@@ -513,7 +510,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         telemetry.phase_amps = 0.0f;
         telemetry.power_watts = 0.0f;
         telemetry.duty_cycle_pct = 0.0f;
-    } else if (telemetry.speed_kmh < 0.5f && fabsf(telemetry.current_amps) < 0.25f && fabsf(telemetry.phase_amps) < 0.5f) {
+    } else if (telemetry.speed_kmh < 0.5f && fabsf(telemetry.current_amps) < 0.15f && fabsf(telemetry.phase_amps) < 0.3f) {
         telemetry.power_watts = 0.0f;
         telemetry.current_amps = 0.0f;
         telemetry.phase_amps = 0.0f;
