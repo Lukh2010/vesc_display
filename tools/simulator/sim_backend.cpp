@@ -1223,64 +1223,6 @@ void sim_touch_event(int is_down, int x, int y) {
         return;
     }
 
-    // Interactive Touch processing on special screens
-    if (g_telemetry.screen == SCREEN_RT_GRAPHS) {
-        if (is_new_down) {
-            if (x <= 130 && y <= 65) {
-                // Top Left [< DASH] button returns to Ride Dash
-                g_telemetry.screen = SCREEN_RIDE_DASH;
-                Renderer.markScreenDirty();
-                Display.setSimTouch(false, -1, -1);
-                Buttons.setActiveScreen(SCREEN_RIDE_DASH);
-                return;
-            } else if (g_telemetry.tuning_mode && x >= 135 && x <= 255 && y <= 65) {
-                // Top Left [ RACE ] button opens Launch Control screen
-                g_telemetry.screen = SCREEN_RACE_TIMER;
-                g_telemetry.saved_ride_mode = g_telemetry.ride_mode;
-                g_telemetry.ride_mode = MODE_RACE;
-                ModeManager::instance().setRideMode(MODE_RACE);
-                g_telemetry.boost_active = true;
-                g_telemetry.race_state = 0;
-                Buttons.setRaceState(0);
-                Buttons.setActiveScreen(SCREEN_RACE_TIMER);
-                Renderer.markScreenDirty();
-                Display.setSimTouch(false, -1, -1);
-                return;
-            } else if (x >= 600 && y <= 65) {
-                // Top Right [RESET TRIP] button
-                s_sim_trip_km = 0.0f;
-                s_sim_wh_used = 0.0f;
-                s_sim_ah_used = 0.0f;
-                s_sim_ah_charged = 0.0f;
-                s_sim_wh_charged = 0.0f;
-                g_telemetry.trip_km = 0.0f;
-                g_telemetry.stats.reset();
-                Battery.resetTrip();
-                Renderer.markScreenDirty();
-                Display.setSimTouch(false, -1, -1);
-                return;
-            }
-        }
-    } else if (is_new_down && g_telemetry.screen == SCREEN_RIDE_DASH) {
-        if (x >= 18 && x <= 125 && y >= 12 && y <= 60) {
-            // Tapping [ STATS ] button takes the rider directly to SCREEN_RT_GRAPHS
-            g_telemetry.screen = SCREEN_RT_GRAPHS;
-            Renderer.markScreenDirty();
-            Display.setSimTouch(false, -1, -1);
-            Buttons.setActiveScreen(SCREEN_RT_GRAPHS);
-            return;
-        }
-    } else if (is_new_down && (g_telemetry.screen == SCREEN_VESC_BRIDGE || g_telemetry.screen == SCREEN_WIFI_BRIDGE)) {
-        Vesc.exitBridgeMode();
-        Vesc.exitWifiBridgeMode();
-        g_telemetry.screen = SCREEN_SETTINGS_MENU;
-        Renderer.markScreenDirty();
-        Renderer.invalidateCache();
-        Display.setSimTouch(false, -1, -1);
-        Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
-        return;
-    }
-
     Buttons.setActiveScreen(g_telemetry.screen);
     Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
     Buttons.setRaceDynoOpen(g_telemetry.race_dyno_open);
@@ -1373,6 +1315,7 @@ void sim_trigger_nav(int nav_action) {
                     Buttons.setRaceDynoOpen(false);
                 }
                 g_telemetry.screen = SCREEN_RT_GRAPHS;
+                Renderer.markScreenDirty();
                 break;
             case NAV_SCREEN_RACE:
                 if (!g_telemetry.tuning_mode) {
