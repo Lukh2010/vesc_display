@@ -2249,6 +2249,17 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             markScreenDirty();
         }
 
+        // Auto-finish when rider comes to a standstill after an acceleration pull
+        if (telemetry.race_dyno.peak_speed_kmh >= 25.0f && telemetry.race_elapsed_sec > 2.0f && telemetry.speed_kmh < 2.0f) {
+            telemetry.race_state = 3; // FINISHED
+            telemetry.boost_active = false;
+            ModeManager::instance().setBoostActive(false);
+            telemetry.ride_mode = telemetry.saved_ride_mode;
+            ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+            Buttons.setRaceState(3);
+            markScreenDirty();
+        }
+
         // 15-second measurement timeout cap (automatic race end)
         if (telemetry.race_elapsed_sec >= 15.0f) {
             telemetry.race_state = 3; // FINISHED
@@ -2654,9 +2665,11 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
         _canvas->drawFastVLine(x_line, gy, gh, 0x18C3);
     }
 
-    // Y-Axis Left (Power in kW, Cyan)
+    // Y-Axis Left (Power in kW, Cyan) - Dynamic scaling up to 15 kW (e.g. 88V 21S battery packs)
     float max_kw_scale = 6.0f;
-    if (peak_kw > 5.5f) max_kw_scale = 8.0f;
+    if (peak_kw > 10.0f) max_kw_scale = 15.0f;
+    else if (peak_kw > 7.5f) max_kw_scale = 10.0f;
+    else if (peak_kw > 5.5f) max_kw_scale = 8.0f;
     _canvas->setFont(&fonts::Font0);
     _canvas->setTextColor(COLOR_CYAN, 0x10A2);
     _canvas->setTextDatum(textdatum_t::middle_right);
@@ -2667,8 +2680,10 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
     _canvas->drawString(kwBuf, gx - 5, gy + gh / 2);
     _canvas->drawString("0 kW", gx - 5, gy + gh - 4);
 
-    // Y-Axis Right (G-Force, Amber)
+    // Y-Axis Right (G-Force, Amber) - Dynamic scaling up to 2.5G
     float max_g_scale = 1.5f;
+    if (peak_g > 1.8f) max_g_scale = 2.5f;
+    else if (peak_g > 1.35f) max_g_scale = 2.0f;
     _canvas->setTextColor(COLOR_AMBER, 0x10A2);
     _canvas->setTextDatum(textdatum_t::middle_left);
     char gBuf[16];
@@ -2706,7 +2721,7 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
         } else {
             // Preview / baseline simulation:
             // Speed 0 to 80 km/h
-            float t_norm = (float)i / (float)(num_points - 1); // 0.0 .. 1.0
+            float t_norm = (num_points > 1) ? ((float)i / (float)(num_points - 1)) : 0.0f; // 0.0 .. 1.0
             spd_val = 80.0f * (1.0f - expf(-2.2f * t_norm)); // Ramping speed
             // Power curve: rises rapidly to peak_kw, stays high
             float p_frac = (t_norm < 0.25f) ? (t_norm / 0.25f) : (1.0f - 0.12f * (t_norm - 0.25f));
