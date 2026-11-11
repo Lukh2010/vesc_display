@@ -332,18 +332,25 @@ static void runSimulationStep(float dt) {
     }
 
     // 3. Realistic Duty Cycle (Inverter PWM modulation index)
-    // Duty cycle tracks back-EMF relative to maximum achievable speed in current mode
-    float speed_ref = (max_possible_speed > 5.0f) ? max_possible_speed : 48.0f;
-    float base_duty = (s_sim_speed_kmh / speed_ref) * 92.0f;
+    // Physical no-load top speed of the motor without field weakening is ~85 km/h (at nominal battery voltage)
+    const float physical_motor_top_speed = 85.0f;
+    float base_duty = (s_sim_speed_kmh / physical_motor_top_speed) * 95.0f;
     float target_duty = base_duty;
-    if (sim_t > 85.0f && s_sim_speed_kmh > (speed_ref * 0.90f)) {
-        // Field Weakening engaged: duty cycle pushes beyond 100% (up to 114%)
-        float fw_extra = ((sim_t - 85.0f) / 15.0f) * 18.0f;
+
+    // Additional duty required to overcome motor phase resistance under heavy acceleration
+    if (sim_t > 0.0f && s_sim_phase_amps > 5.0f) {
+        float i_r_duty = (s_sim_phase_amps / max_pha_a) * 8.0f; // max ~8% boost for stator IR drop
+        target_duty += i_r_duty;
+    }
+
+    if (sim_t > 85.0f && s_sim_speed_kmh > 78.0f) {
+        // Field Weakening engaged at high speed near physical motor limit: duty pushes beyond 100% (up to 114%)
+        float fw_extra = ((s_sim_speed_kmh - 78.0f) / 12.0f) * 18.0f;
         target_duty = 96.0f + fw_extra;
     }
     if (sim_t == 0.0f && sim_b <= 1.0f) {
         // Coasting: duty cycle follows back-EMF of spinning rotor
-        target_duty = (s_sim_speed_kmh / speed_ref) * 85.0f;
+        target_duty = (s_sim_speed_kmh / physical_motor_top_speed) * 90.0f;
     }
     if (target_duty > 118.0f) target_duty = 118.0f;
     if (target_duty < 0.0f) target_duty = 0.0f;
