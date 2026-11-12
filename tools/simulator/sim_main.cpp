@@ -2073,6 +2073,11 @@ int main(int argc, char **argv) {
     t.ride_mode = MODE_ECO;
     t.boost_active = false;
     t.mode_badge_until = 0;
+    t.gps_enabled = true;
+    t.use_gps_speed = true;
+    t.gps.valid = true;
+    t.gps.satellites = 14;
+    strncpy(t.clock_str, "14:32", sizeof(t.clock_str));
     Renderer.markScreenDirty();
     renderAndSave("00_hyper_35kw_idle", t);
     renderAndSave("demo_00_hyper_cluster", t);
