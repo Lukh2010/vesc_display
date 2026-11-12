@@ -2524,38 +2524,77 @@ bool DashboardRenderer::handleSettingsSliderDrag(int16_t cx, int16_t cy, DashTel
 // SCREEN 4: VESC TOOL USB PASSTHROUGH BRIDGE (800x480 Optimized)
 // ==============================================================================
 void DashboardRenderer::initVescBridgeScreen(const DashTelemetry &telemetry) {
-    // Header Bar
-    _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
-    _canvas->drawString("VESC TOOL USB PASSTHROUGH BRIDGE", 20, 14, &fonts::Font4);
-
-    _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_BG);
-    _canvas->setTextPadding(300);
-    _canvas->drawRightString("115200 BAUD (CDC <-> UART)", 770, 14, &fonts::Font4);
+    _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->setTextPadding(0);
 
-    _canvas->drawFastHLine(20, 44, 760, COLOR_BORDER);
+    // 1. Header Bar (y: 12..52)
+    // Left: [< DASH] Button
+    _canvas->fillRoundRect(20, 12, 110, 38, 8, 0x18C3);
+    _canvas->drawRoundRect(20, 12, 110, 38, 8, 0x39C7);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setTextColor(COLOR_CYAN, 0x18C3);
+    _canvas->drawString("< DASH", 75, 31);
 
-    // Left Card: PC / VESC Tool (w=370, h=310)
-    drawCard(20, 56, 370, 310, COLOR_SURFACE, COLOR_BORDER);
+    // Center Title
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
+    _canvas->drawString("VESC TOOL USB PASSTHROUGH", 400, 31);
+
+    // Right Baud Badge
+    _canvas->fillRoundRect(620, 12, 160, 38, 8, 0x0821);
+    _canvas->drawRoundRect(620, 12, 160, 38, 8, COLOR_CYAN);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_GREEN, 0x0821);
+    _canvas->drawString("115200 BAUD", 700, 31);
+
+    _canvas->drawFastHLine(20, 58, 760, COLOR_BORDER);
+
+    // 2. Left Card: PC / VESC Tool (w=370, h=315)
+    drawCard(20, 68, 370, 315, COLOR_SURFACE, COLOR_BORDER);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-    _canvas->drawString("PC / VESC TOOL (USB)", 36, 74, &fonts::Font4);
-    _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-    _canvas->drawString("Port: USB CDC (/dev/ttyACM0)", 36, 110, &fonts::Font4);
-    _canvas->drawString("DATA RECEIVED FROM PC:", 36, 160, &fonts::Font4);
+    _canvas->drawString("PC / VESC TOOL (USB)", 36, 76);
 
-    // Right Card: VESC Controller (w=370, h=310)
-    drawCard(410, 56, 370, 310, COLOR_SURFACE, COLOR_BORDER);
+    _canvas->drawFastHLine(34, 108, 342, COLOR_SURFACE_LIGHT);
+
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
+    _canvas->drawString("Port: USB CDC (/dev/ttyACM0)", 36, 120);
+    _canvas->drawString("Status: Virtueller COM-Port aktiv", 36, 150);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    _canvas->drawString("EMPFANGENE BYTES VOM PC:", 36, 195);
+
+    // 3. Right Card: VESC Controller (w=370, h=315)
+    drawCard(410, 68, 370, 315, COLOR_SURFACE, COLOR_BORDER);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
-    _canvas->drawString("VESC MOTOR CONTROLLER", 426, 74, &fonts::Font4);
-    _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-    _canvas->drawString("Pins: TX=43, RX=44 (Serial1)", 426, 110, &fonts::Font4);
-    _canvas->drawString("DATA FORWARDED TO VESC:", 426, 160, &fonts::Font4);
+    _canvas->drawString("VESC MOTOR CONTROLLER", 426, 76);
 
-    // Bottom Help Banner (w=760, h=80)
-    _canvas->fillRoundRect(20, 380, 760, 80, 8, 0x18E3);
-    _canvas->drawRoundRect(20, 380, 760, 80, 8, COLOR_AMBER);
-    _canvas->setTextColor(COLOR_AMBER, 0x18E3);
-    _canvas->drawCenterString("Tap anywhere or swipe right to Exit Bridge and return to Dash", 400, 408, &fonts::Font4);
+    _canvas->drawFastHLine(424, 108, 342, COLOR_SURFACE_LIGHT);
+
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
+    _canvas->drawString("Pins: TX=43, RX=44 (Serial1)", 426, 120);
+    _canvas->drawString("Hardware: VESC UART Interface", 426, 150);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    _canvas->drawString("GESENDETE BYTES AN VESC:", 426, 195);
+
+    // 4. Bottom Exit / Help Banner (w=760, h=72, y: 395..467)
+    _canvas->fillRoundRect(20, 395, 760, 72, 10, 0x18C3);
+    _canvas->drawRoundRect(20, 395, 760, 72, 10, COLOR_AMBER);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_AMBER, 0x18C3);
+    _canvas->drawString("[ USB-BRIDGE BEENDEN & ZURUECK ]", 400, 420);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, 0x18C3);
+    _canvas->drawString("Tippen kehrt zum Dashboard zurueck", 400, 448);
+
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->setTextPadding(0);
 
     _bridge_last_pc_bytes = 0xFFFFFFFF;
     _bridge_last_vesc_bytes = 0xFFFFFFFF;
@@ -2565,36 +2604,31 @@ void DashboardRenderer::renderVescBridgeScreen(const DashTelemetry &telemetry) {
     uint32_t pc_bytes = Vesc.getBridgePcToVescBytes();
     uint32_t vesc_bytes = Vesc.getBridgeVescToPcBytes();
 
+    _canvas->setFont(&fonts::Font6);
+    _canvas->setTextDatum(textdatum_t::top_left);
+
     if (pc_bytes != _bridge_last_pc_bytes) {
         _bridge_last_pc_bytes = pc_bytes;
         char buf[32];
-        if (pc_bytes < 1024) {
-            snprintf(buf, sizeof(buf), "%u B", (unsigned)pc_bytes);
-        } else if (pc_bytes < 1048576) {
-            snprintf(buf, sizeof(buf), "%.1f KB", pc_bytes / 1024.0f);
-        } else {
-            snprintf(buf, sizeof(buf), "%.2f MB", pc_bytes / 1048576.0f);
-        }
+        if (pc_bytes < 1024) snprintf(buf, sizeof(buf), "%u B", (unsigned)pc_bytes);
+        else if (pc_bytes < 1048576) snprintf(buf, sizeof(buf), "%.1f KB", pc_bytes / 1024.0f);
+        else snprintf(buf, sizeof(buf), "%.2f MB", pc_bytes / 1048576.0f);
+
+        _canvas->fillRect(36, 230, 330, 45, COLOR_SURFACE);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->setTextPadding(300);
-        _canvas->drawString(buf, 36, 205, &fonts::Font6);
-        _canvas->setTextPadding(0);
+        _canvas->drawString(buf, 36, 230);
     }
 
     if (vesc_bytes != _bridge_last_vesc_bytes) {
         _bridge_last_vesc_bytes = vesc_bytes;
         char buf[32];
-        if (vesc_bytes < 1024) {
-            snprintf(buf, sizeof(buf), "%u B", (unsigned)vesc_bytes);
-        } else if (vesc_bytes < 1048576) {
-            snprintf(buf, sizeof(buf), "%.1f KB", vesc_bytes / 1024.0f);
-        } else {
-            snprintf(buf, sizeof(buf), "%.2f MB", vesc_bytes / 1048576.0f);
-        }
+        if (vesc_bytes < 1024) snprintf(buf, sizeof(buf), "%u B", (unsigned)vesc_bytes);
+        else if (vesc_bytes < 1048576) snprintf(buf, sizeof(buf), "%.1f KB", vesc_bytes / 1024.0f);
+        else snprintf(buf, sizeof(buf), "%.2f MB", vesc_bytes / 1048576.0f);
+
+        _canvas->fillRect(426, 230, 330, 45, COLOR_SURFACE);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->setTextPadding(300);
-        _canvas->drawString(buf, 426, 205, &fonts::Font6);
-        _canvas->setTextPadding(0);
+        _canvas->drawString(buf, 426, 230);
     }
 }
 
@@ -2602,38 +2636,97 @@ void DashboardRenderer::renderVescBridgeScreen(const DashTelemetry &telemetry) {
 // SCREEN 5: VESC TOOL WIRELESS WI-FI BRIDGE (800x480 Optimized)
 // ==============================================================================
 void DashboardRenderer::initWifiBridgeScreen(const DashTelemetry &telemetry) {
-    // Header Bar
-    _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
-    _canvas->drawString("VESC TOOL WIRELESS WI-FI BRIDGE", 20, 14, &fonts::Font4);
-
-    _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_BG);
-    _canvas->setTextPadding(300);
-    _canvas->drawRightString("PORT 6510 (TCP <-> UART)", 770, 14, &fonts::Font4);
+    _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->setTextPadding(0);
 
-    _canvas->drawFastHLine(20, 44, 760, COLOR_BORDER);
+    // 1. Header Bar (y: 12..52)
+    // Left: [< DASH] Button
+    _canvas->fillRoundRect(20, 12, 110, 38, 8, 0x18C3);
+    _canvas->drawRoundRect(20, 12, 110, 38, 8, 0x39C7);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setTextColor(COLOR_CYAN, 0x18C3);
+    _canvas->drawString("< DASH", 75, 31);
 
-    // Left Card: Wi-Fi Access Point Details
-    drawCard(20, 56, 370, 310, COLOR_SURFACE, COLOR_BORDER);
+    // Center Title
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
+    _canvas->drawString("VESC TOOL WI-FI BRIDGE", 400, 31);
+
+    // Right Port Badge
+    _canvas->fillRoundRect(650, 12, 130, 38, 8, 0x0821);
+    _canvas->drawRoundRect(650, 12, 130, 38, 8, COLOR_CYAN);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_GREEN, 0x0821);
+    _canvas->drawString("TCP 6510", 715, 31);
+
+    _canvas->drawFastHLine(20, 58, 760, COLOR_BORDER);
+
+    // 2. Left Card: Wi-Fi Access Point Details (w=370, h=315)
+    drawCard(20, 68, 370, 315, COLOR_SURFACE, COLOR_BORDER);
+    _canvas->fillCircle(38, 88, 5, COLOR_GREEN);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-    _canvas->drawString("WI-FI ACCESS POINT (AP)", 36, 74, &fonts::Font4);
-    _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-    _canvas->drawString("SSID:    VESC-DASH-AP", 36, 110, &fonts::Font4);
-    _canvas->drawString("IP:      192.168.4.1", 36, 144, &fonts::Font4);
-    _canvas->drawString("Port:    6510 (VESC standard)", 36, 178, &fonts::Font4);
-    _canvas->drawString("Auth:    Open (No password)", 36, 212, &fonts::Font4);
-    _canvas->drawString("Radio:   2.4 GHz SoftAP", 36, 246, &fonts::Font4);
+    _canvas->drawString("WLAN ACCESS POINT", 52, 76);
 
-    // Right Card: Client Connection & Traffic Throughput
-    drawCard(410, 56, 370, 310, COLOR_SURFACE, COLOR_BORDER);
+    _canvas->drawFastHLine(34, 108, 342, COLOR_SURFACE_LIGHT);
+
+    // Parameter List
+    int rowY = 120;
+    int rowH = 34;
+
+    auto drawRow = [&](const char *label, const char *val, uint16_t valCol) {
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+        _canvas->drawString(label, 36, rowY);
+
+        _canvas->setTextDatum(textdatum_t::top_right);
+        _canvas->setTextColor(valCol, COLOR_SURFACE);
+        _canvas->drawString(val, 376, rowY);
+        rowY += rowH;
+    };
+
+    drawRow("Netzwerk (SSID):", "VESC-DASH-AP", COLOR_WHITE);
+    drawRow("IP-Adresse:", "192.168.4.1", COLOR_WHITE);
+    drawRow("TCP-Port:", "6510 (Standard)", COLOR_WHITE);
+    drawRow("Verschluesselung:", "Offen (Kein PIN)", COLOR_GREEN);
+    drawRow("WLAN-Frequenz:", "2.4 GHz SoftAP", COLOR_WHITE);
+
+    // Small info box inside left card
+    _canvas->fillRoundRect(34, 304, 342, 65, 8, 0x0821);
+    _canvas->drawRoundRect(34, 304, 342, 65, 8, 0x18E3);
+    _canvas->setFont(&fonts::Font0);
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->setTextColor(COLOR_CYAN, 0x0821);
+    _canvas->drawString("DRAHTLOS-PROGRAMMIERUNG:", 44, 312);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, 0x0821);
+    _canvas->drawString("Ermoeglicht kabellose VESC-Tool Verbindung", 44, 330);
+    _canvas->drawString("fuer Mobile App & PC ohne USB-Kabel.", 44, 348);
+
+    // 3. Right Card: VESC Tool Client Connection & Traffic Throughput (w=370, h=315)
+    drawCard(410, 68, 370, 315, COLOR_SURFACE, COLOR_BORDER);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
-    _canvas->drawString("VESC TOOL CLIENT", 426, 74, &fonts::Font4);
+    _canvas->drawString("VESC TOOL CLIENT", 426, 76);
 
-    // Bottom Help Banner
-    _canvas->fillRoundRect(20, 380, 760, 80, 8, 0x18E3);
-    _canvas->drawRoundRect(20, 380, 760, 80, 8, COLOR_AMBER);
-    _canvas->setTextColor(COLOR_AMBER, 0x18E3);
-    _canvas->drawCenterString("Tap anywhere or swipe right to Exit Bridge & Power Off Wi-Fi", 400, 408, &fonts::Font4);
+    _canvas->drawFastHLine(424, 108, 342, COLOR_SURFACE_LIGHT);
+
+    // 4. Bottom Exit / Help Banner (w=760, h=72, y: 395..467)
+    _canvas->fillRoundRect(20, 395, 760, 72, 10, 0x18C3);
+    _canvas->drawRoundRect(20, 395, 760, 72, 10, COLOR_AMBER);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_AMBER, 0x18C3);
+    _canvas->drawString("[ WI-FI BEENDEN & ZURUECK ]", 400, 420);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, 0x18C3);
+    _canvas->drawString("Tippen schaltet WLAN ab und kehrt zum Dashboard zurueck", 400, 448);
+
+    _canvas->setTextDatum(textdatum_t::top_left);
+    _canvas->setTextPadding(0);
 
     _bridge_last_wifi_rx = 0xFFFFFFFF;
     _bridge_last_wifi_tx = 0xFFFFFFFF;
@@ -2648,35 +2741,57 @@ void DashboardRenderer::renderWifiBridgeScreen(const DashTelemetry &telemetry) {
 
     if (conn_state != _bridge_last_wifi_conn) {
         _bridge_last_wifi_conn = conn_state;
-        _canvas->fillRoundRect(414, 100, 362, 255, 6, COLOR_SURFACE);
+        // Clear interior of right card
+        _canvas->fillRect(414, 112, 362, 265, COLOR_SURFACE);
 
         if (connected) {
-            _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
-            _canvas->drawString("STATUS: CONNECTED", 426, 110, &fonts::Font4);
+            // Status badge (green)
+            _canvas->fillRoundRect(426, 122, 338, 38, 8, 0x0380);
+            _canvas->drawRoundRect(426, 122, 338, 38, 8, COLOR_GREEN);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_WHITE, 0x0380);
+            _canvas->drawString("STATUS: VERBUNDEN", 426 + 169, 141);
 
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setFont(&fonts::Font2);
             _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
             char ipBuf[40];
-            snprintf(ipBuf, sizeof(ipBuf), "Client IP: %s", Vesc.getWifiClientIp());
-            _canvas->drawString(ipBuf, 426, 146, &fonts::Font4);
+            snprintf(ipBuf, sizeof(ipBuf), "Client-IP: %s", Vesc.getWifiClientIp());
+            _canvas->drawString(ipBuf, 426, 172);
 
-            _canvas->drawString("APP -> VESC:", 426, 186, &fonts::Font4);
-            _canvas->drawString("VESC -> APP:", 426, 226, &fonts::Font4);
+            _canvas->drawFastHLine(426, 202, 338, COLOR_SURFACE_LIGHT);
+
+            _canvas->drawString("APP -> VESC:", 426, 220);
+            _canvas->drawString("VESC -> APP:", 426, 258);
 
             _bridge_last_wifi_rx = 0xFFFFFFFF;
             _bridge_last_wifi_tx = 0xFFFFFFFF;
         } else {
-            _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-            _canvas->drawString("STATUS: AWAITING CLIENT...", 426, 110, &fonts::Font4);
+            // Status badge (amber)
+            _canvas->fillRoundRect(426, 120, 338, 36, 8, 0x31A0);
+            _canvas->drawRoundRect(426, 120, 338, 36, 8, COLOR_AMBER);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_WHITE, 0x31A0);
+            _canvas->drawString("WARTET AUF VESC TOOL...", 426 + 169, 138);
+
+            // Instructions
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setFont(&fonts::Font2);
             _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-            _canvas->drawString("1. Connect device to SSID:", 426, 146, &fonts::Font4);
+            _canvas->drawString("1. Mit WLAN 'VESC-DASH-AP' verbinden", 426, 170);
+            _canvas->drawString("2. VESC Tool oeffnen (PC/Handy)", 426, 204);
+            _canvas->drawString("3. Verbindungsart 'TCP' waehlen", 426, 238);
+            _canvas->drawString("4. Host: 192.168.4.1  Port: 6510", 426, 272);
             _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-            _canvas->drawString("   \"VESC-DASH-AP\"", 426, 180, &fonts::Font4);
-            _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-            _canvas->drawString("2. Open VESC Tool -> TCP 6510", 426, 218, &fonts::Font4);
+            _canvas->drawString("5. Auf 'Connect' tippen!", 426, 306);
         }
     }
 
     if (connected) {
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::top_left);
         if (rx_bytes != _bridge_last_wifi_rx) {
             _bridge_last_wifi_rx = rx_bytes;
             char buf[32];
@@ -2684,10 +2799,9 @@ void DashboardRenderer::renderWifiBridgeScreen(const DashTelemetry &telemetry) {
             else if (rx_bytes < 1048576) snprintf(buf, sizeof(buf), "%.1f KB", rx_bytes / 1024.0f);
             else snprintf(buf, sizeof(buf), "%.2f MB", rx_bytes / 1048576.0f);
 
+            _canvas->fillRect(570, 216, 190, 30, COLOR_SURFACE);
             _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-            _canvas->setTextPadding(160);
-            _canvas->drawString(buf, 580, 186, &fonts::Font4);
-            _canvas->setTextPadding(0);
+            _canvas->drawString(buf, 570, 216);
         }
 
         if (tx_bytes != _bridge_last_wifi_tx) {
@@ -2697,10 +2811,9 @@ void DashboardRenderer::renderWifiBridgeScreen(const DashTelemetry &telemetry) {
             else if (tx_bytes < 1048576) snprintf(buf, sizeof(buf), "%.1f KB", tx_bytes / 1024.0f);
             else snprintf(buf, sizeof(buf), "%.2f MB", tx_bytes / 1048576.0f);
 
+            _canvas->fillRect(570, 254, 190, 30, COLOR_SURFACE);
             _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-            _canvas->setTextPadding(160);
-            _canvas->drawString(buf, 580, 226, &fonts::Font4);
-            _canvas->setTextPadding(0);
+            _canvas->drawString(buf, 570, 254);
         }
     }
 }
