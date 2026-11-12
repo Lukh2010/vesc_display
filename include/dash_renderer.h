@@ -74,6 +74,10 @@ private:
     // Screen 7: First-Time Setup & Onboarding Wizard
     void renderSetupWizard(const DashTelemetry &telemetry);
 
+    // Screen 8: Animated Battery Charging HUD with Drive Lockout
+    void initChargingScreen();
+    void renderChargingScreen(const DashTelemetry &telemetry);
+
     // PIN-Lockscreen & VESC Alarm Banner (Requirements 1 & 7)
     void renderPinLockScreen(const DashTelemetry &telemetry);
     void drawFaultBanner(uint8_t fault_code);
@@ -278,6 +282,15 @@ private:
     bool     _pin_screen_drawn;
     int      _last_pin_len;
     bool     _last_pin_err;
+    bool     _last_theft_alarm;
+
+    // Charging HUD Screen State
+    bool     _charging_inited;
+    float    _last_charge_pct;
+    float    _last_charge_angle;
+    int      _last_charge_min;
+    int      _last_charge_w;
+    int      _last_charge_v_x10;
 
     // PIN Change Modal State (in Settings)
     bool     _pin_modal_open;

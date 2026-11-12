@@ -247,13 +247,15 @@ void loop() {
                 } else if (key == '#') { // OK / enter
                     if (strcmp(telemetry.pin_entry, Settings.get().pin_code) == 0) {
                         telemetry.is_locked = false;
+                        telemetry.theft_alarm_active = false;
+                        telemetry.locked_moved_meters = 0.0f;
                         telemetry.pin_error = false;
                         telemetry.pin_entry[0] = '\0';
                         ModeManager::instance().setLocked(false);
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
                         Renderer.triggerNeedleSweep();
-                        Serial.println("[PIN] System UNLOCKED with valid PIN code!");
+                        Serial.println("[PIN] System UNLOCKED with valid PIN code! Alarm disarmed.");
                     } else {
                         telemetry.pin_error = true;
                         telemetry.pin_error_end_ms = millis() + 800;
@@ -270,13 +272,15 @@ void loop() {
                         if (len == 4) {
                             if (strcmp(telemetry.pin_entry, Settings.get().pin_code) == 0) {
                                 telemetry.is_locked = false;
+                                telemetry.theft_alarm_active = false;
+                                telemetry.locked_moved_meters = 0.0f;
                                 telemetry.pin_error = false;
                                 telemetry.pin_entry[0] = '\0';
                                 ModeManager::instance().setLocked(false);
                                 Renderer.markScreenDirty();
                                 Renderer.invalidateCache();
                                 Renderer.triggerNeedleSweep();
-                                Serial.println("[PIN] System UNLOCKED automatically upon 4 digits!");
+                                Serial.println("[PIN] System UNLOCKED automatically upon 4 digits! Alarm disarmed.");
                             } else {
                                 telemetry.pin_error = true;
                                 telemetry.pin_error_end_ms = millis() + 800;
@@ -288,6 +292,72 @@ void loop() {
                 }
             }
         }
+    }
+
+    // Theft Protection & Movement Alarm Tracking (when locked)
+    static bool s_was_locked = false;
+    static uint32_t s_last_alarm_beep_ms = 0;
+    static uint8_t s_alarm_beep_cadence = 0;
+    static uint32_t s_last_movement_calc_ms = millis();
+
+    if (telemetry.is_locked) {
+        uint32_t dt_ms = now - s_last_movement_calc_ms;
+        s_last_movement_calc_ms = now;
+        if (dt_ms > 500) dt_ms = 50;
+        float dt_sec = dt_ms / 1000.0f;
+
+        if (!s_was_locked) {
+            s_was_locked = true;
+            telemetry.theft_alarm_active = false;
+            telemetry.locked_moved_meters = 0.0f;
+            Serial.println("[SECURITY] Theft protection ARMED.");
+        }
+
+        // Measure vehicle movement from physical sensors:
+        // 1. VESC motor rotation speed
+        float raw_v = telemetry.vesc_motor_speed;
+        if (telemetry.rpm > 12.0f && raw_v < 0.5f) {
+            float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
+            float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
+            raw_v = (telemetry.rpm / gear_ratio) * wheel_circ_m * 60.0f / 1000.0f;
+        }
+        // 2. GPS ground speed (when 3D fix is active)
+        float gps_v = (telemetry.gps.valid && telemetry.gps.satellites >= 4) ? telemetry.gps.speed_kmh : 0.0f;
+        float move_v = (raw_v > gps_v) ? raw_v : gps_v;
+
+        // 3. Accelerometer / IMU G-Force
+        if (fabsf(telemetry.g_force) > 0.35f) {
+            telemetry.locked_moved_meters += 0.4f * dt_sec;
+        }
+
+        if (move_v > 0.7f) {
+            telemetry.locked_moved_meters += (move_v * (1000.0f / 3600.0f)) * dt_sec;
+        }
+
+        // Trigger condition: "wenn es gesperrt ist und sich ein paar meter bewegt" -> >= 2.0 meters
+        if (telemetry.locked_moved_meters >= 2.0f && !telemetry.theft_alarm_active) {
+            telemetry.theft_alarm_active = true;
+            Renderer.markScreenDirty();
+            Serial.printf("[ALARM] DIEBSTAHLWARNUNG! Moved %.2f meters while locked! Triggering FOC Motor Siren.\n",
+                          telemetry.locked_moved_meters);
+        }
+
+        // While alarm is active: pulse loud VESC FOC siren through motor windings
+        if (telemetry.theft_alarm_active) {
+            if (now - s_last_alarm_beep_ms >= 350) {
+                s_last_alarm_beep_ms = now;
+                s_alarm_beep_cadence = (s_alarm_beep_cadence + 1) % 4;
+                float freqs[4] = { 1600.0f, 2400.0f, 1800.0f, 2800.0f };
+                Vesc.triggerFocBeep(freqs[s_alarm_beep_cadence], 0.30f, 8.0f);
+            }
+        }
+    } else {
+        if (s_was_locked) {
+            s_was_locked = false;
+            telemetry.theft_alarm_active = false;
+            telemetry.locked_moved_meters = 0.0f;
+        }
+        s_last_movement_calc_ms = now;
     }
 
     telemetry.gps_enabled = Settings.get().gps_enabled;
@@ -327,6 +397,8 @@ void loop() {
             strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
             Settings.save();
             telemetry.is_locked = false;
+            telemetry.theft_alarm_active = false;
+            telemetry.locked_moved_meters = 0.0f;
             telemetry.pin_error = false;
             telemetry.pin_entry[0] = '\0';
             ModeManager::instance().setLocked(false);
@@ -672,6 +744,90 @@ void loop() {
 
     // 2b. Update Live GPS+BDS Satellite Tracker & Ground Speed Priority
     GpsTracker::instance().update(telemetry);
+
+    // 2c. Smart Charging Detection & Drive Lockout
+    static uint32_t s_stationary_since_ms = 0;
+    static float s_stationary_baseline_v = 0.0f;
+    static uint32_t s_charge_unplug_timer_ms = 0;
+    static DashboardScreen s_screen_before_charge = SCREEN_RIDE_DASH;
+
+    bool is_stationary = (telemetry.speed_kmh <= 0.5f && telemetry.rpm <= 10.0f);
+    if (telemetry.gps.valid && telemetry.gps.speed_kmh > 0.8f) is_stationary = false;
+
+    if (is_stationary) {
+        if (s_stationary_since_ms == 0) {
+            s_stationary_since_ms = now;
+            s_stationary_baseline_v = telemetry.voltage;
+        } else if (now - s_stationary_since_ms < 3000) {
+            // Update baseline during initial sag recovery
+            s_stationary_baseline_v = telemetry.voltage;
+        }
+    } else {
+        s_stationary_since_ms = 0;
+        s_stationary_baseline_v = 0.0f;
+    }
+
+    // Charging detection:
+    // 1) Direct charging current into battery detected by VESC
+    bool incoming_current = (telemetry.current_amps < -0.15f || telemetry.power_watts < -5.0f);
+    // 2) Voltage rising while stationary (external charger connected directly to battery pack)
+    bool rising_voltage = (is_stationary && (now - s_stationary_since_ms >= 4000) &&
+                           telemetry.voltage >= s_stationary_baseline_v + 0.12f &&
+                           telemetry.voltage >= 35.0f);
+
+    bool charge_detected = is_stationary && (incoming_current || rising_voltage || (telemetry.is_charging && telemetry.battery_pct >= 99.0f));
+
+    if (charge_detected) {
+        s_charge_unplug_timer_ms = 0;
+        if (!telemetry.is_charging) {
+            telemetry.is_charging = true;
+            telemetry.charge_start_ms = now;
+            if (telemetry.screen != SCREEN_CHARGING_HUD && telemetry.screen != SCREEN_SETUP_WIZARD) {
+                s_screen_before_charge = telemetry.screen;
+                telemetry.screen = SCREEN_CHARGING_HUD;
+            }
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            Serial.printf("[CHARGING] Charger connected! Voltage: %.1fV, Amps: %.1fA, Power: %.0fW\n",
+                          telemetry.voltage, telemetry.current_amps, telemetry.power_watts);
+        }
+
+        // Calculate incoming charge power & estimated remaining time
+        float chg_w = fabsf(telemetry.power_watts);
+        if (chg_w < 10.0f) chg_w = 160.0f; // Typical 3A e-bike charger ~ 160W
+        telemetry.charge_power_watts = chg_w;
+        telemetry.charge_current_amps = fabsf(telemetry.current_amps);
+
+        float nominal_wh = Battery.getProfile(Battery.getActiveProfileIndex()).nominal_wh;
+        if (nominal_wh < 100.0f) nominal_wh = 1300.0f;
+        float missing_wh = ((100.0f - telemetry.battery_pct) / 100.0f) * nominal_wh;
+        if (missing_wh < 0.0f) missing_wh = 0.0f;
+        telemetry.charge_est_minutes = (missing_wh / chg_w) * 60.0f;
+
+        // Drive Lockout: "wärend er läd soll man nicht fahren können"
+        telemetry.throttle_pct = 0.0f;
+        Vesc.sendModeLimits(0.0f, 0.0f, 0.0f, 0.0f);
+    } else if (telemetry.is_charging) {
+        // Charger unplugged debounce (3.5 seconds without charge)
+        if (s_charge_unplug_timer_ms == 0) {
+            s_charge_unplug_timer_ms = now;
+        } else if (now - s_charge_unplug_timer_ms >= 3500) {
+            telemetry.is_charging = false;
+            s_charge_unplug_timer_ms = 0;
+            if (telemetry.screen == SCREEN_CHARGING_HUD) {
+                telemetry.screen = s_screen_before_charge;
+            }
+            // Unlock drive only if PIN lock is not active
+            if (!Settings.get().pin_lock_enabled || !telemetry.is_locked) {
+                ModeManager::instance().setLocked(false);
+                ModeManager::instance().applyLimitsToVesc();
+            }
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            Renderer.triggerNeedleSweep();
+            Serial.println("[CHARGING] Charger disconnected. Drive lockout released.");
+        }
+    }
 
     telemetry.uptime_sec = (now - boot_ms) / 1000;
     telemetry.dynamic_wh_km = Battery.getDynamicWhKm();

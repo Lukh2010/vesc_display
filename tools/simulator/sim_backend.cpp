@@ -696,6 +696,8 @@ void sim_step(uint32_t step_ms) {
                 } else if (key == '#') {
                     if (strcmp(g_telemetry.pin_entry, Settings.get().pin_code) == 0) {
                         g_telemetry.is_locked = false;
+                        g_telemetry.theft_alarm_active = false;
+                        g_telemetry.locked_moved_meters = 0.0f;
                         g_telemetry.pin_error = false;
                         g_telemetry.pin_entry[0] = '\0';
                         g_manual_throttle = 0.0f;
@@ -705,7 +707,7 @@ void sim_step(uint32_t step_ms) {
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
                         Renderer.triggerNeedleSweep();
-                        printf("[SIM_PIN] System UNLOCKED with valid PIN code!\n");
+                        printf("[SIM_PIN] System UNLOCKED with valid PIN code! Alarm disarmed.\n");
                     } else {
                         g_telemetry.pin_error = true;
                         g_telemetry.pin_error_end_ms = g_sim_uptime_ms + 800;
@@ -724,6 +726,8 @@ void sim_step(uint32_t step_ms) {
                         if (len == 4) {
                             if (strcmp(g_telemetry.pin_entry, Settings.get().pin_code) == 0) {
                                 g_telemetry.is_locked = false;
+                                g_telemetry.theft_alarm_active = false;
+                                g_telemetry.locked_moved_meters = 0.0f;
                                 g_telemetry.pin_error = false;
                                 g_telemetry.pin_entry[0] = '\0';
                                 g_manual_throttle = 0.0f;
@@ -733,7 +737,7 @@ void sim_step(uint32_t step_ms) {
                                 Renderer.markScreenDirty();
                                 Renderer.invalidateCache();
                                 Renderer.triggerNeedleSweep();
-                                printf("[SIM_PIN] System UNLOCKED automatically upon 4 digits!\n");
+                                printf("[SIM_PIN] System UNLOCKED automatically upon 4 digits! Alarm disarmed.\n");
                             } else {
                                 g_telemetry.pin_error = true;
                                 g_telemetry.pin_error_end_ms = g_sim_uptime_ms + 800;
@@ -1216,6 +1220,8 @@ void sim_touch_event(int is_down, int x, int y) {
                 } else if (key == '#') {
                     if (strcmp(g_telemetry.pin_entry, Settings.get().pin_code) == 0) {
                         g_telemetry.is_locked = false;
+                        g_telemetry.theft_alarm_active = false;
+                        g_telemetry.locked_moved_meters = 0.0f;
                         g_telemetry.pin_error = false;
                         g_telemetry.pin_entry[0] = '\0';
                         g_manual_throttle = 0.0f;
@@ -1225,7 +1231,7 @@ void sim_touch_event(int is_down, int x, int y) {
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
                         Renderer.triggerNeedleSweep();
-                        printf("[SIM_PIN] System UNLOCKED with valid PIN code!\n");
+                        printf("[SIM_PIN] System UNLOCKED with valid PIN code! Alarm disarmed.\n");
                     } else {
                         g_telemetry.pin_error = true;
                         g_telemetry.pin_error_end_ms = g_sim_uptime_ms + 800;
@@ -1244,6 +1250,8 @@ void sim_touch_event(int is_down, int x, int y) {
                         if (len == 4) {
                             if (strcmp(g_telemetry.pin_entry, Settings.get().pin_code) == 0) {
                                 g_telemetry.is_locked = false;
+                                g_telemetry.theft_alarm_active = false;
+                                g_telemetry.locked_moved_meters = 0.0f;
                                 g_telemetry.pin_error = false;
                                 g_telemetry.pin_entry[0] = '\0';
                                 g_manual_throttle = 0.0f;
@@ -1253,7 +1261,7 @@ void sim_touch_event(int is_down, int x, int y) {
                                 Renderer.markScreenDirty();
                                 Renderer.invalidateCache();
                                 Renderer.triggerNeedleSweep();
-                                printf("[SIM_PIN] System UNLOCKED automatically upon 4 digits!\n");
+                                printf("[SIM_PIN] System UNLOCKED automatically upon 4 digits! Alarm disarmed.\n");
                             } else {
                                 g_telemetry.pin_error = true;
                                 g_telemetry.pin_error_end_ms = g_sim_uptime_ms + 800;
@@ -1975,6 +1983,57 @@ void sim_reset_setup_wizard() {
     Renderer.markScreenDirty();
     Renderer.invalidateCache();
     printf("[SIM_BACKEND] First-Time Setup Wizard RESET triggered.\n");
+}
+
+void sim_toggle_charging() {
+    if (g_telemetry.is_charging) {
+        g_telemetry.is_charging = false;
+        g_telemetry.current_amps = 0.0f;
+        g_telemetry.power_watts = 0.0f;
+        if (g_telemetry.screen == SCREEN_CHARGING_HUD) {
+            g_telemetry.screen = SCREEN_RIDE_DASH;
+        }
+        if (!Settings.get().pin_lock_enabled || !g_telemetry.is_locked) {
+            ModeManager::instance().setLocked(false);
+            ModeManager::instance().applyLimitsToVesc();
+        }
+        Renderer.markScreenDirty();
+        Renderer.invalidateCache();
+        printf("[SIM_BACKEND] Charger disconnected.\n");
+    } else {
+        g_telemetry.speed_kmh = 0.0f;
+        s_sim_speed_kmh = 0.0f;
+        g_telemetry.rpm = 0.0f;
+        g_manual_throttle = 0.0f;
+        g_telemetry.throttle_pct = 0.0f;
+        g_telemetry.is_charging = true;
+        g_telemetry.charge_start_ms = g_sim_uptime_ms;
+        g_telemetry.current_amps = -3.2f;
+        g_telemetry.voltage = 54.2f;
+        g_telemetry.power_watts = g_telemetry.voltage * g_telemetry.current_amps;
+        g_telemetry.charge_power_watts = fabsf(g_telemetry.power_watts);
+        g_telemetry.charge_current_amps = fabsf(g_telemetry.current_amps);
+        float missing_wh = ((100.0f - g_telemetry.battery_pct) / 100.0f) * 1300.0f;
+        if (missing_wh < 0.0f) missing_wh = 0.0f;
+        g_telemetry.charge_est_minutes = (missing_wh / g_telemetry.charge_power_watts) * 60.0f;
+        g_telemetry.screen = SCREEN_CHARGING_HUD;
+        Vesc.sendModeLimits(0.0f, 0.0f, 0.0f, 0.0f);
+        Renderer.markScreenDirty();
+        Renderer.invalidateCache();
+        printf("[SIM_BACKEND] Charger connected -> SCREEN_CHARGING_HUD active, Drive Locked (0A).\n");
+    }
+}
+
+void sim_trigger_theft_movement() {
+    if (!g_telemetry.is_locked) {
+        g_telemetry.is_locked = true;
+        ModeManager::instance().setLocked(true);
+    }
+    g_telemetry.locked_moved_meters += 2.8f;
+    g_telemetry.theft_alarm_active = true;
+    Vesc.triggerFocBeep(1800.0f, 0.35f, 8.0f);
+    Renderer.markScreenDirty();
+    printf("[SIM_BACKEND] Simulated theft movement: 2.8m -> Theft Alarm & FOC Siren ACTIVE!\n");
 }
 
 } // extern "C"
