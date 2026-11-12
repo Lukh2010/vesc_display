@@ -77,6 +77,10 @@ class SimTelemetry(ctypes.Structure):
         ("race_split_0_70", ctypes.c_float),
         ("g_force", ctypes.c_float),
         ("incline_deg", ctypes.c_float),
+        ("color_theme", ctypes.c_int32),
+        ("turbine_active", ctypes.c_int32),
+        ("turbine_freq", ctypes.c_float),
+        ("turbine_volts", ctypes.c_float),
     ]
 
 sim_lib.sim_init.restype = None
@@ -112,6 +116,11 @@ sim_lib.sim_set_manual_brake.restype = None
 sim_lib.sim_reset_setup_wizard.restype = None
 sim_lib.sim_toggle_charging.restype = None
 sim_lib.sim_trigger_theft_movement.restype = None
+
+sim_lib.sim_set_theme.argtypes = [ctypes.c_int]
+sim_lib.sim_set_theme.restype = None
+sim_lib.sim_cycle_theme.restype = None
+sim_lib.sim_toggle_turbine_sound.restype = None
 
 sim_lib.sim_get_frame_rgb24.argtypes = [ctypes.c_char_p]
 sim_lib.sim_get_frame_rgb24.restype = None
@@ -285,6 +294,8 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><kbd>Space / B</kbd> Boost</span>
   <span><kbd>L</kbd> Licht (Hauptschalter)</span>
   <span><kbd>X</kbd> Tuning / Legal</span>
+  <span><button onclick="fetch('/api/theme').catch(()=>{})" style="background:#0f172a; border:1px solid #ec4899; color:#f472b6; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🎨 Theme (T)</button></span>
+  <span><button onclick="fetch('/api/turbine_sound').catch(()=>{})" style="background:#0f172a; border:1px solid #38bdf8; color:#38bdf8; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚀 Turbinensound (U)</button></span>
   <span><kbd>C</kbd> <button onclick="fetch('/api/charging').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#10b981; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Laden (HUD)</button></span>
   <span><kbd>A</kbd> <button onclick="fetch('/api/theft_alarm').catch(()=>{})" style="background:#0f172a; border:1px solid #ef4444; color:#ef4444; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚨 Diebstahl-Alarm</button></span>
   <span><button onclick="fetch('/api/reset_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔄 Setup Wizard Reset</button></span>
@@ -366,7 +377,9 @@ HTML_PAGE = """<!DOCTYPE html>
     } else if (e.key === 'h' || e.key === 'H') {
       fetch('/api/nav?action=10');
     } else if (e.key === 't' || e.key === 'T') {
-      fetch('/api/nav?action=11');
+      fetch('/api/theme');
+    } else if (e.key === 'u' || e.key === 'U') {
+      fetch('/api/turbine_sound');
     } else if (e.key === 'r' || e.key === 'R') {
       fetch('/api/nav?action=16');
     } else if (e.key === 'x' || e.key === 'X') {
@@ -521,6 +534,26 @@ class WebDemoHandler(BaseHTTPRequestHandler):
         elif path == "/api/theft_alarm":
             with sim_lock:
                 sim_lib.sim_trigger_theft_movement()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
+        elif path == "/api/theme":
+            id_val = params.get("id", [None])[0]
+            with sim_lock:
+                if id_val is not None:
+                    sim_lib.sim_set_theme(int(id_val))
+                else:
+                    sim_lib.sim_cycle_theme()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
+        elif path == "/api/turbine_sound":
+            with sim_lock:
+                sim_lib.sim_toggle_turbine_sound()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -784,8 +817,10 @@ class DesktopDemoApp:
         self.root.bind("<H>", lambda e: self.toggle_hazard())
         self.root.bind("<l>", lambda e: self.toggle_lights())
         self.root.bind("<L>", lambda e: self.toggle_lights())
-        self.root.bind("<t>", lambda e: self.trigger_nav(NAV_SCREEN_STATS))
-        self.root.bind("<T>", lambda e: self.trigger_nav(NAV_SCREEN_STATS))
+        self.root.bind("<t>", lambda e: self.cycle_theme())
+        self.root.bind("<T>", lambda e: self.cycle_theme())
+        self.root.bind("<u>", lambda e: self.toggle_turbine())
+        self.root.bind("<U>", lambda e: self.toggle_turbine())
         self.root.bind("<r>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
         self.root.bind("<R>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
         self.root.bind("<Control-r>", lambda e: self.reset_wizard())
@@ -936,6 +971,14 @@ class DesktopDemoApp:
     def toggle_lights(self):
         with sim_lock:
             sim_lib.sim_toggle_lights()
+
+    def cycle_theme(self):
+        with sim_lock:
+            sim_lib.sim_cycle_theme()
+
+    def toggle_turbine(self):
+        with sim_lock:
+            sim_lib.sim_toggle_turbine_sound()
 
     def adjust_throttle(self, delta):
         with sim_lock:

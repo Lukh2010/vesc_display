@@ -27,6 +27,8 @@ struct DashSettings {
     bool    incline_gforce_enabled; // Enable IMU pitch/incline & G-force gauges (default true)
     bool    wifi_bridge_enabled;    // SoftAP WiFi bridge enabled (default false)
     bool    setup_completed;        // First-time setup wizard completed (default false)
+    uint8_t color_theme;            // DashTheme: 0=Cyber Cyan, 1=Synthwave, 2=Toxic Green, 3=Racing Red, 4=Clean Ice
+    bool    turbine_sound_enabled;  // FOC audio turbine whine while driving (default true)
 };
 
 class SettingsManager {

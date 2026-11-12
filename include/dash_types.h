@@ -24,6 +24,30 @@ enum DashboardStyle {
     STYLE_COUNT
 };
 
+// Selectable Dashboard Color Themes & Palettes
+enum DashTheme {
+    THEME_CYBER_CYAN   = 0,  // Electric Neon Cyan & Magenta (Default Cyberpunk)
+    THEME_SYNTHWAVE    = 1,  // Neon Pink / Sunset Orange / Deep Violet (80s Outrun)
+    THEME_TOXIC_GREEN  = 2,  // Toxic Viper Green / Electric Lime (Matrix)
+    THEME_RACING_RED   = 3,  // Corse Racing Red & Gold Amber (Ducati)
+    THEME_CLEAN_ICE    = 4,  // Minimalist Arctic Ice White & Silver (Tesla)
+    THEME_COUNT
+};
+
+// Theme Color Palette Definition
+struct ColorThemePalette {
+    uint8_t     id;
+    const char *name;
+    const char *subtitle;
+    uint16_t    primary;        // Main accent & speed gauge glow
+    uint16_t    secondary;      // Secondary highlight / mode / boost
+    uint16_t    track;          // Circular gauge & bar background tracks
+    uint16_t    surface;        // Card background
+    uint16_t    border;         // Card border outline
+    uint16_t    needle;         // Needle / tip indicator dot
+    uint16_t    text_accent;    // Text accent color
+};
+
 // Ride Modes (Eco, Sport, Race - Video Exact)
 enum RideMode {
     MODE_ECO    = 0,  // Efficient mode (Green)
@@ -240,6 +264,12 @@ struct DashTelemetry {
     float    charge_current_amps; // incoming charging current in Amps
     uint32_t charge_start_ms;     // timestamp when charging started
     float    charge_est_minutes;  // estimated minutes until full
+
+    // Active Color Theme & FOC Turbine Sound Engine
+    uint8_t  color_theme;          // DashTheme: 0=Cyber Cyan, 1=Synthwave, 2=Toxic Green, 3=Racing Red, 4=Clean Ice
+    bool     turbine_sound_active; // true when vehicle is driving and FOC acoustic engine is generating turbine sound
+    float    turbine_freq;         // Current turbine whine frequency (Hz, scales with speed)
+    float    turbine_volts;        // Current turbine acoustic modulation voltage (V, scales with speed)
 
     // Ride Modes & Hyper Boost
     RideMode ride_mode;        // Active Ride Mode: ECO, STREET, SPORT, RACE

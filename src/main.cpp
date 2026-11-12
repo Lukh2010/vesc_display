@@ -853,6 +853,55 @@ void loop() {
         Renderer.invalidateCache();
     }
 
+    // 2d. FOC Audio Turbine Sound Engine (Active while driving, pitch & volume scale with speed)
+    static uint32_t s_last_turbine_update_ms = 0;
+    static float s_last_turbine_freq = 0.0f;
+    static float s_last_turbine_volts = 0.0f;
+    static bool s_turbine_was_active = false;
+
+    telemetry.color_theme = Settings.get().color_theme;
+    bool turbine_enabled = Settings.get().turbine_sound_enabled;
+    bool is_driving = (!telemetry.is_locked && !telemetry.is_charging && !telemetry.theft_alarm_active && 
+                       telemetry.speed_kmh >= 1.2f);
+
+    if (turbine_enabled && is_driving) {
+        telemetry.turbine_sound_active = true;
+        // Pitch: starts around 280 Hz at 1.2 km/h, smoothly ramps up with speed to ~2800 Hz at 70 km/h
+        float t_freq = 280.0f + (telemetry.speed_kmh * 36.0f);
+        if (t_freq > 3200.0f) t_freq = 3200.0f;
+
+        // Volume (Modulation Voltage): "lauter desto schneller"
+        // At 1.2 km/h: gentle 1.2V hum; at 25 km/h: ~2.8V; at 50 km/h: ~4.8V; at 70+ km/h: up to 6.5V
+        float speed_factor = (telemetry.speed_kmh - 1.2f) / 60.0f;
+        if (speed_factor < 0.0f) speed_factor = 0.0f;
+        if (speed_factor > 1.0f) speed_factor = 1.0f;
+        float t_volts = 1.2f + (speed_factor * 5.3f);
+
+        telemetry.turbine_freq = t_freq;
+        telemetry.turbine_volts = t_volts;
+
+        // Throttled update to VESC (every 80ms or when frequency/volume changes noticeably)
+        // Does NOT alter motor limits, duty, throttle or braking at all!
+        if (now - s_last_turbine_update_ms >= 80 && 
+            (fabsf(t_freq - s_last_turbine_freq) >= 15.0f || fabsf(t_volts - s_last_turbine_volts) >= 0.2f)) {
+            s_last_turbine_update_ms = now;
+            s_last_turbine_freq = t_freq;
+            s_last_turbine_volts = t_volts;
+            s_turbine_was_active = true;
+            Vesc.playFocTone(0, t_freq, t_volts);
+        }
+    } else {
+        telemetry.turbine_sound_active = false;
+        telemetry.turbine_freq = 0.0f;
+        telemetry.turbine_volts = 0.0f;
+        if (s_turbine_was_active) {
+            s_turbine_was_active = false;
+            s_last_turbine_freq = 0.0f;
+            s_last_turbine_volts = 0.0f;
+            Vesc.stopFocTone(0);
+        }
+    }
+
     // 3. Render at steady 30 FPS rate on ST7262 16-bit parallel RGB panel (throttled to 5 FPS in bridge mode)
     uint32_t render_interval = Vesc.isBridgeActive() ? 200 : 33;
     if (now - last_render_ms >= render_interval) {

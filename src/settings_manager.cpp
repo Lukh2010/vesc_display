@@ -29,6 +29,8 @@ void SettingsManager::loadDefaults() {
     _settings.incline_gforce_enabled = true;
     _settings.wifi_bridge_enabled    = false;
     _settings.setup_completed        = false;
+    _settings.color_theme            = THEME_CYBER_CYAN;
+    _settings.turbine_sound_enabled  = true;
     _race_records.reset();
 }
 
@@ -73,6 +75,9 @@ void SettingsManager::begin() {
         _settings.incline_gforce_enabled = _prefs.getBool("inc_en", true);
         _settings.wifi_bridge_enabled    = _prefs.getBool("wifi_en", false);
         _settings.setup_completed        = _prefs.getBool("setup_done", false);
+        _settings.color_theme            = _prefs.getUChar("theme", THEME_CYBER_CYAN);
+        if (_settings.color_theme >= THEME_COUNT) _settings.color_theme = THEME_CYBER_CYAN;
+        _settings.turbine_sound_enabled  = _prefs.getBool("turb_en", true);
 
         _race_records.best_0_22_sec = _prefs.getFloat("rc_best22", 0.0f);
         _race_records.best_0_50_sec = _prefs.getFloat("rc_best50", 0.0f);
@@ -113,6 +118,8 @@ void SettingsManager::save() {
     _prefs.putBool("inc_en", _settings.incline_gforce_enabled);
     _prefs.putBool("wifi_en", _settings.wifi_bridge_enabled);
     _prefs.putBool("setup_done", _settings.setup_completed);
+    _prefs.putUChar("theme", _settings.color_theme);
+    _prefs.putBool("turb_en", _settings.turbine_sound_enabled);
     _prefs.putFloat("rc_best22", _race_records.best_0_22_sec);
     _prefs.putFloat("rc_best50", _race_records.best_0_50_sec);
     _prefs.putFloat("rc_best70", _race_records.best_0_70_sec);
