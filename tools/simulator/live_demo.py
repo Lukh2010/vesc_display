@@ -428,6 +428,19 @@ class WebDemoHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(get_captive_portal_html().encode("utf-8"))
 
+        elif path == "/snapshot.jpg":
+            with latest_jpeg_lock:
+                frame = latest_jpeg_frame
+            if frame:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-cache, no-store")
+                self.end_headers()
+                self.wfile.write(frame)
+            else:
+                self.send_response(503)
+                self.end_headers()
+
         elif path == "/stream.mjpg":
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
