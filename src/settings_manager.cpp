@@ -25,6 +25,10 @@ void SettingsManager::loadDefaults() {
     _settings.race_split1_kmh        = 22;
     _settings.race_split2_kmh        = 50;
     _settings.race_split3_kmh        = 70;
+    _settings.gps_enabled            = true;
+    _settings.incline_gforce_enabled = true;
+    _settings.wifi_bridge_enabled    = false;
+    _settings.setup_completed        = false;
     _race_records.reset();
 }
 
@@ -65,6 +69,11 @@ void SettingsManager::begin() {
         if (_settings.race_split2_kmh < 15 || _settings.race_split2_kmh > 90) _settings.race_split2_kmh = 50;
         if (_settings.race_split3_kmh < 25 || _settings.race_split3_kmh > 130) _settings.race_split3_kmh = 70;
 
+        _settings.gps_enabled            = _prefs.getBool("gps_en", true);
+        _settings.incline_gforce_enabled = _prefs.getBool("inc_en", true);
+        _settings.wifi_bridge_enabled    = _prefs.getBool("wifi_en", false);
+        _settings.setup_completed        = _prefs.getBool("setup_done", false);
+
         _race_records.best_0_22_sec = _prefs.getFloat("rc_best22", 0.0f);
         _race_records.best_0_50_sec = _prefs.getFloat("rc_best50", 0.0f);
         _race_records.best_0_70_sec = _prefs.getFloat("rc_best70", 0.0f);
@@ -100,6 +109,10 @@ void SettingsManager::save() {
     _prefs.putUChar("rc_sp1", _settings.race_split1_kmh);
     _prefs.putUChar("rc_sp2", _settings.race_split2_kmh);
     _prefs.putUChar("rc_sp3", _settings.race_split3_kmh);
+    _prefs.putBool("gps_en", _settings.gps_enabled);
+    _prefs.putBool("inc_en", _settings.incline_gforce_enabled);
+    _prefs.putBool("wifi_en", _settings.wifi_bridge_enabled);
+    _prefs.putBool("setup_done", _settings.setup_completed);
     _prefs.putFloat("rc_best22", _race_records.best_0_22_sec);
     _prefs.putFloat("rc_best50", _race_records.best_0_50_sec);
     _prefs.putFloat("rc_best70", _race_records.best_0_70_sec);

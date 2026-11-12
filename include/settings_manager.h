@@ -23,6 +23,10 @@ struct DashSettings {
     uint8_t race_split1_kmh;        // Target speed for Split 1 (default 22 km/h)
     uint8_t race_split2_kmh;        // Target speed for Split 2 (default 50 km/h)
     uint8_t race_split3_kmh;        // Target speed for Split 3 (default 70 km/h)
+    bool    gps_enabled;            // Enable ATGM336H GPS & live clock (default true)
+    bool    incline_gforce_enabled; // Enable IMU pitch/incline & G-force gauges (default true)
+    bool    wifi_bridge_enabled;    // SoftAP WiFi bridge enabled (default false)
+    bool    setup_completed;        // First-time setup wizard completed (default false)
 };
 
 class SettingsManager {

@@ -11,6 +11,7 @@ enum DashboardScreen {
     SCREEN_VESC_BRIDGE   = 4,  // Transparent USB CDC <-> UART Bridge for VESC Tool
     SCREEN_WIFI_BRIDGE   = 5,  // Transparent Wi-Fi TCP <-> UART Bridge for VESC Tool
     SCREEN_RACE_TIMER    = 6,  // Dragy / Launch Acceleration Timer Screen
+    SCREEN_SETUP_WIZARD  = 7,  // First-Time Setup & Onboarding Wizard
     SCREEN_ENERGY_STATS  = SCREEN_LIGHTS,
     SCREEN_PERF_STATS    = SCREEN_RT_GRAPHS,
     SCREEN_COUNT
@@ -272,6 +273,14 @@ struct DashTelemetry {
     float        race_split_0_70;
     RaceRecords  race_records;
     RaceDynoData race_dyno;
+
+    // Feature Toggles & First-Time Onboarding
+    bool     gps_enabled;            // true = show clock at top & satellite icon on fix
+    bool     incline_gforce_enabled; // true = show bottom-left G-force & pitch dials
+    bool     wifi_bridge_enabled;    // true = WiFi bridge softAP mode enabled
+    bool     setup_completed;        // true = First-time wizard finished
+    uint8_t  wizard_step;            // 0=Welcome & Tuning guide, 1=PIN setup, 2=Hardware toggles
+    char     wizard_pin_buf[8];      // Keypad input buffer in wizard
 
     // System Status
     DashboardScreen screen;    // Currently active screen

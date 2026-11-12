@@ -20,9 +20,10 @@ public:
     void handleMenuNav(NavAction action, DashTelemetry &telemetry);
     bool handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
     bool handleSettingsSliderDrag(int16_t cx, int16_t cy, DashTelemetry &telemetry);
+    bool handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
     bool isInEditMode() const { return false; }
     uint8_t getSettingsTab() const { return _settings_tab_idx; }
-    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 5) ? tab : 0; _menu_dirty = true; }
+    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 6) ? tab : 0; _menu_dirty = true; }
 
     // Race / Dragy Timer Logic
     void updateRaceTimer(DashTelemetry &telemetry, uint32_t now);
@@ -68,6 +69,10 @@ private:
     void drawRaceDynoModal(const DashTelemetry &telemetry);
     void drawPinChangeModal();
 
+    // Screen 7: First-Time Setup & Onboarding Wizard
+    void initSetupWizard(const DashTelemetry &telemetry);
+    void renderSetupWizard(const DashTelemetry &telemetry);
+
     // PIN-Lockscreen & VESC Alarm Banner (Requirements 1 & 7)
     void renderPinLockScreen(const DashTelemetry &telemetry);
     void drawFaultBanner(uint8_t fault_code);
@@ -84,7 +89,7 @@ private:
     bool            _mode_banner_active;
 
     // Menu / Settings Configurator State
-    uint8_t  _settings_tab_idx; // 0 = ECO, 1 = SPORT, 2 = RACE, 3 = DRAGY, 4 = PIN
+    uint8_t  _settings_tab_idx; // 0 = ECO, 1 = SPORT, 2 = RACE, 3 = DRAGY, 4 = DASH, 5 = PIN
     uint8_t  _last_rendered_tab;
     bool     _settings_inited;
     bool     _menu_dirty;
@@ -137,12 +142,16 @@ private:
         uint8_t gps_sats;
         bool gps_valid;
         bool use_gps_speed;
+        bool gps_enabled;
+        bool incline_gforce_enabled;
 
         void invalidate() {
             clock_str[0] = '\0';
             gps_sats = 255;
             gps_valid = false;
             use_gps_speed = false;
+            gps_enabled = true;
+            incline_gforce_enabled = true;
             speed = -999;
             duty_x10 = -999;
             duty_fill_w = -1;
@@ -274,6 +283,11 @@ private:
     char     _pin_modal_buf[8];
     bool     _pin_modal_success;
     uint32_t _pin_modal_success_ms;
+
+    // Wizard State
+    uint8_t  _wizard_step;       // 0=Welcome, 1=PIN, 2=Hardware
+    char     _wizard_pin_buf[8]; // PIN input buffer
+    bool     _wizard_inited;
 };
 
 extern DashboardRenderer Renderer;
