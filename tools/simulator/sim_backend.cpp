@@ -596,7 +596,9 @@ void sim_init() {
         g_telemetry.screen = SCREEN_SETUP_WIZARD;
         g_telemetry.is_locked = false;
         ModeManager::instance().setLocked(false);
-        Renderer.initSetupWizard(g_telemetry);
+        Renderer.resetSetupWizard();
+        Renderer.resetSetupWizard();
+    Renderer.initSetupWizard(g_telemetry);
         printf("[SIM_BACKEND] First-Time Onboarding Wizard ACTIVE.\n");
     } else if (Settings.get().pin_lock_enabled) {
         g_telemetry.is_locked = true;
@@ -1968,6 +1970,7 @@ void sim_reset_setup_wizard() {
     g_telemetry.screen = SCREEN_SETUP_WIZARD;
     g_telemetry.is_locked = false;
     ModeManager::instance().setLocked(false);
+    Renderer.resetSetupWizard();
     Renderer.initSetupWizard(g_telemetry);
     Renderer.markScreenDirty();
     Renderer.invalidateCache();
