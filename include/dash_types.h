@@ -137,12 +137,51 @@ struct TripStatistics {
     }
 };
 
+// GPS & BDS (BeiDou) Satellite Telemetry
+struct GpsTelemetry {
+    bool     valid;          // true if 3D satellite fix is active (satellites >= 4)
+    float    speed_kmh;      // Sat ground speed in km/h
+    float    altitude_m;     // Altitude in meters above sea level
+    float    hdop;           // Horizontal Dilution of Precision
+    uint8_t  satellites;     // Tracked satellites count (GPS + BDS)
+    double   latitude;       // Degrees latitude
+    double   longitude;      // Degrees longitude
+    uint8_t  hour;           // Local hour (0-23)
+    uint8_t  minute;         // Minute (0-59)
+    uint8_t  second;         // Second (0-59)
+    uint16_t year;           // Year (e.g. 2026)
+    uint8_t  month;          // Month (1-12)
+    uint8_t  day;            // Day (1-31)
+    uint32_t last_fix_ms;    // Timestamp of last valid NMEA sentence
+
+    void reset() {
+        valid = false;
+        speed_kmh = 0.0f;
+        altitude_m = 0.0f;
+        hdop = 99.0f;
+        satellites = 0;
+        latitude = 0.0;
+        longitude = 0.0;
+        hour = 12;
+        minute = 0;
+        second = 0;
+        year = 2026;
+        month = 1;
+        day = 1;
+        last_fix_ms = 0;
+    }
+};
+
 #define WAVE_HISTORY_LEN 60
 
 // Core Telemetry Data Structure
 struct DashTelemetry {
     // Speed & Inverter State
-    float speed_kmh;           // Vehicle speed (km/h)
+    float speed_kmh;           // Active display speed (GPS or VESC fallback)
+    float vesc_motor_speed;    // Motor ERPM-calculated speed from VESC
+    bool  use_gps_speed;       // true when GPS has 3D fix and priority
+    char  clock_str[12];       // Formatted time "HH:MM"
+    GpsTelemetry gps;          // Live ATGM336H GPS+BDS Data
     float g_force;             // Longitudinal acceleration G-force (+/- G)
     float incline_deg;         // Vehicle pitch / incline angle (+/- deg)
     float duty_cycle_pct;      // Inverter Duty Cycle (0.0% to 120.0%, >100% = Field Weakening)

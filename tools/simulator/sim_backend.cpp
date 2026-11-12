@@ -15,6 +15,7 @@
 #include "buttons.h"
 #include "vesc_uart.h"
 #include "fault_manager.h"
+#include "gps_tracker.h"
 #include <string>
 
 
@@ -1078,6 +1079,7 @@ void sim_step(uint32_t step_ms) {
 
     // Dashboard polls Virtual VESC, receives response packets, validates CRC, parses telemetry
     Vesc.update(g_telemetry);
+    GpsTracker::instance().update(g_telemetry);
     g_virtual_vesc.process();
     g_tcp_server.update(g_virtual_vesc);
 

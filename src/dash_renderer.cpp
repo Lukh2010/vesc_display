@@ -663,6 +663,49 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _last_arc_angle = target_angle;
     }
 
+    // 1b. Top Status Header: Clock & Live GPS/BDS Satellite Indicator
+    bool clock_changed = strcmp(_cache.clock_str, telemetry.clock_str) != 0;
+    bool gps_changed = (_cache.gps_sats != telemetry.gps.satellites) ||
+                       (_cache.gps_valid != telemetry.gps.valid) ||
+                       (_cache.use_gps_speed != telemetry.use_gps_speed);
+
+    if (!_hyper_inited || clock_changed || gps_changed) {
+        strncpy(_cache.clock_str, telemetry.clock_str, sizeof(_cache.clock_str));
+        _cache.gps_sats = telemetry.gps.satellites;
+        _cache.gps_valid = telemetry.gps.valid;
+        _cache.use_gps_speed = telemetry.use_gps_speed;
+
+        // Clear top header area (x=130 to 400, y=14 to 50)
+        _canvas->fillRect(130, 14, 270, 36, COLOR_BG);
+
+        // Render Clock ("14:35") in bold clean font
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextSize(1);
+        _canvas->setTextDatum(textdatum_t::middle_left);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+        _canvas->drawString(telemetry.clock_str[0] ? telemetry.clock_str : "--:--", 136, 32);
+
+        // Render Satellite Pill/Badge
+        int satX = 236, satY = 20, satW = 145, satH = 26;
+        if (telemetry.gps.valid && telemetry.gps.satellites >= 4) {
+            _canvas->fillRoundRect(satX, satY, satW, satH, 6, 0x01E8); // Dark Teal
+            _canvas->drawRoundRect(satX, satY, satW, satH, 6, COLOR_CYAN);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setTextColor(COLOR_CYAN, 0x01E8);
+            char satBuf[24];
+            snprintf(satBuf, sizeof(satBuf), "SAT: %d (GPS)", telemetry.gps.satellites);
+            _canvas->drawString(satBuf, satX + satW / 2, satY + satH / 2);
+        } else {
+            _canvas->fillRoundRect(satX, satY, satW, satH, 6, 0x18C3); // Dark Gray
+            _canvas->drawRoundRect(satX, satY, satW, satH, 6, 0x4A69);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, 0x18C3);
+            _canvas->drawString("SAT: SUCHE...", satX + satW / 2, satY + satH / 2);
+        }
+    }
+
     // 2. Rider Tag (if set)
     if (telemetry.rider_tag[0] != '\0' && !_hyper_inited) {
         _canvas->setFont(&fonts::Font4);
@@ -672,11 +715,11 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->drawString(telemetry.rider_tag, cx, 110);
     }
 
-    // 3. Hero Digital Speed Readout (Only redrawn when integer speed or sweep changes)
+    // 3. Hero Digital Speed Readout (Only redrawn when integer speed, sweep or source changes)
     int cur_spd_int = (int)(spd + 0.5f);
-    if (!_hyper_inited || cur_spd_int != _cache.speed || _is_sweeping || telemetry.boost_active != _cache.boost_active) {
+    if (!_hyper_inited || cur_spd_int != _cache.speed || _is_sweeping || telemetry.boost_active != _cache.boost_active || telemetry.use_gps_speed != _cache.use_gps_speed) {
         _cache.speed = cur_spd_int;
-        _canvas->fillRect(cx - 100, 140, 200, 100, COLOR_BG);
+        _canvas->fillRect(cx - 100, 140, 200, 115, COLOR_BG);
         char spdBuf[16];
         snprintf(spdBuf, sizeof(spdBuf), "%d", cur_spd_int);
         uint16_t spdCol = telemetry.boost_active ? COLOR_CYAN : ((spd >= 85.0f) ? COLOR_RED : COLOR_WHITE);
@@ -687,6 +730,16 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->setTextDatum(textdatum_t::top_center);
         _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
         _canvas->drawString("km/h", cx, 245);
+
+        // Speed source indicator under "km/h"
+        _canvas->setFont(&fonts::Font2);
+        if (telemetry.use_gps_speed) {
+            _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
+            _canvas->drawString("GPS SPEED", cx, 272);
+        } else {
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
+            _canvas->drawString("VESC MOTOR", cx, 272);
+        }
     }
 
     // 4. Controller & Motor Thermals (Centered under Speedometer dial)

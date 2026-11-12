@@ -398,8 +398,12 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 float mech_rpm = fabsf((float)erpm / (float)pole_pairs);
                 telemetry.rpm = mech_rpm;
                 float wheel_rpm = mech_rpm / gear_ratio;
-                telemetry.speed_kmh = (wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f;
-                if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
+                float v_spd = (wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f;
+                if (v_spd < 0.8f) v_spd = 0.0f;
+                telemetry.vesc_motor_speed = v_spd;
+                if (!telemetry.use_gps_speed) {
+                    telemetry.speed_kmh = v_spd;
+                }
                 telemetry.phase_amps = mot_i;
                 telemetry.duty_cycle_pct = duty;
 
@@ -758,8 +762,12 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         telemetry.amphours_used  = ah_used / 10000.0f;
 
         // Ground speed from VESC (injected by Port 4 LispBM wheel sensor override)
-        telemetry.speed_kmh      = fabsf((speed_m_s / 1000.0f) * 3.6f);
-        if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
+        float v_spd_setup = fabsf((speed_m_s / 1000.0f) * 3.6f);
+        if (v_spd_setup < 0.8f) v_spd_setup = 0.0f;
+        telemetry.vesc_motor_speed = v_spd_setup;
+        if (!telemetry.use_gps_speed) {
+            telemetry.speed_kmh = v_spd_setup;
+        }
 
         int32_t rel_dist         = dist_m - _dist_trip_offset;
         telemetry.trip_km        = fabsf(((float)rel_dist / 1000.0f) / 1000.0f);
@@ -828,8 +836,12 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         float mech_rpm = (float)erpm / (float)pole_pairs;
         telemetry.rpm = fabsf(mech_rpm);
         float wheel_rpm = mech_rpm / gear_ratio;
-        telemetry.speed_kmh = fabsf((wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f);
-        if (telemetry.speed_kmh < 0.8f) telemetry.speed_kmh = 0.0f;
+        float v_spd_std = fabsf((wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f);
+        if (v_spd_std < 0.8f) v_spd_std = 0.0f;
+        telemetry.vesc_motor_speed = v_spd_std;
+        if (!telemetry.use_gps_speed) {
+            telemetry.speed_kmh = v_spd_std;
+        }
 
         // Odometer & Trip from tachometer step counts
         static bool s_uart_tacho_init = false;
@@ -1390,5 +1402,82 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     }
 #endif
 }
+
+void VescHandler::sendGnssData(const GpsTelemetry &gps) {
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (!gps.valid) return;
+
+    // 1. CAN_PACKET_GNSS_TIME (ID 59)
+    // ms_today (int32), yy (int16), mo (uint8), dd (uint8)
+    twai_message_t msg_time;
+    msg_time.extd = 1;
+    msg_time.identifier = (59 << 8) | VESC_CAN_ID_DEFAULT;
+    msg_time.data_length_code = 8;
+    int32_t ms_today = ((int32_t)gps.hour * 3600 + (int32_t)gps.minute * 60 + (int32_t)gps.second) * 1000;
+    msg_time.data[0] = (ms_today >> 24) & 0xFF;
+    msg_time.data[1] = (ms_today >> 16) & 0xFF;
+    msg_time.data[2] = (ms_today >> 8) & 0xFF;
+    msg_time.data[3] = ms_today & 0xFF;
+    int16_t yy = (int16_t)gps.year;
+    msg_time.data[4] = (yy >> 8) & 0xFF;
+    msg_time.data[5] = yy & 0xFF;
+    msg_time.data[6] = gps.month;
+    msg_time.data[7] = gps.day;
+    twai_transmit(&msg_time, pdMS_TO_TICKS(10));
+
+    // 2. CAN_PACKET_GNSS_LAT (ID 60)
+    // int64_t lat scaled by 1e16
+    twai_message_t msg_lat;
+    msg_lat.extd = 1;
+    msg_lat.identifier = (60 << 8) | VESC_CAN_ID_DEFAULT;
+    msg_lat.data_length_code = 8;
+    int64_t lat_scaled = (int64_t)(gps.latitude * 1e16);
+    for (int i = 0; i < 8; i++) {
+        msg_lat.data[i] = (lat_scaled >> (56 - (i * 8))) & 0xFF;
+    }
+    twai_transmit(&msg_lat, pdMS_TO_TICKS(10));
+
+    // 3. CAN_PACKET_GNSS_LON (ID 61)
+    // int64_t lon scaled by 1e16
+    twai_message_t msg_lon;
+    msg_lon.extd = 1;
+    msg_lon.identifier = (61 << 8) | VESC_CAN_ID_DEFAULT;
+    msg_lon.data_length_code = 8;
+    int64_t lon_scaled = (int64_t)(gps.longitude * 1e16);
+    for (int i = 0; i < 8; i++) {
+        msg_lon.data[i] = (lon_scaled >> (56 - (i * 8))) & 0xFF;
+    }
+    twai_transmit(&msg_lon, pdMS_TO_TICKS(10));
+
+    // 4. CAN_PACKET_GNSS_ALT_SPEED_HDOP (ID 62)
+    // height (float32_auto), speed (float16 * 100 in m/s), hdop (float16 * 100)
+    twai_message_t msg_dyn;
+    msg_dyn.extd = 1;
+    msg_dyn.identifier = (62 << 8) | VESC_CAN_ID_DEFAULT;
+    msg_dyn.data_length_code = 8;
+
+    float h = gps.altitude_m;
+    uint32_t h_raw;
+    memcpy(&h_raw, &h, sizeof(h_raw));
+    msg_dyn.data[0] = (h_raw >> 24) & 0xFF;
+    msg_dyn.data[1] = (h_raw >> 16) & 0xFF;
+    msg_dyn.data[2] = (h_raw >> 8) & 0xFF;
+    msg_dyn.data[3] = h_raw & 0xFF;
+
+    // speed in m/s (1 km/h = 1.0 / 3.6 m/s) * 100.0
+    float speed_ms = (gps.speed_kmh / 3.6f) * 100.0f;
+    int16_t spd_raw = (int16_t)speed_ms;
+    msg_dyn.data[4] = (spd_raw >> 8) & 0xFF;
+    msg_dyn.data[5] = spd_raw & 0xFF;
+
+    // hdop * 100.0
+    int16_t hdop_raw = (int16_t)(gps.hdop * 100.0f);
+    msg_dyn.data[6] = (hdop_raw >> 8) & 0xFF;
+    msg_dyn.data[7] = hdop_raw & 0xFF;
+
+    twai_transmit(&msg_dyn, pdMS_TO_TICKS(10));
+#endif
+}
+
 
 

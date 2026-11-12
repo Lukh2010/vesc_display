@@ -25,6 +25,7 @@ g++ -std=c++17 -O2 -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   src/buttons.cpp \
   src/mode_manager.cpp \
   src/fault_manager.cpp \
+  src/gps_tracker.cpp \
   src/vesc_uart.cpp \
   tools/simulator/virtual_vesc/vesc_packet.cpp \
   tools/simulator/virtual_vesc/virtual_vesc.cpp \
@@ -59,6 +60,7 @@ g++ -std=c++17 -O2 -fPIC -shared -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   src/buttons.cpp \
   src/mode_manager.cpp \
   src/fault_manager.cpp \
+  src/gps_tracker.cpp \
   src/vesc_uart.cpp \
   tools/simulator/virtual_vesc/vesc_packet.cpp \
   tools/simulator/virtual_vesc/virtual_vesc.cpp \
