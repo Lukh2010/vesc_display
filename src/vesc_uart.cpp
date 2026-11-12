@@ -1218,6 +1218,48 @@ void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
                   freq, duration_s, voltage, lisp_cmd);
 }
 
+void VescHandler::playFocTone(uint8_t channel, float freq, float voltage) {
+    char lisp_cmd[64];
+    if (freq <= 0.0f || voltage <= 0.0f) {
+        snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-play-stop)");
+    } else {
+        snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-play-tone %u %.0f %.1f)", channel, freq, voltage);
+    }
+
+#if !SIMULATION_MODE
+    size_t slen = strlen(lisp_cmd);
+    if (slen > 60) slen = 60;
+    uint8_t payload[64];
+    payload[0] = 138; // COMM_LISP_REPL_CMD (0x8A)
+    memcpy(&payload[1], lisp_cmd, slen);
+
+    if (_transport) {
+        uint8_t packet[70];
+        packet[0] = 0x02;
+        packet[1] = (uint8_t)(slen + 1);
+        memcpy(&packet[2], payload, slen + 1);
+        uint16_t tcrc = crc16(payload, slen + 1);
+        packet[3 + slen] = (uint8_t)(tcrc >> 8);
+        packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
+        packet[5 + slen] = 0x03;
+        _transport->write(packet, slen + 6);
+    }
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (s_can_initialized) {
+        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
+        if (VESC_CAN_ID_DEFAULT != 0) {
+            sendVescCanBuffer(0, payload, slen + 1);
+        }
+    }
+#endif
+#endif
+}
+
+void VescHandler::stopFocTone(uint8_t channel) {
+    playFocTone(channel, 0.0f, 0.0f);
+}
+
 void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, float max_battery_amps, float max_phase_amps, float cutoff_start, float cutoff_end) {
     UartLock lock;
     // 1. Calculate ERPM from speed limit

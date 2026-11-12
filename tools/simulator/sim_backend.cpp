@@ -103,6 +103,10 @@ struct SimTelemetryExport {
     float race_split_0_70;
     float g_force;
     float incline_deg;
+    int32_t color_theme;
+    int32_t turbine_active;
+    float turbine_freq;
+    float turbine_volts;
 };
 #pragma pack(pop)
 
@@ -1194,6 +1198,28 @@ void sim_step(uint32_t step_ms) {
         g_telemetry.power_history[WAVE_HISTORY_LEN - 1] = g_telemetry.power_watts;
     }
 
+    // FOC Audio Turbine Sound Simulation
+    g_telemetry.color_theme = Settings.get().color_theme;
+    bool turbine_enabled = Settings.get().turbine_sound_enabled;
+    bool is_driving = (!g_telemetry.is_locked && !g_telemetry.is_charging && !g_telemetry.theft_alarm_active && 
+                       g_telemetry.speed_kmh >= 1.2f);
+
+    if (turbine_enabled && is_driving) {
+        g_telemetry.turbine_sound_active = true;
+        float t_freq = 280.0f + (g_telemetry.speed_kmh * 36.0f);
+        if (t_freq > 3200.0f) t_freq = 3200.0f;
+        float speed_factor = (g_telemetry.speed_kmh - 1.2f) / 60.0f;
+        if (speed_factor < 0.0f) speed_factor = 0.0f;
+        if (speed_factor > 1.0f) speed_factor = 1.0f;
+        float t_volts = 1.2f + (speed_factor * 5.3f);
+        g_telemetry.turbine_freq = t_freq;
+        g_telemetry.turbine_volts = t_volts;
+    } else {
+        g_telemetry.turbine_sound_active = false;
+        g_telemetry.turbine_freq = 0.0f;
+        g_telemetry.turbine_volts = 0.0f;
+    }
+
     // 3. Render frame to sprite
     Renderer.render(g_telemetry);
 }
@@ -1794,6 +1820,10 @@ void sim_get_telemetry(SimTelemetryExport *out) {
     out->race_split_0_70 = g_telemetry.race_split_0_70;
     out->g_force = g_telemetry.g_force;
     out->incline_deg = g_telemetry.incline_deg;
+    out->color_theme = (int32_t)Settings.get().color_theme;
+    out->turbine_active = g_telemetry.turbine_sound_active ? 1 : 0;
+    out->turbine_freq = g_telemetry.turbine_freq;
+    out->turbine_volts = g_telemetry.turbine_volts;
 }
 
 void sim_get_config_json(char *out_buf, int max_len) {
@@ -2081,6 +2111,27 @@ void sim_trigger_theft_movement() {
     Vesc.triggerFocBeep(1800.0f, 0.35f, 8.0f);
     Renderer.markScreenDirty();
     printf("[SIM_BACKEND] Simulated theft movement: 2.8m -> Theft Alarm & FOC Siren ACTIVE!\n");
+}
+
+void sim_set_theme(int theme_id) {
+    if (theme_id < 0 || theme_id >= THEME_COUNT) theme_id = 0;
+    Settings.get().color_theme = (uint8_t)theme_id;
+    Settings.save();
+    g_telemetry.color_theme = (uint8_t)theme_id;
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    printf("[SIM_BACKEND] Theme set to: %d (%s)\n", theme_id, DashboardRenderer::getThemePalette(theme_id).name);
+}
+
+void sim_cycle_theme() {
+    uint8_t next_t = (Settings.get().color_theme + 1) % THEME_COUNT;
+    sim_set_theme(next_t);
+}
+
+void sim_toggle_turbine_sound() {
+    Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
+    Settings.save();
+    printf("[SIM_BACKEND] Turbine Sound toggled: %s\n", Settings.get().turbine_sound_enabled ? "ENABLED" : "DISABLED");
 }
 
 } // extern "C"

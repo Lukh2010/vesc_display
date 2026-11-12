@@ -26,6 +26,84 @@ static const uint16_t COLOR_RACE          = 0xFA08; // Hot Pink / Race Red (from
 static const uint16_t COLOR_TRACK_TEAL    = 0x3BF0; // Muted Gauge Track Teal (RGB 59, 126, 128)
 static const uint16_t COLOR_NEEDLE        = 0xFC00; // High-Visibility Sport Orange-Red
 
+// Selectable High-Contrast Color Themes & Palettes
+static const ColorThemePalette s_theme_palettes[THEME_COUNT] = {
+    // 0: CYBER CYAN (Default Cyberpunk)
+    {
+        THEME_CYBER_CYAN,
+        "CYBER CYAN",
+        "Neon Cyan & Magenta Glow",
+        0x07FF, // primary: Electric Cyan
+        0xFA08, // secondary: Hot Magenta
+        0x1A4F, // track: Muted Teal Slate
+        0x18E4, // surface: Slate Charcoal
+        0x2965, // border: Cyan Slate
+        0xFC00, // needle: Orange-Red
+        0x07FF  // text_accent: Cyan
+    },
+    // 1: SYNTHWAVE (80s Outrun Sunset)
+    {
+        THEME_SYNTHWAVE,
+        "SYNTHWAVE",
+        "Neon Pink & Sunset Orange",
+        0xF81F, // primary: Hot Neon Pink
+        0xFD20, // secondary: Sunset Orange
+        0x4809, // track: Dark Violet Track
+        0x2004, // surface: Deep Night Violet
+        0x8010, // border: Violet-Pink Border
+        0xFFE0, // needle: Laser Yellow
+        0xF81F  // text_accent: Neon Pink
+    },
+    // 2: TOXIC GREEN (Matrix / Viper Green)
+    {
+        THEME_TOXIC_GREEN,
+        "TOXIC GREEN",
+        "Viper Green & Electric Lime",
+        0x07E0, // primary: Viper Green
+        0x9FE0, // secondary: Electric Lime
+        0x0A20, // track: Dark Forest Track
+        0x0922, // surface: Deep Obsidian Emerald
+        0x1B02, // border: Emerald Border
+        0x07FF, // needle: Cyan Needle
+        0x07E0  // text_accent: Viper Green
+    },
+    // 3: RACING RED (Ferrari / Ducati Crimson)
+    {
+        THEME_RACING_RED,
+        "RACING RED",
+        "Ducati Crimson & Gold Amber",
+        0xF800, // primary: Corse Racing Red
+        0xFDC0, // secondary: Gold Amber
+        0x4000, // track: Deep Maroon Track
+        0x1842, // surface: Dark Charcoal Carbon
+        0x8000, // border: Crimson Border
+        0xFFFF, // needle: Pure White Racing Needle
+        0xF800  // text_accent: Racing Red
+    },
+    // 4: CLEAN ICE (Tesla / Minimalist Arctic White)
+    {
+        THEME_CLEAN_ICE,
+        "CLEAN ICE",
+        "Arctic White & Silver Slate",
+        0xFFFF, // primary: Pure Arctic White
+        0x8E7F, // secondary: Sky Ice Blue
+        0x31E7, // track: Dark Platinum Track
+        0x18C3, // surface: Minimalist Dark Slate
+        0x5ACB, // border: Ice Silver Border
+        0x07FF, // needle: Ice Blue Needle
+        0xFFFF  // text_accent: Pure White
+    }
+};
+
+const ColorThemePalette& DashboardRenderer::getThemePalette(uint8_t theme_id) {
+    if (theme_id >= THEME_COUNT) theme_id = THEME_CYBER_CYAN;
+    return s_theme_palettes[theme_id];
+}
+
+const ColorThemePalette& DashboardRenderer::currentTheme() const {
+    return getThemePalette(Settings.get().color_theme);
+}
+
 // Dynamic Color Helpers
 static inline uint16_t getPowerColor(float watts) {
     if (watts >= 1500.0f) return COLOR_RED;
@@ -574,13 +652,14 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     }
 
     // 1. Speedometer Gauge Background Arc (270 degree sweep, open at bottom: 135° to 405°)
-    _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, COLOR_TRACK_TEAL);
+    const ColorThemePalette &pal = currentTheme();
+    _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
     int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
     int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
     int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
     int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_TRACK_TEAL);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 13, COLOR_TRACK_TEAL);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 13, pal.track);
 
     // Static label "km/h" under hero speed
     _canvas->setFont(&fonts::Font4);
@@ -601,15 +680,15 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     // Static label "DUTY"
     _canvas->setFont(&fonts::Font4);
     _canvas->setTextSize(1);
-    _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
+    _canvas->setTextColor(pal.primary, COLOR_BG);
     _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->drawString("DUTY", 445, 124);
 
     // Static duty track bar
-    _canvas->fillRoundRect(445, 150, 320, 10, 5, COLOR_TRACK_TEAL);
+    _canvas->fillRoundRect(445, 150, 320, 10, 5, pal.track);
 
     // Static battery track bar
-    _canvas->fillRoundRect(445, 218, 320, 14, 7, COLOR_TRACK_TEAL);
+    _canvas->fillRoundRect(445, 218, 320, 14, 7, pal.track);
 
     // Static label "RESTREICHWEITE" & "TRIP"
     _canvas->setFont(&fonts::Font2);
@@ -670,9 +749,10 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     float frac = spd_anim / 100.0f;
     if (frac > 1.0f) frac = 1.0f;
 
-    uint16_t arcCol = COLOR_WHITE;
+    const ColorThemePalette &pal = currentTheme();
+    uint16_t arcCol = pal.primary;
     if (telemetry.boost_active) {
-        arcCol = COLOR_CYAN;
+        arcCol = pal.secondary;
     } else if (spd >= 85.0f) {
         arcCol = COLOR_RED;
     } else if (spd >= 60.0f) {
@@ -684,16 +764,16 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
     // 1. Speedometer Active Arc: Incremental differential update (Zero flicker / no tripping!)
     if (!_hyper_inited) {
-        _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, COLOR_TRACK_TEAL);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_TRACK_TEAL);
-        _canvas->fillCircle(e_cap_x, e_cap_y, 13, COLOR_TRACK_TEAL);
+        _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
+        _canvas->fillCircle(e_cap_x, e_cap_y, 13, pal.track);
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
             _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
             _canvas->fillCircle(tip_x, tip_y, 13, arcCol);
-            _canvas->fillCircle(tip_x, tip_y, 5, COLOR_WHITE);
+            _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
@@ -701,10 +781,10 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         // Redraw active arc on color change
         if (target_angle < _last_arc_angle) {
             // Speed decreasing across color boundary: erase obsolete arc & old tip
-            _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 1.0f, COLOR_TRACK_TEAL);
+            _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 1.0f, pal.track);
             int old_tip_x = cx + (int)roundf(cosf(_last_arc_angle * deg2rad) * mid_r);
             int old_tip_y = cy + (int)roundf(sinf(_last_arc_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(old_tip_x, old_tip_y, 13, COLOR_TRACK_TEAL);
+            _canvas->fillCircle(old_tip_x, old_tip_y, 13, pal.track);
         }
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
@@ -712,9 +792,9 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
             _canvas->fillCircle(tip_x, tip_y, 13, arcCol);
-            _canvas->fillCircle(tip_x, tip_y, 5, COLOR_WHITE);
+            _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
         } else {
-            _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_TRACK_TEAL);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
@@ -728,21 +808,21 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
             _canvas->fillCircle(tip_x, tip_y, 13, arcCol);
-            _canvas->fillCircle(tip_x, tip_y, 5, COLOR_WHITE);
+            _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
         } else {
             // Speed DECREASING: Retract arc cleanly
-            _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 0.5f, COLOR_TRACK_TEAL);
+            _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 0.5f, pal.track);
             int old_tip_x = cx + (int)roundf(cosf(_last_arc_angle * deg2rad) * mid_r);
             int old_tip_y = cy + (int)roundf(sinf(_last_arc_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(old_tip_x, old_tip_y, 13, COLOR_TRACK_TEAL);
+            _canvas->fillCircle(old_tip_x, old_tip_y, 13, pal.track);
 
             if (target_angle > 135.0f) {
                 int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
                 int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
                 _canvas->fillCircle(tip_x, tip_y, 13, arcCol);
-                _canvas->fillCircle(tip_x, tip_y, 5, COLOR_WHITE);
+                _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
             } else {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_TRACK_TEAL);
+                _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
             }
         }
         _last_arc_angle = target_angle;
@@ -825,7 +905,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->fillRect(460, 42, 310, 78, COLOR_BG);
             char pStr[16];
             snprintf(pStr, sizeof(pStr), "%d", cur_watts);
-            uint16_t pwrCol = (cur_watts < -10) ? COLOR_GREEN : (telemetry.boost_active ? COLOR_CYAN : COLOR_WHITE);
+            uint16_t pwrCol = (cur_watts < -10) ? COLOR_GREEN : (telemetry.boost_active ? pal.secondary : COLOR_WHITE);
             drawHeroDigitText(_canvas, pStr, 720, 50, textdatum_t::top_right, pwrCol, COLOR_BG);
 
             // Redraw "W" unit label so it never gets clipped or erased
@@ -843,7 +923,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     float duty_anim = (_anim_duty > 0.0f) ? _anim_duty : duty;
     if (duty_anim < 0.0f) duty_anim = 0.0f;
     bool is_fw = (duty > 100.0f);
-    uint16_t dutyCol = is_fw ? COLOR_RED : COLOR_CYAN;
+    uint16_t dutyCol = is_fw ? COLOR_RED : pal.primary;
     int cur_duty = (int)(duty + 0.5f);
     float dFrac = (duty_anim > 100.0f) ? 1.0f : (duty_anim / 100.0f);
     int cur_d_fill = (int)(dFrac * 320.0f);
@@ -860,7 +940,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         snprintf(dBuf, sizeof(dBuf), "%d%%", cur_duty);
         _canvas->drawString(dBuf, 765, 124);
 
-        _canvas->fillRoundRect(445, 150, 320, 10, 5, COLOR_TRACK_TEAL);
+        _canvas->fillRoundRect(445, 150, 320, 10, 5, pal.track);
         if (cur_d_fill > 0) {
             _canvas->fillRoundRect(445, 150, cur_d_fill, 10, 5, dutyCol);
             if (cur_d_fill >= 6) {
@@ -929,7 +1009,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->setTextDatum(textdatum_t::top_right);
             _canvas->drawString(vBuf, 765, 180);
 
-            _canvas->fillRoundRect(445, 218, 320, 14, 7, COLOR_TRACK_TEAL);
+            _canvas->fillRoundRect(445, 218, 320, 14, 7, pal.track);
             int bFillW = (int)((telemetry.battery_pct / 100.0f) * 320.0f);
             if (bFillW > 320) bFillW = 320;
             if (bFillW > 0) {
@@ -1812,75 +1892,113 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     }
 
     if (_settings_tab_idx == 4) {
-        // DASHBOARD & HARDWARE OPTIONS (y: 130..450)
-        // Card 1: GPS & Live-Uhrzeit (y: 130..220)
-        drawCard(20, 130, 760, 92, COLOR_SURFACE, COLOR_BORDER);
+        // DASHBOARD OPTIONS, COLOR THEME & FOC TURBINE SOUND (y: 122..470)
+        const ColorThemePalette &pal = currentTheme();
+
+        // Card 1: FARB-SCHEMA / THEME (y: 124..196, h: 72)
+        drawCard(20, 124, 760, 72, COLOR_SURFACE, COLOR_BORDER);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("GPS & LIVE-UHRZEIT", 40, 144);
+        _canvas->setTextColor(pal.primary, COLOR_SURFACE);
+        _canvas->drawString("FARB-SCHEMA / THEME", 40, 134);
+
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+        char themeBuf[64];
+        snprintf(themeBuf, sizeof(themeBuf), "%s - %s", pal.name, pal.subtitle);
+        _canvas->drawString(themeBuf, 40, 164);
+
+        // Interactive Selector: [<] [ THEME NAME ] [>]
+        // Button [<] (x: 520..565)
+        _canvas->fillRoundRect(520, 134, 45, 52, 10, 0x18C3);
+        _canvas->drawRoundRect(520, 134, 45, 52, 10, pal.border);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+        _canvas->drawString("<", 542, 160);
+
+        // Center Badge Preview (x: 572..718)
+        _canvas->fillRoundRect(572, 134, 146, 52, 10, pal.surface);
+        _canvas->drawRoundRect(572, 134, 146, 52, 10, pal.primary);
+        _canvas->drawRoundRect(573, 135, 144, 50, 9, pal.primary);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(pal.primary, pal.surface);
+        _canvas->drawString(pal.name, 645, 160);
+
+        // Button [>] (x: 725..770)
+        _canvas->fillRoundRect(725, 134, 45, 52, 10, 0x18C3);
+        _canvas->drawRoundRect(725, 134, 45, 52, 10, pal.border);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+        _canvas->drawString(">", 747, 160);
+
+        // Card 2: FOC TURBINEN-SOUND (y: 204..276, h: 72)
+        drawCard(20, 204, 760, 72, COLOR_SURFACE, COLOR_BORDER);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextColor(pal.primary, COLOR_SURFACE);
+        _canvas->drawString("FOC TURBINEN-SOUND (MOTOR-AUDIO)", 40, 214);
 
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Zeigt die Uhrzeit oben mittig & Satelliten-Icon bei 3D-Fix unter km/h.", 40, 174);
-        _canvas->setFont(&fonts::Font0);
-        _canvas->drawString("Deaktivieren, wenn kein GPS verbaut ist (spart NMEA UART Polling).", 40, 196);
+        _canvas->drawString("Spaceship-Turbine beim Fahren (lauter & hoeher je schneller).", 40, 244);
+
+        bool turbOn = Settings.get().turbine_sound_enabled;
+        _canvas->fillRoundRect(520, 214, 250, 52, 10, turbOn ? 0x03E0 : 0x18C3);
+        _canvas->drawRoundRect(520, 214, 250, 52, 10, turbOn ? COLOR_GREEN : 0x39C7);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(turbOn ? COLOR_WHITE : COLOR_MUTED_GRAY, turbOn ? 0x03E0 : 0x18C3);
+        _canvas->drawString(turbOn ? "[ TURBINE: AN ]" : "[ AUS ]", 645, 240);
+
+        // Card 3: GPS & IMU HARDWARE (y: 284..356, h: 72)
+        drawCard(20, 284, 760, 72, COLOR_SURFACE, COLOR_BORDER);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextColor(pal.primary, COLOR_SURFACE);
+        _canvas->drawString("GPS UHRZEIT & IMU SENSORIK", 40, 294);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+        _canvas->drawString("Satelliten-Uhrzeit, Neigungswinkel und G-Force im Cockpit.", 40, 324);
 
         bool gpsOn = Settings.get().gps_enabled;
-        _canvas->fillRoundRect(550, 144, 210, 58, 12, gpsOn ? 0x03E0 : 0x18C3);
-        _canvas->drawRoundRect(550, 144, 210, 58, 12, gpsOn ? COLOR_GREEN : 0x39C7);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(gpsOn ? COLOR_WHITE : COLOR_MUTED_GRAY, gpsOn ? 0x03E0 : 0x18C3);
-        _canvas->drawString(gpsOn ? "[ AKTIV (AN) ]" : "[ AUS ]", 655, 173);
-
-        // Card 2: Neigung & G-Force (y: 232..322)
-        drawCard(20, 232, 760, 92, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("NEIGUNG & G-FORCE (IMU)", 40, 246);
-
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Zeigt Nickwinkel & Beschleunigungskraefte unten links im Dashboard.", 40, 276);
-        _canvas->setFont(&fonts::Font0);
-        _canvas->drawString("Deaktivieren fuer absolut minimalistischen, aufgeraeumten Look.", 40, 298);
-
         bool incOn = Settings.get().incline_gforce_enabled;
-        _canvas->fillRoundRect(550, 246, 210, 58, 12, incOn ? 0x01E8 : 0x18C3);
-        _canvas->drawRoundRect(550, 246, 210, 58, 12, incOn ? COLOR_CYAN : 0x39C7);
+        // GPS button (x: 520..640)
+        _canvas->fillRoundRect(520, 294, 120, 52, 10, gpsOn ? 0x03E0 : 0x18C3);
+        _canvas->drawRoundRect(520, 294, 120, 52, 10, gpsOn ? COLOR_GREEN : 0x39C7);
         _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(gpsOn ? COLOR_WHITE : COLOR_MUTED_GRAY, gpsOn ? 0x03E0 : 0x18C3);
+        _canvas->drawString(gpsOn ? "GPS: AN" : "GPS: AUS", 580, 320);
+
+        // IMU button (x: 650..770)
+        _canvas->fillRoundRect(650, 294, 120, 52, 10, incOn ? 0x01E8 : 0x18C3);
+        _canvas->drawRoundRect(650, 294, 120, 52, 10, incOn ? COLOR_CYAN : 0x39C7);
+        _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(incOn ? COLOR_WHITE : COLOR_MUTED_GRAY, incOn ? 0x01E8 : 0x18C3);
-        _canvas->drawString(incOn ? "[ ANZEIGEN ]" : "[ VERSTECKT ]", 655, 275);
+        _canvas->drawString(incOn ? "IMU: AN" : "IMU: AUS", 710, 320);
 
-        // Card 3: Kein Bluetooth? (WiFi-Bridge) (y: 334..424)
-        drawCard(20, 334, 760, 92, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-        _canvas->drawString("KEIN BLUETOOTH-MODUL? (WIFI-BRIDGE)", 40, 348);
-
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Startet SoftAP 'VESC-DASH-AP' fuer drahtlose VESC Tool Verbindung.", 40, 376);
-        _canvas->drawString("TCP-Port 6510. Ideal wenn kein Bluetooth-Modul verbaut ist.", 40, 398);
-
-        _canvas->fillRoundRect(550, 348, 210, 58, 12, 0x31A0);
-        _canvas->drawRoundRect(550, 348, 210, 58, 12, COLOR_AMBER);
+        // Card 4: WIFI-BRIDGE & SETUP (y: 364..436, h: 72)
+        drawCard(20, 364, 760, 72, COLOR_SURFACE, COLOR_BORDER);
+        // Left Button: WiFi Bridge (x: 35..380, y: 374..426)
+        _canvas->fillRoundRect(35, 374, 345, 52, 10, 0x31A0);
+        _canvas->drawRoundRect(35, 374, 345, 52, 10, COLOR_AMBER);
         _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
+        _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_WHITE, 0x31A0);
-        _canvas->drawString("[ BRIDGE STARTEN ]", 655, 377);
+        _canvas->drawString("WIFI VESC-TOOL BRIDGE", 35 + 172, 374 + 26);
 
-        // Bottom Button: Setup-Assistent wiederholen
-        _canvas->fillRoundRect(240, 436, 320, 38, 10, 0x18C3);
-        _canvas->drawRoundRect(240, 436, 320, 38, 10, 0x39C7);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font2);
+        // Right Button: Setup Wizard (x: 400..745, y: 374..426)
+        _canvas->fillRoundRect(400, 374, 345, 52, 10, 0x18C3);
+        _canvas->drawRoundRect(400, 374, 345, 52, 10, 0x39C7);
         _canvas->setTextColor(COLOR_LIGHT_GRAY, 0x18C3);
-        _canvas->drawString("SETUP-ASSISTENT WIEDERHOLEN", 400, 455);
+        _canvas->drawString("SETUP-ASSISTENT WIEDERHOLEN", 400 + 172, 374 + 26);
+
+        // Footer Note (y: 456)
+        _canvas->setFont(&fonts::Font0);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
+        _canvas->drawString("Echtzeit-Farbvorschau aktiv  |  Auto-Save bei [< DASH]", 400, 456);
         return;
     }
 
@@ -2408,34 +2526,73 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         return false;
     }
 
-    // Tab 4: DASHBOARD & HARDWARE OPTIONS
+    // Tab 4: DASHBOARD, COLOR THEMES & FOC TURBINE SOUND
     if (_settings_tab_idx == 4) {
-        // Card 1: GPS & Live-Uhrzeit (button: x: 530..770, y: 135..210)
-        if (tx >= 530 && tx <= 770 && ty >= 135 && ty <= 210) {
+        // Card 1: Theme Selector
+        // Button [<] (x: 510..568, y: 125..195)
+        if (tx >= 510 && tx <= 568 && ty >= 125 && ty <= 195) {
+            uint8_t th = Settings.get().color_theme;
+            Settings.get().color_theme = (th == 0) ? (THEME_COUNT - 1) : (th - 1);
+            Settings.save();
+            telemetry.color_theme = Settings.get().color_theme;
+            invalidateCache();
+            _menu_dirty = true;
+            return true;
+        }
+        // Center button / preview tap (x: 569..720, y: 125..195)
+        if (tx >= 569 && tx <= 720 && ty >= 125 && ty <= 195) {
+            Settings.get().color_theme = (Settings.get().color_theme + 1) % THEME_COUNT;
+            Settings.save();
+            telemetry.color_theme = Settings.get().color_theme;
+            invalidateCache();
+            _menu_dirty = true;
+            return true;
+        }
+        // Button [>] (x: 721..780, y: 125..195)
+        if (tx >= 721 && tx <= 780 && ty >= 125 && ty <= 195) {
+            Settings.get().color_theme = (Settings.get().color_theme + 1) % THEME_COUNT;
+            Settings.save();
+            telemetry.color_theme = Settings.get().color_theme;
+            invalidateCache();
+            _menu_dirty = true;
+            return true;
+        }
+
+        // Card 2: FOC Turbine Sound Toggle (x: 510..780, y: 205..275)
+        if (tx >= 510 && tx <= 780 && ty >= 205 && ty <= 275) {
+            Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
+            Settings.save();
+            _menu_dirty = true;
+            return true;
+        }
+
+        // Card 3: GPS Button (x: 510..645, y: 285..355)
+        if (tx >= 510 && tx <= 645 && ty >= 285 && ty <= 355) {
             Settings.get().gps_enabled = !Settings.get().gps_enabled;
             Settings.save();
             telemetry.gps_enabled = Settings.get().gps_enabled;
             _menu_dirty = true;
             return true;
         }
-        // Card 2: Neigung & G-Force (button: x: 530..770, y: 235..315)
-        if (tx >= 530 && tx <= 770 && ty >= 235 && ty <= 315) {
+        // Card 3: IMU Button (x: 646..780, y: 285..355)
+        if (tx >= 646 && tx <= 780 && ty >= 285 && ty <= 355) {
             Settings.get().incline_gforce_enabled = !Settings.get().incline_gforce_enabled;
             Settings.save();
             telemetry.incline_gforce_enabled = Settings.get().incline_gforce_enabled;
             _menu_dirty = true;
             return true;
         }
-        // Card 3: Kein Bluetooth? (WiFi-Bridge) (button: x: 530..770, y: 340..420)
-        if (tx >= 530 && tx <= 770 && ty >= 340 && ty <= 420) {
+
+        // Card 4: WiFi Bridge (x: 30..390, y: 365..435)
+        if (tx >= 30 && tx <= 390 && ty >= 365 && ty <= 435) {
             Vesc.enterWifiBridgeMode();
             telemetry.screen = SCREEN_WIFI_BRIDGE;
             _screen_dirty = true;
             _menu_dirty = true;
             return true;
         }
-        // Button: Setup-Assistent wiederholen (x: 230..570, y: 430..475)
-        if (tx >= 230 && tx <= 570 && ty >= 430 && ty <= 475) {
+        // Card 4: Setup Wizard (x: 395..760, y: 365..435)
+        if (tx >= 395 && tx <= 760 && ty >= 365 && ty <= 435) {
             resetSetupWizard();
             telemetry.wizard_step = 0;
             telemetry.wizard_pin_buf[0] = '\0';
@@ -3962,15 +4119,17 @@ void DashboardRenderer::initChargingScreen() {
     int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
     int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
 
-    _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, COLOR_TRACK_TEAL);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 12, COLOR_TRACK_TEAL);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 12, COLOR_TRACK_TEAL);
+    const ColorThemePalette &pal = currentTheme();
+    _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 12, pal.track);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 12, pal.track);
 
     // 5. Bottom Info Card Outline
-    drawCard(120, 380, 560, 82, 0x0823, 0x1945);
+    drawCard(120, 380, 560, 82, 0x0823, pal.border);
 }
 
 void DashboardRenderer::renderChargingScreen(const DashTelemetry &telemetry) {
+    const ColorThemePalette &pal = currentTheme();
     int cx = 400, cy = 224;
     int r_in = 114, r_out = 138;
     float mid_r = 126.0f;
@@ -3987,18 +4146,18 @@ void DashboardRenderer::renderChargingScreen(const DashTelemetry &telemetry) {
     if (target_angle < 135.0f) target_angle = 135.0f;
     if (target_angle > 405.0f) target_angle = 405.0f;
 
-    uint16_t arcCol = (pct >= 90.0f) ? COLOR_GREEN : ((pct >= 25.0f) ? COLOR_CYAN : COLOR_AMBER);
+    uint16_t arcCol = (pct >= 99.0f) ? COLOR_GREEN : pal.primary;
 
     // 1. Arc & Center Percentage Update
     if (fabsf(pct - _last_charge_pct) >= 0.5f || !_charging_inited) {
         _last_charge_pct = pct;
 
         // Clear active arc track cleanly
-        _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, COLOR_TRACK_TEAL);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 12, COLOR_TRACK_TEAL);
+        _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 12, pal.track);
         int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
         int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
-        _canvas->fillCircle(e_cap_x, e_cap_y, 12, COLOR_TRACK_TEAL);
+        _canvas->fillCircle(e_cap_x, e_cap_y, 12, pal.track);
 
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
@@ -4006,7 +4165,7 @@ void DashboardRenderer::renderChargingScreen(const DashTelemetry &telemetry) {
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
             _canvas->fillCircle(tip_x, tip_y, 12, arcCol);
-            _canvas->fillCircle(tip_x, tip_y, 5, COLOR_WHITE);
+            _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
         }
 
         // 2. Center Battery Percentage & Unit (sized safely within r_in=114px)
@@ -4026,7 +4185,7 @@ void DashboardRenderer::renderChargingScreen(const DashTelemetry &telemetry) {
         snprintf(rateBuf, sizeof(rateBuf), "%.1f V  |  %.0f W  |  %.1f A",
                  telemetry.voltage, telemetry.charge_power_watts, telemetry.charge_current_amps);
         _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_BG);
+        _canvas->setTextColor(pal.primary, COLOR_BG);
         _canvas->drawString(rateBuf, cx, cy + 48);
     }
 

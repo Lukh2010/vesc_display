@@ -16,6 +16,10 @@ public:
     void markScreenDirty() { _screen_dirty = true; }
     void invalidateCache() { _cache.invalidate(); _stats_cache.invalidate(); _hyper_inited = false; _stats_inited = false; _last_arc_frac = -1.0f; _last_arc_angle = 135.0f; _last_arc_col = 0; }
 
+    // Color Theme & Palettes
+    static const ColorThemePalette& getThemePalette(uint8_t theme_id);
+    const ColorThemePalette& currentTheme() const;
+
     // Menu Navigation Handler (called by main when in SCREEN_SETTINGS_MENU)
     void handleMenuNav(NavAction action, DashTelemetry &telemetry);
     bool handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);

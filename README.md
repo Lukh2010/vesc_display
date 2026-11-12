@@ -108,6 +108,16 @@ Das Dashboard nutzt das extrem performante 16-Bit RGB565 Parallel-Interface und 
 - 🎛️ **On-Screen Live-Settings (km/h & Watt):**
   - Geschwindigkeit und Maximalleistung können für jeden Fahrmodus (`ECO`, `SPORT`, `RACE`) bequem am Touchscreen per Schieberegler oder `[-]`/`[+]`-Tasten angepasst werden – ganz ohne VESC Tool oder Programmierkenntnisse.
 
+- 🎨 **5 Wählbare Farb-Sets (Themes):**
+  - **Cyber Cyan** (Standard), **Synthwave Outrun**, **Toxic Green**, **Racing Red** und **Clean Ice**.
+  - Passen das gesamte Cockpit (Tacho-Bogen, Spuren, Akku-Leiste, Akzentfarben) dem individuellen Fahrzeugstil an.
+  - Umschaltbar über Tab 4 (`DASH`) im Einstellungsmenü oder im Simulator (Taste `T`), dauerhaft im NVS gespeichert.
+
+- 🚀 **FOC-Audio Triebwerkssound (Jet Engine Whine):**
+  - Moduliert während der Fahrt einen dynamischen Turbinensound direkt über die Motorwicklungen mittels VESC FOC Audio (`foc-play-tone`).
+  - **Lauter & höher desto schneller:** Tonhöhe (280 Hz bis 3200 Hz) und Lautstärke (1.2V bis 6.5V) skalieren fließend mit der Geschwindigkeit.
+  - **Strikte Null-Interferenz:** Die akustische Schwingung erzeugt kein Nettodrehmoment – Fahrphysik, Gasannahme, Rekuperation und Schutzlimits bleiben zu 100% unberührt! Im Stillstand sofort lautlos.
+
 ---
 
 ## 👆 Touch-Gesten & Bedienung
