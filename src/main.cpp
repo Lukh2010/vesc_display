@@ -9,6 +9,7 @@
 #include "vesc_uart.h"
 #include "mode_manager.h"
 #include "fault_manager.h"
+#include "gps_tracker.h"
 
 // Active Telemetry State
 static DashTelemetry telemetry;
@@ -133,6 +134,9 @@ void setup() {
     // 9b. Initialize VESC Fault Blackbox Manager
     FaultManager::instance().begin();
     Serial.printf("[OK] Fault Manager initialized (%d logged faults).\n", FaultManager::instance().getFaultCount());
+
+    // 10. Initialize ATGM336H GPS+BDS Satellite Tracker on GPIO 6
+    GpsTracker::instance().init();
 
     Serial.println("[OK] Setup complete. Entering main render loop.");
 }
@@ -640,6 +644,10 @@ void loop() {
     } else {
         Vesc.update(telemetry);
     }
+
+    // 2b. Update Live GPS+BDS Satellite Tracker & Ground Speed Priority
+    GpsTracker::instance().update(telemetry);
+
     telemetry.uptime_sec = (now - boot_ms) / 1000;
     telemetry.dynamic_wh_km = Battery.getDynamicWhKm();
     telemetry.est_range_km = Battery.getEstRangeKm();

@@ -132,7 +132,17 @@ private:
         uint8_t light_hue;
         uint8_t light_brightness;
 
+        // Clock & GPS Satellite Caches
+        char clock_str[12];
+        uint8_t gps_sats;
+        bool gps_valid;
+        bool use_gps_speed;
+
         void invalidate() {
+            clock_str[0] = '\0';
+            gps_sats = 255;
+            gps_valid = false;
+            use_gps_speed = false;
             speed = -999;
             duty_x10 = -999;
             duty_fill_w = -1;

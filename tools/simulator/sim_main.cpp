@@ -17,6 +17,7 @@
 #include "vesc_uart.h"
 #include "mode_manager.h"
 #include "fault_manager.h"
+#include "gps_tracker.h"
 #include "virtual_vesc/virtual_vesc.h"
 #include "virtual_vesc/vesc_tcp_server.h"
 
@@ -2080,6 +2081,10 @@ int main(int argc, char **argv) {
     t.ride_mode = MODE_RACE;
     t.boost_active = true;
     t.mode_badge_until = 0;
+    t.gps.valid = true;
+    t.gps.satellites = 16;
+    t.use_gps_speed = true;
+    strcpy(t.clock_str, "14:35");
     Renderer.markScreenDirty();
     renderAndSave("00_hyper_35kw_boost_race", t);
 
