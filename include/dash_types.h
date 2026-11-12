@@ -12,6 +12,7 @@ enum DashboardScreen {
     SCREEN_WIFI_BRIDGE   = 5,  // Transparent Wi-Fi TCP <-> UART Bridge for VESC Tool
     SCREEN_RACE_TIMER    = 6,  // Dragy / Launch Acceleration Timer Screen
     SCREEN_SETUP_WIZARD  = 7,  // First-Time Setup & Onboarding Wizard
+    SCREEN_CHARGING_HUD  = 8,  // Animated Battery Charging HUD with Drive Lockout
     SCREEN_ENERGY_STATS  = SCREEN_LIGHTS,
     SCREEN_PERF_STATS    = SCREEN_RT_GRAPHS,
     SCREEN_COUNT
@@ -58,7 +59,8 @@ enum NavAction {
     NAV_RACE_START_LAUNCH, // Tap on [ START LAUNCH ]
     NAV_RACE_ABORT,        // Tap center while measuring/countdown
     NAV_LIGHT_TOGGLE,      // Tap on Light Switch Badge (Hauptschalter)
-    NAV_PIN_EMERGENCY_RESET // 5s continuous hold on lockscreen: emergency reset PIN to 1234
+    NAV_PIN_EMERGENCY_RESET, // 5s continuous hold on lockscreen: emergency reset PIN to 1234
+    NAV_CHARGING_EXIT       // Tap on [< DASH] button on Charging HUD
 };
 
 // Dragy / Launch Acceleration Best Records
@@ -228,6 +230,16 @@ struct DashTelemetry {
     char     pin_entry[8];     // Currently entered digits buffer
     bool     pin_error;        // Flash red / error shake on invalid PIN
     uint32_t pin_error_end_ms; // Error indicator display expiry
+    bool     theft_alarm_active;  // true = vehicle moved while locked, FOC loud siren active
+    float    locked_moved_meters; // meters traveled since being locked
+    uint32_t last_alarm_beep_ms;  // timestamp of last FOC siren pulse
+
+    // Battery Charging Mode HUD & Drive Lockout
+    bool     is_charging;         // true = vehicle stationary and receiving charge
+    float    charge_power_watts;  // incoming charging power in Watts
+    float    charge_current_amps; // incoming charging current in Amps
+    uint32_t charge_start_ms;     // timestamp when charging started
+    float    charge_est_minutes;  // estimated minutes until full
 
     // Ride Modes & Hyper Boost
     RideMode ride_mode;        // Active Ride Mode: ECO, STREET, SPORT, RACE

@@ -240,8 +240,8 @@ void ButtonHandler::processTouch(uint32_t now) {
 
                 if (adx >= SWIPE_THRESHOLD_PX && adx > ady) {
                     // Horizontal Swipe
-                    if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER || _active_screen == SCREEN_SETUP_WIZARD) {
-                        // In STATS / RACE / WIZARD screen: do NOT switch screen on swipe! Only buttons exit.
+                    if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER || _active_screen == SCREEN_SETUP_WIZARD || _active_screen == SCREEN_CHARGING_HUD) {
+                        // In STATS / RACE / WIZARD / CHARGING screen: do NOT switch screen on swipe! Only buttons exit.
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
                         if (dx > 0) {
                             // Swipe Right -> Back to Root Menu or Exit to Dash
@@ -356,6 +356,11 @@ void ButtonHandler::processTouch(uint32_t now) {
                     } else if (_active_screen == SCREEN_VESC_BRIDGE || _active_screen == SCREEN_WIFI_BRIDGE) {
                         // On VESC Tool Bridge Screens: tapping anywhere exits back to Dash
                         _pending_action = NAV_SCREEN_DASH;
+                    } else if (_active_screen == SCREEN_CHARGING_HUD) {
+                        // On Charging HUD Screen: tapping [< DASH] returns to Dash
+                        if (_last_tap_x <= 150 && _last_tap_y <= 65) {
+                            _pending_action = NAV_SCREEN_DASH;
+                        }
                     } else {
                         // On SCREEN_RIDE_DASH / Default:
                         // 1. Top Left [ STATS ] Navigation Touch Button -> Open Statistics Screen (SCREEN_RT_GRAPHS)

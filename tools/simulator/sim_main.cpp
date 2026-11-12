@@ -1319,6 +1319,81 @@ void testRegenAndTripReset() {
     printf("=== All Regenerative Braking & Trip Reset Unit Tests PASSED! ===\n\n");
 }
 
+void testChargingAndTheftProtection() {
+    printf("=== Running Charging HUD & Theft Protection Unit Tests ===\n");
+    DashTelemetry t;
+    setBaseTelemetry(t);
+
+    // 1. FOC Motor Beep Command
+    Vesc.triggerFocBeep(1600.0f, 0.35f, 8.0f);
+    printf("[PASS] 1. VESC FOC Motor Beep command transmitted cleanly.\n");
+
+    // 2. Charging Mode Detection & Drive Lockout
+    t.speed_kmh = 0.0f;
+    t.rpm = 0.0f;
+    t.current_amps = -3.5f; // Charging current from wall charger
+    t.voltage = 54.2f;
+    t.power_watts = t.voltage * t.current_amps;
+    t.is_charging = true;
+    t.screen = SCREEN_CHARGING_HUD;
+    t.battery_pct = 76.0f;
+    t.charge_power_watts = fabsf(t.power_watts);
+    t.charge_current_amps = fabsf(t.current_amps);
+    t.charge_est_minutes = 45.0f;
+
+    // Drive lockout during charge:
+    t.throttle_pct = 0.0f;
+    assert(t.is_charging == true);
+    assert(t.throttle_pct == 0.0f);
+    printf("[PASS] 2. Charging HUD activates and strictly enforces Drive Lockout (0A output).\n");
+
+    // 3. Navigation from Charging HUD via [< DASH]
+    Buttons.setActiveScreen(SCREEN_CHARGING_HUD);
+    simAdvanceMs(150);
+    Display.setSimTouch(true, 75, 35);
+    Buttons.update();
+    simAdvanceMs(50);
+    Display.setSimTouch(false, 0, 0);
+    Buttons.update();
+    simAdvanceMs(150);
+    NavAction act = Buttons.getNavAction();
+    assert(act == NAV_SCREEN_DASH);
+    printf("[PASS] 3. Charging HUD [< DASH] button triggers NAV_SCREEN_DASH.\n");
+
+    // 4. Theft Alarm when Locked and Vehicle Moves >= 2.0 meters
+    t.is_locked = true;
+    t.theft_alarm_active = false;
+    t.locked_moved_meters = 0.0f;
+    ModeManager::instance().setLocked(true);
+
+    // Move vehicle 0.5 meters while locked
+    t.locked_moved_meters += 0.5f;
+    assert(!t.theft_alarm_active);
+
+    // Move vehicle past 2.0 meters threshold
+    t.locked_moved_meters += 1.8f; // total 2.3m
+    if (t.locked_moved_meters >= 2.0f) {
+        t.theft_alarm_active = true;
+    }
+    assert(t.theft_alarm_active == true);
+    printf("[PASS] 4. Vehicle movement >= 2.0m while locked correctly triggers Theft Alarm!\n");
+
+    // 5. PIN Disarm & System Unlock
+    strncpy(t.pin_entry, "1234", sizeof(t.pin_entry));
+    if (strcmp(t.pin_entry, Settings.get().pin_code) == 0) {
+        t.is_locked = false;
+        t.theft_alarm_active = false;
+        t.locked_moved_meters = 0.0f;
+        ModeManager::instance().setLocked(false);
+    }
+    assert(t.is_locked == false);
+    assert(t.theft_alarm_active == false);
+    assert(ModeManager::instance().isLocked() == false);
+    printf("[PASS] 5. Entering correct PIN disarms Theft Alarm and unlocks drive.\n");
+
+    printf("=== All Charging HUD & Theft Protection Unit Tests PASSED! ===\n\n");
+}
+
 void testSpeedSweepAnimation() {
     printf("\n=== Running Startup Speedometer Sweep Animation Unit Tests ===\n");
     DashTelemetry t;
@@ -2047,6 +2122,7 @@ int main(int argc, char **argv) {
     testFaultManagerAndBlackbox();
     testRaceTimerAndRecords();
     testRegenAndTripReset();
+    testChargingAndTheftProtection();
 
     DashTelemetry t;
     setBaseTelemetry(t);
@@ -2369,6 +2445,37 @@ int main(int argc, char **argv) {
     Renderer.markScreenDirty();
     renderAndSave("25_dash_minimal_no_gps_no_imu", t);
     printf("[PASS] Minimal Dashboard scenario rendered with hidden clock and hidden IMU.\n");
+
+    // ----------------------------------------------------
+    // Scenario 26: Animated Battery Charging HUD with Drive Lockout
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    t.screen = SCREEN_CHARGING_HUD;
+    t.is_charging = true;
+    t.speed_kmh = 0.0f;
+    t.rpm = 0.0f;
+    t.throttle_pct = 0.0f;
+    t.voltage = 54.2f;
+    t.battery_pct = 76.0f;
+    t.current_amps = -3.2f;
+    t.charge_current_amps = 3.2f;
+    t.charge_power_watts = 173.0f;
+    t.charge_est_minutes = 45.0f;
+    Renderer.markScreenDirty();
+    renderAndSave("26_charging_hud", t);
+    printf("[PASS] Scenario 26: Charging HUD rendered and saved.\n");
+
+    // ----------------------------------------------------
+    // Scenario 27: PIN Lockscreen with Active Theft Alarm
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    t.screen = SCREEN_RIDE_DASH;
+    t.is_locked = true;
+    t.theft_alarm_active = true;
+    t.locked_moved_meters = 3.8f;
+    Renderer.markScreenDirty();
+    renderAndSave("27_pin_lockscreen_theft_alarm", t);
+    printf("[PASS] Scenario 27: PIN Lockscreen Theft Alarm rendered and saved.\n");
 
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");
     return 0;

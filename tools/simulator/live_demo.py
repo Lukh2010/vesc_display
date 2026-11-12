@@ -110,6 +110,8 @@ sim_lib.sim_set_manual_brake.argtypes = [ctypes.c_float]
 sim_lib.sim_set_manual_brake.restype = None
 
 sim_lib.sim_reset_setup_wizard.restype = None
+sim_lib.sim_toggle_charging.restype = None
+sim_lib.sim_trigger_theft_movement.restype = None
 
 sim_lib.sim_get_frame_rgb24.argtypes = [ctypes.c_char_p]
 sim_lib.sim_get_frame_rgb24.restype = None
@@ -283,6 +285,8 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><kbd>Space / B</kbd> Boost</span>
   <span><kbd>L</kbd> Licht (Hauptschalter)</span>
   <span><kbd>X</kbd> Tuning / Legal</span>
+  <span><kbd>C</kbd> <button onclick="fetch('/api/charging').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#10b981; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Laden (HUD)</button></span>
+  <span><kbd>A</kbd> <button onclick="fetch('/api/theft_alarm').catch(()=>{})" style="background:#0f172a; border:1px solid #ef4444; color:#ef4444; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚨 Diebstahl-Alarm</button></span>
   <span><button onclick="fetch('/api/reset_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔄 Setup Wizard Reset</button></span>
   <span><a href="/portal" target="_blank" style="color:#00e5ff; text-decoration:underline; font-weight:bold;">⚙️ Captive Portal</a> (<a href="http://localhost:8081" target="_blank" style="color:#00e5ff;">Port 8081</a>)</span>
 </div>
@@ -367,6 +371,10 @@ HTML_PAGE = """<!DOCTYPE html>
       fetch('/api/nav?action=16');
     } else if (e.key === 'x' || e.key === 'X') {
       fetch('/api/tuning?toggle=1');
+    } else if (e.key === 'c' || e.key === 'C') {
+      fetch('/api/charging');
+    } else if (e.key === 'a' || e.key === 'A') {
+      fetch('/api/theft_alarm');
     }
   });
 
@@ -488,6 +496,22 @@ class WebDemoHandler(BaseHTTPRequestHandler):
                 sim_lib.sim_reset_setup_wizard()
             self.send_response(200)
             self.end_headers()
+
+        elif path == "/api/charging":
+            with sim_lock:
+                sim_lib.sim_toggle_charging()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
+        elif path == "/api/theft_alarm":
+            with sim_lock:
+                sim_lib.sim_trigger_theft_movement()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
 
         elif path == "/api/auto_mode":
             with sim_lock:

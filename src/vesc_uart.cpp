@@ -1176,6 +1176,48 @@ void VescHandler::sendTerminalCommand(const char *str) {
 #endif
 }
 
+void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
+    char lisp_cmd[64];
+    snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-beep %.0f %.2f %.1f)", freq, duration_s, voltage);
+
+#if !SIMULATION_MODE
+    size_t slen = strlen(lisp_cmd);
+    if (slen > 60) slen = 60;
+    uint8_t payload[64];
+    payload[0] = 138; // COMM_LISP_REPL_CMD (0x8A)
+    memcpy(&payload[1], lisp_cmd, slen);
+
+    if (_transport) {
+        uint8_t packet[70];
+        packet[0] = 0x02;
+        packet[1] = (uint8_t)(slen + 1);
+        memcpy(&packet[2], payload, slen + 1);
+        uint16_t tcrc = crc16(payload, slen + 1);
+        packet[3 + slen] = (uint8_t)(tcrc >> 8);
+        packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
+        packet[5 + slen] = 0x03;
+        _transport->write(packet, slen + 6);
+    }
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (s_can_initialized) {
+        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
+        if (VESC_CAN_ID_DEFAULT != 0) {
+            sendVescCanBuffer(0, payload, slen + 1);
+        }
+    }
+#endif
+#endif
+
+    // Fallback: Also broadcast as terminal command
+    char term_cmd[64];
+    snprintf(term_cmd, sizeof(term_cmd), "foc_openloop 5 %.0f\n", freq);
+    sendTerminalCommand(term_cmd);
+
+    Serial.printf("[VESC_ALARM] FOC Motor Siren Beep: %.0f Hz, %.2f s, %.1f V -> '%s'\n",
+                  freq, duration_s, voltage, lisp_cmd);
+}
+
 void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, float max_battery_amps, float max_phase_amps, float cutoff_start, float cutoff_end) {
     UartLock lock;
     // 1. Calculate ERPM from speed limit
