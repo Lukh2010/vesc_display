@@ -193,6 +193,50 @@ static void runSimulationStep(float dt) {
         return;
     }
 
+    if (g_telemetry.is_charging) {
+        sim_t = 0.0f;
+        s_sim_speed_kmh = 0.0f;
+        s_sim_current_amps = -3.2f;
+        s_sim_phase_amps = 0.0f;
+        s_sim_voltage = 54.2f + (g_telemetry.battery_pct - 50.0f) * 0.08f;
+        s_sim_power_watts = s_sim_voltage * s_sim_current_amps;
+        s_sim_duty_cycle_pct = 0.0f;
+        s_sim_rpm = 0.0f;
+        s_sim_ah_charged += (3.2f / 3600.0f) * dt;
+        s_sim_wh_charged += (fabsf(s_sim_power_watts) / 3600.0f) * dt;
+
+        // In simulation, battery smoothly rises ~0.5% per second for live visual feedback
+        g_telemetry.battery_pct += 0.5f * dt;
+        if (g_telemetry.battery_pct > 100.0f) g_telemetry.battery_pct = 100.0f;
+
+        float missing_wh = ((100.0f - g_telemetry.battery_pct) / 100.0f) * 1300.0f;
+        if (missing_wh < 0.0f) missing_wh = 0.0f;
+        g_telemetry.charge_est_minutes = (missing_wh / fabsf(s_sim_power_watts)) * 60.0f;
+
+        VirtualVescTelemetry vt;
+        vt.temp_mos = s_sim_temp_fet_rear;
+        vt.temp_mot = s_sim_temp_mot_rear;
+        vt.current_mot = 0.0f;
+        vt.current_in = s_sim_current_amps;
+        vt.duty_cycle_pct = 0.0f;
+        vt.rpm = 0.0f;
+        vt.pole_pairs = Settings.get().motor_pole_pairs;
+        vt.speed_kmh = 0.0f;
+        vt.voltage = s_sim_voltage;
+        vt.battery_pct = g_telemetry.battery_pct;
+        vt.amphours_used = s_sim_ah_used;
+        vt.amphours_charged = s_sim_ah_charged;
+        vt.watthours_used = s_sim_wh_used;
+        vt.watthours_charged = s_sim_wh_charged;
+        vt.trip_km = s_sim_trip_km;
+        vt.odo_km = s_sim_odo_km;
+        vt.fault_code = 0;
+        vt.throttle_pct = 0.0f;
+        vt.brake_pct = 0.0f;
+        g_virtual_vesc.setPhysicsTelemetry(vt);
+        return;
+    }
+
     // 1. Target Speed and Power by Ride Mode & Tuning State from Virtual VESC Controller Limits
     const VirtualVescLimits &lim = g_virtual_vesc.getLimits();
 
@@ -2006,6 +2050,9 @@ void sim_toggle_charging() {
         g_telemetry.rpm = 0.0f;
         g_manual_throttle = 0.0f;
         g_telemetry.throttle_pct = 0.0f;
+        if (g_telemetry.battery_pct > 95.0f || g_telemetry.battery_pct < 10.0f) {
+            g_telemetry.battery_pct = 72.0f;
+        }
         g_telemetry.is_charging = true;
         g_telemetry.charge_start_ms = g_sim_uptime_ms;
         g_telemetry.current_amps = -3.2f;
