@@ -88,6 +88,12 @@ void setup() {
     telemetry.race_split_0_50     = 0.0f;
     telemetry.race_split_0_70     = 0.0f;
     telemetry.race_records        = Settings.getRaceRecords();
+    telemetry.gps_enabled         = Settings.get().gps_enabled;
+    telemetry.incline_gforce_enabled = Settings.get().incline_gforce_enabled;
+    telemetry.wifi_bridge_enabled = Settings.get().wifi_bridge_enabled;
+    telemetry.setup_completed     = Settings.get().setup_completed;
+    telemetry.wizard_step         = 0;
+    telemetry.wizard_pin_buf[0]   = '\0';
 
     // 5. Initialize Touch and Input Handling (GT911 I2C SDA=8, SCL=9)
     Buttons.begin();
@@ -123,7 +129,12 @@ void setup() {
 
     // 9. Initialize Mode Profiles & Send Boot Stealth Limits to VESC (Requirement 1 & 4)
     ModeManager::instance().begin();
-    if (Settings.get().pin_lock_enabled) {
+    if (!Settings.get().setup_completed) {
+        telemetry.screen = SCREEN_SETUP_WIZARD;
+        telemetry.is_locked = false;
+        ModeManager::instance().setLocked(false);
+        Serial.println("[SETUP] First-Time Onboarding Wizard ACTIVE.");
+    } else if (Settings.get().pin_lock_enabled) {
         ModeManager::instance().setLocked(true);
         Serial.println("[SECURITY] Boot PIN-Lockscreen ACTIVE. VESC locked at 0A.");
     } else {
@@ -276,6 +287,20 @@ void loop() {
                     }
                 }
             }
+        }
+    }
+
+    telemetry.gps_enabled = Settings.get().gps_enabled;
+    telemetry.incline_gforce_enabled = Settings.get().incline_gforce_enabled;
+    telemetry.wifi_bridge_enabled = Settings.get().wifi_bridge_enabled;
+    telemetry.setup_completed = Settings.get().setup_completed;
+
+    // SCREEN_SETUP_WIZARD: Interactive First-Time Setup & Onboarding Handling
+    if (telemetry.screen == SCREEN_SETUP_WIZARD) {
+        int16_t tx = -1, ty = -1;
+        if (Buttons.getLastTap(&tx, &ty)) {
+            Renderer.handleWizardTouch(tx, ty, telemetry);
+            Buttons.clearNavAction();
         }
     }
 

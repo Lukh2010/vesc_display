@@ -240,8 +240,8 @@ void ButtonHandler::processTouch(uint32_t now) {
 
                 if (adx >= SWIPE_THRESHOLD_PX && adx > ady) {
                     // Horizontal Swipe
-                    if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER) {
-                        // In STATS / RACE screen: do NOT switch screen on swipe! Only < DASH exits.
+                    if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER || _active_screen == SCREEN_SETUP_WIZARD) {
+                        // In STATS / RACE / WIZARD screen: do NOT switch screen on swipe! Only buttons exit.
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
                         if (dx > 0) {
                             // Swipe Right -> Back to Root Menu or Exit to Dash
@@ -350,6 +350,9 @@ void ButtonHandler::processTouch(uint32_t now) {
                             _pending_action = NAV_SCREEN_DASH; // Top Right [FERTIG / X] -> Return to Ride Dash
                         }
                         // Detailed tab selection and slider touches are forwarded to Renderer.handleSettingsTouch via getLastTap()
+                    } else if (_active_screen == SCREEN_SETUP_WIZARD) {
+                        // On SETUP WIZARD Screen:
+                        // All taps forwarded to Renderer.handleWizardTouch via getLastTap()
                     } else if (_active_screen == SCREEN_VESC_BRIDGE || _active_screen == SCREEN_WIFI_BRIDGE) {
                         // On VESC Tool Bridge Screens: tapping anywhere exits back to Dash
                         _pending_action = NAV_SCREEN_DASH;

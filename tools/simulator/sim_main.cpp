@@ -60,6 +60,12 @@ void setBaseTelemetry(DashTelemetry &t) {
     t.stats.max_speed_kmh = 58.7f;
     t.stats.avg_speed_kmh = 28.4f;
     t.stats.ride_time_sec = 2538; // ~42 mins
+
+    t.gps_enabled = Settings.get().gps_enabled;
+    t.incline_gforce_enabled = Settings.get().incline_gforce_enabled;
+    t.wifi_bridge_enabled = Settings.get().wifi_bridge_enabled;
+    t.setup_completed = true; // default true for base simulator telemetry
+    t.wizard_step = 0;
 }
 
 void renderAndSave(const char *name, DashTelemetry &t) {
@@ -679,30 +685,35 @@ void testTouchGestures() {
     Renderer.markScreenDirty();
 
     // 1. Tab Switching via touch
-    // Tap on Tab 0 [ ECO ] at x=100, y=95
-    bool touchHandled = Renderer.handleSettingsTouch(100, 95, tTest);
+    // Tap on Tab 0 [ ECO ] at x=80, y=95
+    bool touchHandled = Renderer.handleSettingsTouch(80, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 0);
 
-    // Tap on Tab 1 [ SPORT ] at x=250, y=95
-    touchHandled = Renderer.handleSettingsTouch(250, 95, tTest);
+    // Tap on Tab 1 [ SPORT ] at x=200, y=95
+    touchHandled = Renderer.handleSettingsTouch(200, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 1);
 
-    // Tap on Tab 2 [ RACE ] at x=400, y=95
-    touchHandled = Renderer.handleSettingsTouch(400, 95, tTest);
+    // Tap on Tab 2 [ RACE ] at x=330, y=95
+    touchHandled = Renderer.handleSettingsTouch(330, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 2);
 
-    // Tap on Tab 3 [ DRAGY ] at x=550, y=95
-    touchHandled = Renderer.handleSettingsTouch(550, 95, tTest);
+    // Tap on Tab 3 [ DRAGY ] at x=460, y=95
+    touchHandled = Renderer.handleSettingsTouch(460, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 3);
 
-    // Tap on Tab 4 [ PIN ] at x=700, y=95
-    touchHandled = Renderer.handleSettingsTouch(700, 95, tTest);
+    // Tap on Tab 4 [ DASH ] at x=590, y=95
+    touchHandled = Renderer.handleSettingsTouch(590, 95, tTest);
     assert(touchHandled == true);
     assert(Renderer.getSettingsTab() == 4);
+
+    // Tap on Tab 5 [ PIN ] at x=720, y=95
+    touchHandled = Renderer.handleSettingsTouch(720, 95, tTest);
+    assert(touchHandled == true);
+    assert(Renderer.getSettingsTab() == 5);
 
     // Test Dragy Split adjustments on Tab 3
     Renderer.setSettingsTab(3);
@@ -782,11 +793,11 @@ void testTouchGestures() {
     };
 
     // 1. Tap Tab 0 [ ECO ]
-    runMainLoopTouch(100, 95);
+    runMainLoopTouch(80, 95);
     assert(Renderer.getSettingsTab() == 0);
 
     // 2. Tap Tab 2 [ RACE ]
-    runMainLoopTouch(400, 95);
+    runMainLoopTouch(330, 95);
     assert(Renderer.getSettingsTab() == 2);
 
     // 3. Tap [+] Speed button at x=720, y=210
@@ -2165,10 +2176,18 @@ int main(int argc, char **argv) {
     renderAndSave("11_settings_display_style", t);
 
     // ----------------------------------------------------
-    // Scenario 12: Screen 3 - Mode Configurator (PIN & Security Tab)
+    // Scenario 12: Screen 3 - Mode Configurator (DASH Options Tab)
     // ----------------------------------------------------
     t.screen = SCREEN_SETTINGS_MENU;
     Renderer.setSettingsTab(4);
+    Renderer.markScreenDirty();
+    renderAndSave("12_settings_dash_options", t);
+
+    // ----------------------------------------------------
+    // Scenario 12b: Screen 3 - Mode Configurator (PIN & Security Tab)
+    // ----------------------------------------------------
+    t.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(5);
     Renderer.markScreenDirty();
     renderAndSave("12_settings_battery_profiles", t);
 
@@ -2289,6 +2308,62 @@ int main(int argc, char **argv) {
     t.race_split_0_70 = 4.25f;
     Renderer.markScreenDirty();
     renderAndSave("21_race_dyno_modal", t);
+
+    // ----------------------------------------------------
+    // Scenario 22: First-Time Setup Wizard (Step 1 - Welcome & Guide)
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    t.setup_completed = false;
+    t.screen = SCREEN_SETUP_WIZARD;
+    t.wizard_step = 0;
+    Renderer.markScreenDirty();
+    renderAndSave("22_setup_wizard_step1_welcome", t);
+
+    // Verify touch advances to Step 2
+    bool w1 = Renderer.handleWizardTouch(400, 418, t);
+    assert(w1 == true);
+    assert(t.wizard_step == 1);
+    printf("[PASS] Wizard Step 1 touch navigation to Step 2 verified.\n");
+
+    // ----------------------------------------------------
+    // Scenario 23: First-Time Setup Wizard (Step 2 - PIN Keypad)
+    // ----------------------------------------------------
+    Renderer.markScreenDirty();
+    renderAndSave("23_setup_wizard_step2_pin", t);
+
+    // Enter PIN digits "5678"
+    Renderer.handleWizardTouch(360, 230, t); // '5'
+    Renderer.handleWizardTouch(460, 230, t); // '6'
+    Renderer.handleWizardTouch(260, 280, t); // '7'
+    Renderer.handleWizardTouch(360, 280, t); // '8'
+    Renderer.handleWizardTouch(400, 422, t); // Continue
+    assert(t.wizard_step == 2);
+    assert(strcmp(Settings.get().pin_code, "5678") == 0);
+    printf("[PASS] Wizard Step 2 PIN entry & storage ('5678') verified.\n");
+
+    // ----------------------------------------------------
+    // Scenario 24: First-Time Setup Wizard (Step 3 - Feature Toggles)
+    // ----------------------------------------------------
+    Renderer.markScreenDirty();
+    renderAndSave("24_setup_wizard_step3_features", t);
+
+    // Test finishing wizard
+    Renderer.handleWizardTouch(400, 406, t); // [ SETUP ABSCHLIESSEN & STARTEN ]
+    assert(t.setup_completed == true);
+    assert(t.screen == SCREEN_RIDE_DASH);
+    printf("[PASS] Wizard Step 3 completion & switch to SCREEN_RIDE_DASH verified.\n");
+
+    // ----------------------------------------------------
+    // Scenario 25: Minimal Dashboard with GPS & G-Force Disabled
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    t.gps_enabled = false;
+    t.incline_gforce_enabled = false;
+    t.speed_kmh = 42.0f;
+    t.power_watts = 2100.0f;
+    Renderer.markScreenDirty();
+    renderAndSave("25_dash_minimal_no_gps_no_imu", t);
+    printf("[PASS] Minimal Dashboard scenario rendered with hidden clock and hidden IMU.\n");
 
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");
     return 0;
