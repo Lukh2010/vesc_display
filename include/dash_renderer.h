@@ -21,6 +21,7 @@ public:
     bool handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
     bool handleSettingsSliderDrag(int16_t cx, int16_t cy, DashTelemetry &telemetry);
     bool handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
+    void initSetupWizard(const DashTelemetry &telemetry);
     bool isInEditMode() const { return false; }
     uint8_t getSettingsTab() const { return _settings_tab_idx; }
     void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 6) ? tab : 0; _menu_dirty = true; }
@@ -70,7 +71,6 @@ private:
     void drawPinChangeModal();
 
     // Screen 7: First-Time Setup & Onboarding Wizard
-    void initSetupWizard(const DashTelemetry &telemetry);
     void renderSetupWizard(const DashTelemetry &telemetry);
 
     // PIN-Lockscreen & VESC Alarm Banner (Requirements 1 & 7)

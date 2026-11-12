@@ -585,7 +585,20 @@ void sim_init() {
     g_sim_time_ms = 1000;
     ModeManager::instance().setRideMode(g_telemetry.ride_mode);
 
-    if (Settings.get().pin_lock_enabled) {
+    g_telemetry.gps_enabled = Settings.get().gps_enabled;
+    g_telemetry.incline_gforce_enabled = Settings.get().incline_gforce_enabled;
+    g_telemetry.wifi_bridge_enabled = Settings.get().wifi_bridge_enabled;
+    g_telemetry.setup_completed = Settings.get().setup_completed;
+    g_telemetry.wizard_step = 0;
+    g_telemetry.wizard_pin_buf[0] = '\0';
+
+    if (!Settings.get().setup_completed) {
+        g_telemetry.screen = SCREEN_SETUP_WIZARD;
+        g_telemetry.is_locked = false;
+        ModeManager::instance().setLocked(false);
+        Renderer.initSetupWizard(g_telemetry);
+        printf("[SIM_BACKEND] First-Time Onboarding Wizard ACTIVE.\n");
+    } else if (Settings.get().pin_lock_enabled) {
         g_telemetry.is_locked = true;
         g_telemetry.pin_entry[0] = '\0';
         g_telemetry.pin_error = false;
@@ -800,6 +813,24 @@ void sim_step(uint32_t step_ms) {
                     Display.setBrightness((uint8_t)((s.brightness_pct * 255) / 100));
                     Renderer.markScreenDirty();
                 }
+            }
+        }
+    }
+
+    g_telemetry.gps_enabled = Settings.get().gps_enabled;
+    g_telemetry.incline_gforce_enabled = Settings.get().incline_gforce_enabled;
+    g_telemetry.wifi_bridge_enabled = Settings.get().wifi_bridge_enabled;
+    g_telemetry.setup_completed = Settings.get().setup_completed;
+
+    // SCREEN_SETUP_WIZARD: Interactive First-Time Setup & Onboarding Handling
+    if (g_telemetry.screen == SCREEN_SETUP_WIZARD) {
+        int16_t tx = -1, ty = -1;
+        if (Buttons.getLastTap(&tx, &ty)) {
+            Renderer.handleWizardTouch(tx, ty, g_telemetry);
+            Buttons.clearNavAction();
+            if (g_telemetry.setup_completed) {
+                g_telemetry.screen = SCREEN_RIDE_DASH;
+                Renderer.triggerNeedleSweep();
             }
         }
     }
@@ -1127,6 +1158,19 @@ void sim_touch_event(int is_down, int x, int y) {
 
     bool is_new_down = (is_down && !g_last_sim_touch_down);
     g_last_sim_touch_down = (is_down != 0);
+
+    // 0a. Setup Wizard Touch Handling (when in SCREEN_SETUP_WIZARD)
+    if (g_telemetry.screen == SCREEN_SETUP_WIZARD) {
+        if (is_new_down) {
+            Renderer.handleWizardTouch((int16_t)x, (int16_t)y, g_telemetry);
+            Renderer.markScreenDirty();
+            if (g_telemetry.setup_completed) {
+                g_telemetry.screen = SCREEN_RIDE_DASH;
+                Renderer.triggerNeedleSweep();
+            }
+        }
+        return;
+    }
 
     // 0. PIN Lockscreen Input Processing (Interactive Keypad when locked)
     if (g_telemetry.is_locked) {
@@ -1913,6 +1957,21 @@ int sim_set_config_json(const char *json_in) {
     ModeManager::instance().applyLimitsToVesc();
     Renderer.markScreenDirty();
     return 1;
+}
+
+void sim_reset_setup_wizard() {
+    Settings.get().setup_completed = false;
+    Settings.save();
+    g_telemetry.setup_completed = false;
+    g_telemetry.wizard_step = 0;
+    g_telemetry.wizard_pin_buf[0] = '\0';
+    g_telemetry.screen = SCREEN_SETUP_WIZARD;
+    g_telemetry.is_locked = false;
+    ModeManager::instance().setLocked(false);
+    Renderer.initSetupWizard(g_telemetry);
+    Renderer.markScreenDirty();
+    Renderer.invalidateCache();
+    printf("[SIM_BACKEND] First-Time Setup Wizard RESET triggered.\n");
 }
 
 } // extern "C"

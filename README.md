@@ -1,212 +1,247 @@
 # VESC 4.3" Touch Display (800x480) - Waveshare ESP32-S3
-## Flagship Hyper-VESC 35kW+ Cluster & Touch Dashboard
+## Flagship Hyper-VESC 35kW+ Cluster & Autarkic Touch Dashboard
 
 Custom high-performance dashboard for VESC-driven electric scooters, e-bikes, and hyper-scooters, optimized for the **Waveshare ESP32-S3-Touch-LCD-4.3** (800×480 RGB LCD, Goodix GT911 capacitive touch, 16MB Flash, 8MB Octal PSRAM).
 
 <p align="center">
-  <img src="tools/simulator/screenshots/00_hyper_35kw_idle.png" alt="Hyper-VESC 35kW+ Cockpit" width="85%">
+  <img src="tools/simulator/screenshots/00_hyper_35kw_boost_race.png" alt="Hyper-VESC 35kW+ Cockpit in Action" width="90%">
 </p>
 
 ---
 
-## 📸 Screenshots
+## 📸 Feature Highlights & Screenshots
 
-| Hyper 35kW+ Cluster | Extended Stats & Brightness Slider |
+### 1. Flagship Hyper-35kW+ Cockpit
+| Cockpit in Action (92 km/h, GPS Clock & Satellite) | Minimalist Mode (GPS & IMU ausgeblendet) |
 |:---:|:---:|
-| <img src="tools/simulator/screenshots/00_hyper_35kw_idle.png" width="100%"> | <img src="tools/simulator/screenshots/15_stats_rich_overview.png" width="100%"> |
-| **PIN Security Lockscreen** | **VESC Fault Alarm Banner** |
+| <img src="tools/simulator/screenshots/00_hyper_35kw_boost_race.png" width="100%"> | <img src="tools/simulator/screenshots/25_dash_minimal_no_gps_no_imu.png" width="100%"> |
+| **Cockpit Leerlauf (Live-Uhrzeit & Rekuperation)** | **HUD Mode Banner Overlay** |
+| <img src="tools/simulator/screenshots/00_hyper_35kw_idle.png" width="100%"> | <img src="tools/simulator/screenshots/00_hyper_35kw_mode_banner.png" width="100%"> |
+
+### 2. Ersteinrichtungs-Assistent (Setup Wizard)
+*Erscheint automatisch beim ersten Start nach dem Flashen oder Reset (`setup_completed == false`). Führt den Fahrer durch die Bedienung, vergibt einen eigenen PIN und konfiguriert die Hardware.*
+
+| Schritt 1: Schnellanleitung & Tuning-Geste | Schritt 2: Sicherheits-PIN wählen | Schritt 3: Hardware-Optionen & Start |
+|:---:|:---:|:---:|
+| <img src="tools/simulator/screenshots/22_setup_wizard_step1_welcome.png" width="100%"> | <img src="tools/simulator/screenshots/23_setup_wizard_step2_pin.png" width="100%"> | <img src="tools/simulator/screenshots/24_setup_wizard_step3_features.png" width="100%"> |
+
+### 3. Dashboard-Einstellungen & Touch-Konfiguration
+| Neuer Tab `[ DASH ]` (GPS-, IMU- & WiFi-Optionen) | Touch Mode Limits (Speed & Watt Sliders) |
+|:---:|:---:|
+| <img src="tools/simulator/screenshots/12_settings_dash_options.png" width="100%"> | <img src="tools/simulator/screenshots/09_settings_power_limits.png" width="100%"> |
+| **Wi-Fi Bridge (Kabelloser VESC Tool TCP Fallback)** | **Dragy Split-Geschwindigkeiten Konfiguration** |
+| <img src="tools/simulator/screenshots/13_wifi_bridge.png" width="100%"> | <img src="tools/simulator/screenshots/10_settings_edit_mode.png" width="100%"> |
+
+### 4. RACE Dragy / Launch Control & Dyno
+| Dragy Live-Messung (0–22, 0–50, 0–70 km/h) | Beschleunigungs-Dyno (Power & Torque Kurve) |
+|:---:|:---:|
+| <img src="tools/simulator/screenshots/19_race_timer_measuring.png" width="100%"> | <img src="tools/simulator/screenshots/21_race_dyno_modal.png" width="100%"> |
+| **Persönliche Bestzeiten (NVS Rekorde Modal)** | **Legal / Drossel-Modus (Diskreter roter Statuspunkt)** |
+| <img src="tools/simulator/screenshots/20_race_records_modal.png" width="100%"> | <img src="tools/simulator/screenshots/14_stealth_mode_idle.png" width="100%"> |
+
+### 5. Sicherheit & System-Diagnose
+| Smartphone-Style 4-Digit PIN Lockscreen | VESC Fault Blackbox Alarm Banner |
+|:---:|:---:|
 | <img src="tools/simulator/screenshots/17_pin_lockscreen.png" width="100%"> | <img src="tools/simulator/screenshots/16_vesc_fault_banner.png" width="100%"> |
-| **Mode Banner HUD Overlay** | **Wi-Fi Bridge & Diagnostics** |
-| <img src="tools/simulator/screenshots/00_hyper_35kw_mode_banner.png" width="100%"> | <img src="tools/simulator/screenshots/13_wifi_bridge.png" width="100%"> |
-| **RACE Dragy / Launch Timer** | **Personal Best Records Modal** |
-| <img src="tools/simulator/screenshots/19_race_timer_measuring.png" width="100%"> | <img src="tools/simulator/screenshots/20_race_records_modal.png" width="100%"> |
+| **Erweiterte Fahrt-Statistiken & Helligkeits-Slider** | **PIN Fehleranzeige (Error Shake)** |
+| <img src="tools/simulator/screenshots/15_stats_rich_overview.png" width="100%"> | <img src="tools/simulator/screenshots/18_pin_lockscreen_error.png" width="100%"> |
 
 ---
 
-## 🚀 Key Features
+## 🚀 Key Features im Detail
 
 ### 1. Flagship Hyper-35kW+ Cluster (Screen 0)
-- **High-Contrast Digital Speedometer:**
-  - Giant speed readout with a 270° arc gauge.
-  - **Startup Needle Sweep:** Automotive gauge sweep animation on boot/unlock (smoothly sweeps from 0 → 100 km/h → 0 km/h).
-  - Dynamic color transitions based on speed and acceleration.
-  - Centered thermal telemetry underneath: `FET 60°  MOT 75°`.
-- **Mode Banner Transition HUD:**
-  - Clean animated horizontal HUD overlay when changing ride modes (`[ ECO ]`, `[ SPORT ]`, `[ RACE ]`), keeping the speedometer visible at all times.
-- **Power & Regenerative Braking Card:**
-  - Real-time power measurement (up to 35 kW peak).
-  - True bi-directional regen readout: switches into negative emerald-green (e.g. `-820 W` / `-310 W`) during braking.
-- **Battery & Phase Currents:**
-  - High-precision SoC percentage and voltage readout supporting 10S to 24S packs (up to 105 V).
-  - Live Motor Phase Current (`MOTOR 142 A`) and Battery Current (`BATTERY 83 A`).
-  - Minimalist dynamic remaining range readout (`RESTREICHWEITE 48 km`).
-  - **Live Trip Distance Readout:** Cockpit trip odometer (`TRIP 14.2 km`) positioned in the cockpit cluster above the mode button.
-- **Interactive Touch Buttons:**
-  - `[ BOOST ]`: Triggers a 10-second 120% power burst.
-  - `[ ECO / SPORT / RACE ]`: Cycles through active power profiles.
+- **High-Contrast Digitaler Tacho:**
+  - Riesige Geschwindigkeitsanzeige mit dynamischem 270°-Bogen.
+  - **Startup Needle Sweep:** Flüssige Zeigertest-Animation beim Booten bzw. Entsperren (fährt dynamisch von 0 → 100 km/h → 0 km/h).
+  - Dynamische Farbübergänge je nach Geschwindigkeit und Beschleunigung.
+  - Zentrierte thermische Telemetrie direkt unter der Geschwindigkeitszahl: `FET 60°  MOT 75°`.
+- **GPS-Priorität & Atomzeit-Uhr:**
+  - Uhrzeit oben in der Mitte auf exakter Höhe des `[ STATS ]`-Buttons.
+  - Sobald ein 3D-Satelliten-Fix anliegt, erscheint unter `km/h` ein diskretes Satelliten-Icon mit Funkwellen.
+  - Satellitengestützte Geschwindigkeit (immun gegen Radschlupf/Reifenabrieb) hat Priorität und wird auch an den VESC übertragen; bei Signalverlust erfolgt nahtloser Fallback auf Motor-ERPM.
+- **HUD Mode Banner:**
+  - Elegantes horizontales Einblend-Banner beim Umschalten der Fahrmodi (`[ ECO ]`, `[ SPORT ]`, `[ RACE ]`), ohne die Geschwindigkeitsanzeige zu verdecken.
+- **Echte Rekuperations- & Leistungsanzeige:**
+  - Leistungsmessung bis über 35 kW Peak.
+  - Echte bi-direktionale Rekuperations-Erkennung: wechselt beim Bremsen sofort in smaragdgrün mit negativem Vorzeichen (z.B. `-820 W` / `-310 W`).
+- **Batterie- & Phasenströme:**
+  - Präzise SoC-% und Spannungsanzeige für Akkupacks von 10S bis 24S (bis 105 V).
+  - Phasenstrom (`MOTOR 142 A`) und Batteriestrom (`BATTERY 83 A`) in Echtzeit.
+  - Dynamische Restreichweitenberechnung (`RESTREICHWEITE 48 km`) basierend auf rollendem Wh/km-Verbrauch.
+  - Trip-Tageskilometerzähler (`TRIP 14.2 km`) direkt im Cockpit über dem Fahrmodus-Button.
+- **Interaktive Touch-Buttons:**
+  - `[ BOOST ]`: Zündet einen 10-sekündigen 120% Leistungs-Burst.
+  - `[ ECO / SPORT / RACE ]`: Schaltet Profile durch.
 
-### 2. Extended Stats & Telemetry Grid (Screen 2)
-- **Ride Summary:** Trip Distance, Total Odometer, Elapsed Ride Time (HH:MM:SS), Average Speed, Max Speed, and Watt-hours consumed/remaining.
-- **Diagnostics Grid:**
-  - **Max Power (Peak):** Highest recorded power output with golden accent frame.
-  - **Peak Battery Current:** Peak DC amps drawn from the pack.
-  - **Peak Phase Current:** Maximum motor torque demand.
-  - **Consumption & Efficiency:** Trip energy efficiency (`Wh/km`) and dynamic rolling 2 km consumption.
-  - **Battery Voltage (Min / Max):** Under-load voltage sag diagnostic.
-  - **Maximum Temperatures:** Peak recorded ESC FET and Motor temperatures.
-- **Live Display Backlight Control:**
-  - Interactive on-screen slider ($20\% \dots 100\%$) with `[-]`, `[+]`, `[ 25% ]`, and `[ 100% ]` quick-tap presets. Saved directly to NVS flash.
+### 2. Ersteinrichtungs-Assistent (Setup Wizard)
+- **Automatischer Erststart:** Wird das System nach dem ersten Flashen oder einem Reset gestartet (`setup_completed == false`), startet direkt der 3-stufige Assistent (der PIN-Lockscreen wird dabei automatisch umgangen).
+- **Schritt 1 (Schnellanleitung & Tuning-Geheimnis):**
+  - Erklärt mit klaren Anweisungen, wie das Einstellungsmenü geöffnet wird (Tipp oben rechts auf das Batterie-Badge).
+  - Erklärt die geheime Tuning-Geste: 4 Sekunden langes Halten direkt auf der großen `km/h`-Zahl schaltet die Drosselung ab (roter Punkt oben rechts erlischt).
+  - Sofortige Drosselung (Polizei-Modus): Ein einfacher Einzeltipp auf die km/h-Zahl sperrt das Fahrzeug sofort wieder auf 20 km/h.
+- **Schritt 2 (Sicherheits-PIN wählen):**
+  - Integriertes 12-Tasten Touch-Ziffernfeld (`0`–`9`, `DEL`, `OK`), um einen individuellen 4-stelligen Wegfahrsperren-PIN festzulegen.
+  - Wird dauerhaft im ESP32 NVS-Flash gespeichert.
+- **Schritt 3 (Hardware-Features anpassen):**
+  - Direkte Schalter für GPS & Live-Uhrzeit, Neigungswinkel & G-Force (IMU) sowie WiFi-Bridge Fallback.
+  - Klick auf `[ SETUP ABSCHLIESSEN & STARTEN ]` speichert `setup_completed = true`, führt den Zeigertest aus und öffnet das Fahr-Cockpit. Der Assistent erscheint bei normalen Starts nicht mehr.
 
-### 3. Smartphone-Style 4-Digit PIN Lockscreen
-- **Keypad Security on Boot:** Numeric keypad ($0 \dots 9$, `<`, `#`) locks the vehicle upon power-on.
-- **VESC Immobilizer:** Clamps VESC output to 0A until unlocked.
-- **Configurable:** Code can be changed or disabled via the onboard Settings menu or the Captive Portal.
+### 3. Neuer Settings-Tab `[ DASH ]` & Dashboard-Optionen
+- Das On-Screen Einstellungsmenü bietet 6 Reiter: `[ ECO ] | [ SPORT ] | [ RACE ] | [ DRAGY ] | [ DASH ] | [ PIN ]`.
+- **GPS & Live-Uhrzeit Schalter:** Schaltet GPS-Verarbeitung ein oder aus. Bei `AUS` werden die Uhr oben mittig sowie das Satelliten-Icon unter `km/h` komplett ausgeblendet und das NMEA-Polling deaktiviert.
+- **Neigung & G-Force (IMU) Schalter:** Blendet die IMU-Badges unten links für ein aufgeräumtes, minimalistisches Cockpit aus.
+- **Kein Bluetooth-Modul? (WiFi-Bridge Action):** Startet sofort den SoftAP `VESC-DASH-AP` auf TCP-Port 6510/6512 als kabellosen Fallback für die VESC Tool App und leitet auf die WiFi-Bridge-Seite weiter.
+- **Setup-Assistent wiederholen:** Ermöglicht es, den Ersteinrichtungs-Assistenten jederzeit manuell zu wiederholen.
 
-### 4. VESC Fault Monitor & NVS Blackbox
-- **Live Fault HUD:** Real-time decoding of `mc_fault_code` from VESC telemetry (Over-temp, Over-voltage, Under-voltage, DRV errors, Over-current).
-- **HUD Alarm Banner:** Flashing warning banner with actionable advice.
-- **NVS Blackbox Ring Buffer:** Persists the last 10 fault events with timestamps, voltage, currents, and temperatures.
+### 4. Touch Mode Configurator & Dragy Splits
+- Parameter (Speed in km/h, Leistung in Watt) für jedes Profil (`ECO`, `SPORT`, `RACE`) direkt auf dem Display anpassen:
+  - Über Touch-Slider oder Präzisions-Taster `[-]` und `[+]`.
+  - Auto-Save in den NVS Flash beim Verlassen zurück ins Dashboard (`< DASH`).
+- Dragy-Splits unter Tab `[ DRAGY ]` (z.B. 0–22 km/h, 0–50 km/h, 0–70 km/h) stufenlos einstellbar.
 
-### 5. Wi-Fi Captive Portal & Web UI
-- Hotspot AP (`VESC-HyperDash`, `192.168.4.1`) launched automatically on Core 0.
-- Live web dashboard, power limits configuration, and OTA firmware updates without requiring USB connections.
+### 5. RACE Launch Control / Dragy Acceleration Timer & Dyno (Screen 6)
+- **Präzise Dragy-Messung:**
+  - 5-Sekunden Launch Countdown (`5 ... 1 ... GO!`) mit optischer Ampel.
+  - Erfasst exakte Zwischenzeiten: **0–22 km/h**, **0–50 km/h** und **0–70 km/h**.
+  - Saubere Split-Anzeige ohne vorzeitige PB-Tags; neue Bestzeiten werden nach dem Run als `*PB*` markiert und im NVS gespeichert.
+  - Automatischer Messungsabschluss bei Erreichen des Split 3 oder nach 15 Sekunden Timeout.
+- **Automatische Profil- & Boost-Aktivierung:**
+  - Beim Wechsel auf den Race-Screen wird automatisch **RACE Mode** aktiviert und **Hyper Boost** permanent gezündet.
+  - Beim Verlassen wird automatisch der vorherige Fahrmodus wiederhergestellt.
+- **Thermische Schutzschaltung:**
+  - Bei Motor- oder ESC-Temperaturen über **65 °C** wird der Launch mit Warnhinweis `TEMP > 65C` blockiert bzw. eine laufende Messung abgebrochen.
+- **G-Force Telemetrie-Badge:**
+  - Echte Längsbeschleunigung ($\pm G$) in HUD-Rundbadge mit Farbkodierung.
+- **Live-Dyno Modal (`[ DIAGRAMM ]`):**
+  - Zeichnet die Drehmoment- und Leistungskurve über die Zeit im Beschleunigungslauf auf.
+- **Persönliche Bestzeiten (`[ BESTZEITEN ]`):**
+  - Interaktives Popup mit allen Rekorden und Ein-Tipp `[ RESET ]`-Funktion.
 
-### 6. RACE Launch Control / Dragy Acceleration Timer (Screen 6)
-- **High-Precision Dragy-Style Launch Measurement:**
-  - Launch countdown ($5\text{s}$ with visual cues and `1 ... GO!` launch trigger, titled `LAUNCH CONTROL` in idle state).
-  - High-precision split times automatically captured: **0–22 km/h**, **0–50 km/h**, and **0–70 km/h**.
-  - Clean split display: shows only live time during measuring (clean, uncluttered without premature PB tags), and marks personal bests (`*PB*`) upon completion.
-  - Automatic race termination when 70 km/h is reached or at a strict **15-second measurement timeout**.
-- **Automated Vehicle Profile & Boost Engagement:**
-  - Entering the Race Timer screen automatically switches the vehicle into **RACE Mode** (`PROFILE_MODE_RACE`) and engages **Hyper Boost** (`boost_active = true`).
-  - Boost stays permanently active throughout the countdown and entire acceleration run.
-  - Exiting the screen (or stopping/canceling the run) cleanly restores the previous ride mode and disables boost.
-- **Thermal Safety Cutoff:**
-  - Automatic temperature safety interlock: if motor or VESC FET temperatures exceed **65 °C**, launch is locked out with visual `TEMP > 65C` notice to safeguard hardware. Continuous thermal protection also aborts active runs if temperature spikes above 65 °C.
-- **G-Force Telemetry Badge:**
-  - Real-time longitudinal acceleration/braking force calculation ($\pm G$) displayed in a compact HUD circular badge with dynamic color ring.
-- **Persistent Personal Best Records (NVS Flash):**
-  - All-time best acceleration records stored across reboots in non-volatile storage.
-  - Interactive popup modal (`[ BESTZEITEN ]`) showing records with one-touch `[ RESET ]` functionality.
+### 6. Smartphone-Style 4-Digit PIN Lockscreen
+- Numerisches Tastenfeld ($0 \dots 9$, `<`, `#`) sperrt das Fahrzeug beim Einschalten.
+- VESC Wegfahrsperre: VESC-Ausgang wird auf 0A geklemmt, bis der korrekte PIN eingegeben wurde.
+- PIN kann im Einstellungsmenü (Tab `[ PIN ]`) oder im Ersteinrichtungs-Assistenten geändert werden.
+
+### 7. VESC Fault Monitor & NVS Blackbox
+- Live-Dekodierung von VESC `mc_fault_code` (Übertemperatur, Überspannung, Unterspannung, DRV8302/Gate-Fehler, Überstrom).
+- Blinkendes HUD-Alarm-Banner mit Handlungsanweisung.
+- NVS Blackbox Ringspeicher: speichert die letzten 10 Fehler mit Zeitstempel, Spannung, Strömen und Temperaturen.
 
 ---
 
-## 👆 Touch Navigation Gestures (GT911)
+## 👆 Touch-Gesten & Navigation (GT911)
 
-| Gesture / Hitbox | Screen | Action |
+| Geste / Hitbox | Bildschirm | Aktion |
 |---|---|---|
-| **Swipe Left** ($\Delta X < -60\text{px}$) | Ride Dash / RT Graphs | Next Screen (`Ride Dash` $\rightarrow$ `RT Graphs`) |
-| **Swipe Right** ($\Delta X > +60\text{px}$) | Ride Dash / RT Graphs | Previous Screen (`RT Graphs` $\rightarrow$ `Ride Dash`) |
-| **Tap `[ STATS ]`** (Top-Left) | Ride Dash | Open Stats Screen |
-| **Tap `[ < DASH ]`** (Top-Left) | RT Graphs | Return to Ride Dash |
-| **Tap `[ RACE ]`** (Top-Left) | RT Graphs | Open Race Launch Timer Screen |
-| **Tap `[ < DASH ]`** (Top-Left) | Race Timer | Return to Ride Dash & Restore Previous Mode |
-| **Tap Center Button** | Race Timer | Start Launch Countdown / Abort Measuring |
-| **Tap `[ BESTZEITEN ]`** (Top-Right) | Race Timer | Toggle Personal Bests Popup Modal |
-| **Tap `[ BOOST ]`** | Ride Dash | Toggle 10-second Boost Burst |
-| **Tap `[ MODE ]`** | Ride Dash | Switch Ride Mode (`ECO` $\rightarrow$ `SPORT` $\rightarrow$ `RACE`) |
-| **Tap Badge** (Top-Right) | Ride Dash | Open Settings Menu |
-| **Hold on Speed Number (4s)** | Ride Dash | Unlock / Toggle Tuning Mode |
+| **Swipe Links** ($\Delta X < -60\text{px}$) | Ride Dash / RT Graphs | Nächster Bildschirm (`Ride Dash` $\rightarrow$ `RT Graphs`) |
+| **Swipe Rechts** ($\Delta X > +60\text{px}$) | Ride Dash / RT Graphs | Vorheriger Bildschirm (`RT Graphs` $\rightarrow$ `Ride Dash`) |
+| **Tipp `[ STATS ]`** (Oben links) | Ride Dash | Öffnet Statistik- & Helligkeits-Bildschirm |
+| **Tipp `[ < DASH ]`** (Oben links) | Stats / Race / Settings | Direkte Rückkehr ins Fahr-Dashboard |
+| **Tipp `[ RACE ]`** (Oben links) | Stats Screen (nur bei Tuning) | Öffnet Race Dragy Launch Screen |
+| **Tipp `[ BESTZEITEN ]`** (Oben rechts) | Race Screen | Öffnet Rekorde-Popup |
+| **Tipp `[ DIAGRAMM ]`** (Oben mittig) | Race Screen | Öffnet Beschleunigungs-Dyno Kurve |
+| **Tipp Display-Mitte** | Race Screen | Startet Launch-Countdown / Bricht Messung ab |
+| **Tipp `[ BOOST ]`** | Ride Dash | Aktiviert 10-Sekunden Hyper Boost |
+| **Tipp `[ ECO / SPORT / RACE ]`** | Ride Dash | Schaltet aktiven Fahrmodus um |
+| **Tipp Batterie-Badge** (Oben rechts) | Ride Dash | Öffnet Einstellungsmenü (Tabs: ECO, SPORT, RACE, DRAGY, DASH, PIN) |
+| **Halten auf Geschwindigkeitszahl (4s)** | Ride Dash | **Tuning freischalten / sperren** (roter Statuspunkt erlischt) |
+| **Einzeltipp auf Geschwindigkeitszahl** | Ride Dash (getuned) | **Sofortige 20 km/h Drosselung (Polizei-Modus)** |
+| **Langer Druck unten links** | Ride Dash / Stats | Trip-Kilometerzähler & Peak-Werte auf 0 zurücksetzen |
 
 ---
 
-## 🔌 Hardware Configuration (Waveshare ESP32-S3-Touch-LCD-4.3)
+## 🔌 Hardware-Konfiguration (Waveshare ESP32-S3-Touch-LCD-4.3)
 
 ### Display (ST7262 RGB Parallel Interface)
-- **Resolution:** 800 $\times$ 480 @ 14 MHz Pixel Clock
+- **Auflösung:** 800 $\times$ 480 @ 14 MHz Pixel Clock
 - **Sync:** HSYNC = GPIO 46, VSYNC = GPIO 3, DE = GPIO 5, PCLK = GPIO 7
 - **16-Bit RGB565 Bus:**
-  - **Blue (B0–B4):** GPIO 14, 38, 18, 17, 10
-  - **Green (G0–G5):** GPIO 39, 0, 45, 48, 47, 21
-  - **Red (R0–R4):** GPIO 1, 2, 42, 41, 40
-- **Touch Controller:** Goodix GT911 (I2C SDA = GPIO 8, SCL = GPIO 9, INT = GPIO 4, Address `0x5D`)
-- **IO Expander:** CH422G (I2C `0x24`), EXIO2 controls LCD Backlight
-- **Memory:** 16 MB Flash, 8 MB Octal PSRAM (`qio_opi`)
+  - **Blau (B0–B4):** GPIO 14, 38, 18, 17, 10
+  - **Grün (G0–G5):** GPIO 39, 0, 45, 48, 47, 21
+  - **Rot (R0–R4):** GPIO 1, 2, 42, 41, 40
+- **Touch-Controller:** Goodix GT911 (I2C SDA = GPIO 8, SCL = GPIO 9, INT = GPIO 4, Adresse `0x5D`)
+- **IO-Expander:** CH422G (I2C `0x24`), EXIO2 steuert die Display-Hintergrundbeleuchtung
+- **Speicher:** 16 MB Flash, 8 MB Octal PSRAM (`qio_opi`)
 
-### VESC & Peripheral Bus Topology
+### VESC & Peripherie-Verkabelung
 
-The display communicates with any standard VESC (single or dual array) via either **CAN-Bus** (recommended) or **UART**. You can switch between modes at compile time in [`include/board_config.h`](include/board_config.h):
+Die Kommunikation mit dem VESC (Single oder Dual Array) erfolgt wahlweise über **CAN-Bus** (empfohlen) oder **UART**. Umschaltbar in [`include/board_config.h`](include/board_config.h):
 ```c
 #define VESC_USE_CAN_BUS 1   // 1 = High-Speed CAN Bus (500kbit/s), 0 = Legacy UART (115200)
 ```
 
-#### 1. CAN-Bus Wiring (Recommended for Dual VESC & Bluetooth Dongles)
-Uses the onboard TJA1051 CAN transceiver. Directly connect the display's CAN port / screw terminals to any standard VESC CAN port:
+#### 1. CAN-Bus Verkabelung (Empfohlen für Dual VESC & Bluetooth-Module)
+Nutzt den integrierten TJA1051 CAN-Transceiver des Waveshare Displays:
 
-| Display Pin / Terminal | VESC CAN Connector | Description |
+| Display Pin / Klemme | VESC CAN Anschluss | Beschreibung |
 |:---|:---|:---|
-| **5V / VCC** | `5V` | Logic power supply from VESC internal 5V BEC |
-| **GND** | `GND` | Common ground reference |
-| **CAN_H** | `CAN_H` | High-speed differential CAN High line (500 kbps) |
-| **CAN_L** | `CAN_L` | High-speed differential CAN Low line (500 kbps) |
+| **5V / VCC** | `5V` | Logikversorgung vom internen 5V BEC des VESC |
+| **GND** | `GND` | Gemeinsame Masse |
+| **CAN_H** | `CAN_H` | Differential CAN High Leitung (500 kbps) |
+| **CAN_L** | `CAN_L` | Differential CAN Low Leitung (500 kbps) |
 
-> [!NOTE]
-> Some VESC models provide 5-pin JST CAN ports where the 5th pin is `NC` (unconnected) or used for CAN shield / daisy-chaining. Only the 4 lines above (`5V`, `GND`, `CAN_H`, `CAN_L`) are required for the display.
+> [!TIP]
+> Bei Nutzung von CAN-Bus bleibt der `COMM / UART`-Port des VESC zu 100% frei für dein Bluetooth-Modul (VESC Tool Mobile App)!
 
-- **Dual VESC Telemetry:** Simultaneously decodes broadcast status frames for Master (ID 0) and Slave (ID 1) without polling overhead.
-- **Port Freedom:** Leaves the VESC `COMM / UART` port 100% free for your existing Bluetooth dongle (VESC Tool Mobile App)!
+#### 2. VESC UART Verkabelung (Alternative bei Single-ESC)
+Wenn CAN nicht genutzt wird (`#define VESC_USE_CAN_BUS 0`):
 
-#### 2. Direct VESC UART Wiring (Alternative single-ESC mode)
-If CAN is not used (`#define VESC_USE_CAN_BUS 0`):
-
-| Display Pin | VESC COMM Port | Description |
+| Display Pin | VESC COMM Port | Beschreibung |
 |:---|:---|:---|
-| **5V / VCC** | `5V` | Logic power supply |
-| **GND** | `GND` | Common ground |
-| **TX (GPIO 43)** | `RX` | Serial transmit (115200 baud) |
-| **RX (GPIO 44)** | `TX` | Serial receive (115200 baud) |
+| **5V / VCC** | `5V` | Logikversorgung |
+| **GND** | `GND` | Gemeinsame Masse |
+| **TX (GPIO 43)** | `RX` | Seriell Senden (115200 Baud) |
+| **RX (GPIO 44)** | `TX` | Seriell Empfangen (115200 Baud) |
 
-#### 3. GPS / BDS GNSS Module Integration
-Standard 3.3V UART GPS/BDS module connects directly to the display's secondary serial interface:
-- GPS TX $\rightarrow$ ESP32 RX (GPIO 44, when CAN mode is active)
-- GPS RX $\rightarrow$ ESP32 TX (GPIO 43, when CAN mode is active)
-- VCC (3.3V/5V) and GND
-- Provides satellite ground speed (unaffected by tire slip or wear), real-time altitude, slope gradient (%), atomic UTC clock sync, and satellite lock status.
+#### 3. GPS / BDS GNSS Modul Verkabelung (z.B. ATGM336H)
+Standard 3.3V UART GPS/BDS-Modul verbindet direkt mit dem ESP32:
+- **GPS TX** $\rightarrow$ **ESP32 RX** (GPIO 44, im CAN-Modus)
+- **GPS RX** $\rightarrow$ **ESP32 TX** (GPIO 43, im CAN-Modus)
+- **VCC** (3.3V / 5V) und **GND**
+- Liefert Atomzeit-Uhrzeitsynchronisation, 3D-Satellitenfix-Status und schlupffreie GPS-Geschwindigkeit mit Prioritätsweiterleitung an den VESC.
 
 ---
 
-## 💻 Desktop Simulator
+## 💻 Desktop Simulator & Live-Demo
 
-The project includes a standalone desktop simulator and headless screenshot test suite using an emulated display driver.
+Das Projekt beinhaltet einen vollwertigen Desktop-Simulator mit integriertem Virtual VESC Emulator und Web-Streaming:
 
-### Run Simulator & Live Web Demo
+### Live-Demo starten
 ```bash
-python3 tools/simulator/live_demo.py
+DISPLAY=:0 python3 tools/simulator/live_demo.py
 ```
-- **Web Stream:** Open [http://localhost:8080](http://localhost:8080) for a clean 60 FPS interactive stream.
-- **Captive Portal Web UI:** Accessible at [http://localhost:8080/portal](http://localhost:8080/portal) or [http://localhost:8081](http://localhost:8081).
-- **VESC Tool TCP Bridge:** The simulator runs a built-in Virtual VESC TCP Server on port `6510`. Connect the official VESC Tool (Connection $\rightarrow$ TCP $\rightarrow$ `127.0.0.1:6510`) to tune limits, test throttle, and inspect real-time motor RT telemetry end-to-end!
-- **Desktop Window:** Native 800x480 interactive window on `DISPLAY=:0`.
-- **Controls:**
-  - Mouse click/drag on the display to touch and swipe; mouse wheel scrolls Settings menus.
-  - Keyboard: <kbd>W</kbd> / <kbd>Up</kbd> (Throttle), <kbd>S</kbd> / <kbd>Down</kbd> (Brake), <kbd>B</kbd> (Boost), <kbd>M</kbd> (Mode cycle), <kbd>Left</kbd> / <kbd>Right</kbd> (Swipe screen or navigate), <kbd>Enter</kbd> (Select/Confirm), <kbd>Backspace</kbd> / <kbd>Esc</kbd> (Back/Exit to Dash).
+- **Web-Stream:** Öffne [http://localhost:8080](http://localhost:8080) für einen interaktiven 60 FPS Stream mit Touch-Unterstützung im Browser.
+- **Ersteinrichtungs-Assistent Reset:** 
+  - Klicke im Webinterface auf `[ 🔄 Setup Wizard Reset ]`, drücke im Fenster <kbd>Ctrl</kbd>+<kbd>R</kbd> bzw. <kbd>F5</kbd>, oder starte mit `--reset-wizard`:
+  ```bash
+  DISPLAY=:0 python3 tools/simulator/live_demo.py --reset-wizard
+  ```
+- **VESC Tool TCP Bridge:** Der Simulator stellt einen Virtual VESC TCP-Server auf Port `6510`/`6512` bereit. Verbinde das offizielle VESC Tool (Connection $\rightarrow$ TCP $\rightarrow$ `127.0.0.1:6510`), um Limits einzustellen und Telemetrie live zu testen!
+- **Steuerung:**
+  - Maus-Klick und Drag auf das Display emulieren GT911 Kapazitiv-Touch und Wischgesten.
+  - Tastatur: <kbd>W</kbd> / <kbd>Up</kbd> (Gas), <kbd>S</kbd> / <kbd>Down</kbd> (Bremse), <kbd>B</kbd> (Boost), <kbd>M</kbd> (Mode cycle), <kbd>X</kbd> (Tuning toggle).
 
-### Build & Run Test Scenarios
+### Tests & Screenshot-Generierung ausführen
 ```bash
 ./tools/simulator/build_and_run.sh
 ```
-Compiles and executes automated unit tests (touch hitbox tests, speedometer startup sweep easing, anti-ghosting transitions, and telemetry calculators), exporting screenshots to `tools/simulator/screenshots/`.
+Führt 25 automatisierte Unittests und Bildschirmszenarien aus und exportiert alle Screenshots nach `tools/simulator/screenshots/`.
 
 ---
 
-## ⚡ Flashing to the ESP32-S3
+## ⚡ Flashen auf das Waveshare ESP32-S3 Board
 
-1. Connect the Waveshare ESP32-S3 board to your PC via the **USB** port.
-2. Configure your hardware setup in [`include/board_config.h`](include/board_config.h):
-   - Set `#define SIMULATION_MODE 0` for live vehicle operation.
-   - Set `#define VESC_USE_CAN_BUS 1` for CAN-Bus mode (or `0` for UART mode).
-3. Build and upload using PlatformIO:
+1. Verbinde das Waveshare ESP32-S3 4.3" Board über den **USB**-Port mit deinem PC.
+2. Prüfe die Konfiguration in [`include/board_config.h`](include/board_config.h):
+   - Setze `#define SIMULATION_MODE 0` für echten Fahrbetrieb.
+   - Wähle `#define VESC_USE_CAN_BUS 1` für CAN-Bus oder `0` für UART.
+3. Baue und flashe die Firmware mit PlatformIO:
 ```bash
 pio run -t upload
 ```
 
 ---
 
-## 📄 License
-MIT License. Free for personal and commercial electric vehicle projects.
-
----
-
-## 🙏 Credits & Acknowledgments
-- **Development:** Engineered with AI pair-programming assistance.
-- **Inspiration:** Telemetry architecture, dashboard concepts, and UI inspirations courtesy of [@aerosock](https://github.com/aerosock).
+## 📄 Lizenz
+MIT License. Frei nutzbar für private und kommerzielle Elektrofahrzeug-Projekte.

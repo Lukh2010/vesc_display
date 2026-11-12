@@ -109,6 +109,8 @@ sim_lib.sim_set_manual_throttle.restype = None
 sim_lib.sim_set_manual_brake.argtypes = [ctypes.c_float]
 sim_lib.sim_set_manual_brake.restype = None
 
+sim_lib.sim_reset_setup_wizard.restype = None
+
 sim_lib.sim_get_frame_rgb24.argtypes = [ctypes.c_char_p]
 sim_lib.sim_get_frame_rgb24.restype = None
 
@@ -281,6 +283,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><kbd>Space / B</kbd> Boost</span>
   <span><kbd>L</kbd> Licht (Hauptschalter)</span>
   <span><kbd>X</kbd> Tuning / Legal</span>
+  <span><button onclick="fetch('/api/reset_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔄 Setup Wizard Reset</button></span>
   <span><a href="/portal" target="_blank" style="color:#00e5ff; text-decoration:underline; font-weight:bold;">⚙️ Captive Portal</a> (<a href="http://localhost:8081" target="_blank" style="color:#00e5ff;">Port 8081</a>)</span>
 </div>
 
@@ -477,6 +480,12 @@ class WebDemoHandler(BaseHTTPRequestHandler):
                     sim_lib.sim_toggle_tuning_mode()
                 elif enable >= 0:
                     sim_lib.sim_set_tuning_mode(enable)
+            self.send_response(200)
+            self.end_headers()
+
+        elif path == "/api/reset_wizard":
+            with sim_lock:
+                sim_lib.sim_reset_setup_wizard()
             self.send_response(200)
             self.end_headers()
 
@@ -742,6 +751,8 @@ class DesktopDemoApp:
         self.root.bind("<T>", lambda e: self.trigger_nav(NAV_SCREEN_STATS))
         self.root.bind("<r>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
         self.root.bind("<R>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
+        self.root.bind("<Control-r>", lambda e: self.reset_wizard())
+        self.root.bind("<F5>", lambda e: self.reset_wizard())
         self.root.bind("<Escape>", lambda e: self.on_esc_press())
 
         self.tk_img = ImageTk.PhotoImage(initial_image)
@@ -849,6 +860,10 @@ class DesktopDemoApp:
         with sim_lock:
             sim_lib.sim_toggle_tuning_mode()
 
+    def reset_wizard(self):
+        with sim_lock:
+            sim_lib.sim_reset_setup_wizard()
+
     def on_touch_down(self, event):
         self.touch_active = True
         with sim_lock:
@@ -912,6 +927,11 @@ def main():
 
     sim_thread = threading.Thread(target=sim_worker_loop, daemon=True)
     sim_thread.start()
+
+    if "--reset-wizard" in sys.argv:
+        time.sleep(0.1)
+        with sim_lock:
+            sim_lib.sim_reset_setup_wizard()
 
     web_thread = threading.Thread(target=start_web_server, daemon=True)
     web_thread.start()
