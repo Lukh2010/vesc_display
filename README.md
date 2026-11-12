@@ -67,82 +67,77 @@ Das Dashboard nutzt das extrem performante 16-Bit RGB565 Parallel-Interface und 
 | **Erweiterte Fahrt-Statistiken & Helligkeit** | **PIN Fehleingabe-Animation** |
 | <img src="tools/simulator/screenshots/15_stats_rich_overview.png" width="100%"> | <img src="tools/simulator/screenshots/18_pin_lockscreen_error.png" width="100%"> |
 
+### 6. Intelligenter Akku-Lademodus & Diebstahlschutz
+| Akku-Lademodus mit Restzeit-Anzeige & Wegfahrsperre | Diebstahlschutz mit VESC FOC Motor-Sirene |
+|:---:|:---:|
+| <img src="tools/simulator/screenshots/26_charging_hud.png" width="100%"> | <img src="tools/simulator/screenshots/27_pin_lockscreen_theft_alarm.png" width="100%"> |
+
 ---
 
-## 🚀 Kernfunktionen im Detail
+## 🌟 Spannende Features & Highlights
 
-### 1. Digitales Fahr-Cockpit (Screen 0)
-- **High-Contrast Digitaler Tacho:**
-  - Große, gut ablesbare Geschwindigkeitsanzeige mit dynamischem 270°-Bogen.
-  - **Startup Needle Sweep:** Zeigertest-Animation beim Booten bzw. Entsperren (0 → 100 km/h → 0 km/h).
-  - Dynamische Farbübergänge je nach Geschwindigkeit und Leistung.
-  - Thermische Telemetrie direkt unter der Geschwindigkeitszahl: `FET xx°  MOT xx°`.
-- **GPS-Unterstützung & Uhrzeitsynchronisation:**
-  - Uhrzeit oben in der Mitte auf Höhe des `[ STATS ]`-Buttons.
-  - Satelliten-Icon unter `km/h` signalisiert stabilen 3D-Fix.
-  - Satellitengestützte Geschwindigkeit (schlupffrei) hat Priorität und wird an den VESC übertragen; bei Signalverlust erfolgt nahtloser Fallback auf Motor-ERPM.
-- **HUD Mode Banner:**
-  - Dezentes horizontales Einblend-Banner beim Umschalten der Fahrmodi (`[ ECO ]`, `[ SPORT ]`, `[ RACE ]`).
-- **Bi-direktionale Leistungs- & Rekuperationsanzeige:**
-  - Echte bi-direktionale Strom- und Leistungsmessung.
-  - Beim Bremsen/Rekuperieren wechselt die Anzeige in Smaragdgrün mit negativem Vorzeichen (z. B. `-820 W`).
-- **Batterie- & Phasenströme:**
-  - Präzise SoC-% und Spannungsanzeige für Akkus von 10S bis 24S (bis 105 V).
-  - Phasenstrom (`MOTOR xx A`) und Batteriestrom (`BATTERY xx A`) in Echtzeit.
-  - Dynamische Restreichweitenberechnung (`RESTREICHWEITE xx km`) basierend auf rollendem Wh/km-Verbrauch.
-  - Trip-Tageskilometerzähler (`TRIP xx.x km`) direkt im Cockpit.
-- **Interaktive Touch-Buttons:**
-  - `[ BOOST ]`: Aktiviert einen zeitlich begrenzten 120% Leistungs-Burst.
-  - `[ ECO / SPORT / RACE ]`: Schaltet Profile durch.
+- ⚡ **Intelligenter Akku-Lademodus (Charging HUD):**
+  - **Vollautomatische Erkennung:** Erkennt das Anstecken des Ladegeräts im Stillstand anhand von Ladestrom oder Spannungsanstieg sofort und schaltet eigenständig auf das Lade-HUD um.
+  - **Tacho-Ladekreis & Restzeit:** Eleganter 270°-Bogen mit großem Akkustand (%) im Zentrum, Live-Anzeige von Ladeleistung (Watt), Spannung (Volt) und Strom (Ampere) sowie dynamisch hochgerechneter Restladezeit (`RESTZEIT: ca. X min bis voll`).
+  - **Hardware-Wegfahrsperre:** Während des Ladevorgangs wird der VESC-Motorstrom auf 0 A gekappt – Fahren oder versehentliches Gasgeben bei eingestecktem Kabel ist unmöglich. Nach dem Abstecken wird der vorherige Bildschirm automatisch wiederhergestellt.
 
-### 2. Ersteinrichtungs-Assistent (Setup Wizard)
-- **Automatischer Erststart:** Wird das System nach dem ersten Flashen gestartet (`setup_completed == false`), führt der 3-stufige Assistent durch die Basiseinstellungen:
-  - **Schritt 1 (Schnellanleitung):** Erklärt das Öffnen der Einstellungen sowie die Drosselungs- und Entsperr-Gesten.
-  - **Schritt 2 (PIN festlegen oder überspringen):** 4-stelligen Sicherheits-PIN vergeben oder per `[ UEBERSPRINGEN > ]` ohne Wegfahrsperre fortfahren.
-  - **Schritt 3 (Hardware-Features):** Schnellwahlschalter für GPS, IMU-Neigungsanzeige und VESC-Verbindung.
+- 🚨 **Diebstahlschutz mit VESC FOC Motor-Sirene:**
+  - **Bewegungserkennung im Lock-Zustand:** Wird das gesperrte Fahrzeug mehr als 2 Meter bewegt (gemessen über Motor-ERPM, GPS oder Gyro), schlägt das System Alarm.
+  - **Motor als Sirene:** Nutzt Benjamin Vedders FOC-Audio-Modulation (`foc-beep`) direkt über die Motorwicklungen – extrem laut und durchdringend, ganz ohne externen Summer oder Lautsprecher!
+  - **Visueller Alarm-Screen:** Der Bildschirm blinkt rot mit Entfernungsanzeige und akustischer Warnung. Nur die Eingabe des korrekten PINs entschärft die Sirene und gibt den Antrieb wieder frei.
 
-### 3. Dashboard-Einstellungen (`[ DASH ]`-Tab & Parameter)
-- On-Screen Einstellungsmenü mit 6 Reitern: `[ ECO ] | [ SPORT ] | [ RACE ] | [ DRAGY ] | [ DASH ] | [ PIN ]`.
-- **Echtzeit-Parameteranpassung:** Geschwindigkeit (km/h) und Leistung (Watt) für jedes Profil direkt per Touch-Slider oder `[-]`/`[+]` Tasten justieren.
-- **Hardware-Optionen:**
-  - GPS & Live-Uhrzeit de-/aktivieren.
-  - Neigungswinkel & G-Force (IMU) ein-/ausblenden.
-  - VESC Wi-Fi Bridge starten (SoftAP `VESC-DASH-AP` auf Port 6510 für kabellose VESC-Tool Verbindung).
-  - Setup-Assistenten jederzeit erneut starten.
+- 👮 **One-Touch Polizei- & Drossel-Modus (Stealth Lock):**
+  - **Sekundenschnelle Drosselung:** Ein einfacher Fingertipp auf die km/h-Anzeige riegelt das Fahrzeug sofort unumkehrbar auf 20 km/h (bzw. konfigurierte Werte) ab.
+  - **Diskreter Statuspunkt:** Ein winziger roter Subpixel-Punkt oben rechts im Eck signalisiert dem Fahrer unauffällig den Drosselstatus (im offenen Tuning-Modus unsichtbar).
+  - **Geheimer Entsperr-Druck:** Das Umschalten in den offenen Tuning-Modus ist gegen versehentliches Auslösen gesichert und erfordert einen verdeckten 4-Sekunden-Druck auf die Geschwindigkeitszahl.
 
-### 4. Dragy Launch Control & Beschleunigungsmessung
-- **5-Sekunden Launch Countdown:** Optische Ampel mit präziser Zwischenzeiterfassung (z. B. 0–22 km/h, 0–50 km/h, 0–70 km/h).
-- **Automatischer Rekordspeicher:** Neue Bestzeiten werden als `*PB*` markiert und dauerhaft im NVS gespeichert.
-- **Live-Dyno Modal:** Zeichnet Drehmoment- und Leistungsverlauf über der Zeit auf.
-- **Thermischer Launch-Schutz:** Blockiert Starts bei Controller- oder Motortemperaturen über 65 °C.
+- ⏱️ **Dragy Launch Control & Beschleunigungs-Dyno:**
+  - **Präzise 0–x km/h Messung:** Professionelle Beschleunigungsmessung mit optischer Ampel (5s Countdown) und automatischer Erfassung von Split-Zeiten (z. B. 0–22, 0–50, 0–70 km/h).
+  - **Persönliche Bestzeiten:** Neue Rekorde werden automatisch mit Sternchen (`*PB*`) markiert und im Flash-Speicher (NVS) dauerhaft gespeichert.
+  - **Live-Dyno Diagramm:** Integrierte Leistungs- und Drehmomentkurve visualisiert den Beschleunigungsverlauf direkt auf dem Touchscreen.
 
-### 5. PIN-Wegfahrsperre & System-Sicherheit
-- 4-stellige Code-Abfrage beim Einschalten mit 0A Stromabschaltung zum VESC.
-- Kann bei Bedarf komplett deaktiviert oder jederzeit in den Einstellungen geändert werden.
-- Notfall-Reset über definierte Service-Geste.
+- 📶 **Kabellose VESC Wi-Fi Bridge:**
+  - Startet per Knopfdruck einen lokalen WLAN-Hotspot (`VESC-DASH-AP`).
+  - Überträgt VESC-Telemetriedaten und Einstellungen transparent über TCP (Port 6510) – verbinde einfach das offizielle **VESC Tool** auf Smartphone oder PC, um Motorparameter drahtlos live abzustimmen.
 
-### 6. VESC Fehler-Diagnose & Blackbox
-- Echtzeit-Dekodierung von VESC-Fehlercodes (`mc_fault_code`: Übertemperatur, Überspannung, Gate-Treiber-Fehler etc.).
-- Alarm-Banner auf dem Bildschirm und permanenter Ringspeicher für die letzten 10 Fehler im NVS.
+- 🧙 **Ersteinrichtungs-Assistent & PIN-Wegfahrsperre:**
+  - Automatischer 3-Schritte-Setup-Wizard beim Erststart.
+  - 4-stelliger PIN schützt vor unbefugter Nutzung (kann im Assistenten mit einem Klick auf `[ UEBERSPRINGEN > ]` auch abgewählt werden).
+  - 5-Sekunden-Notfall-Reset-Geste für den Fall eines vergessenen Codes.
+
+- 🎛️ **On-Screen Live-Settings (km/h & Watt):**
+  - Geschwindigkeit und Maximalleistung können für jeden Fahrmodus (`ECO`, `SPORT`, `RACE`) bequem am Touchscreen per Schieberegler oder `[-]`/`[+]`-Tasten angepasst werden – ganz ohne VESC Tool oder Programmierkenntnisse.
 
 ---
 
 ## 👆 Touch-Gesten & Bedienung
 
-| Geste / Bereich | Bildschirm | Funktion |
-|---|---|---|
-| **Swipe Links** ($\Delta X < -60\text{px}$) | Fahr-Cockpit | Zu Statistiken & Telemetrie-Graphen wechseln |
-| **Swipe Rechts** ($\Delta X > +60\text{px}$) | Telemetrie-Graphen | Zurück zum Fahr-Cockpit |
-| **Tipp `[ STATS ]`** (Oben links) | Fahr-Cockpit | Öffnet Statistik- & Helligkeitsmenü |
-| **Tipp `[ < DASH ]`** (Oben links) | Untermenüs / Settings | Direkte Rückkehr ins Haupt-Cockpit |
-| **Tipp `[ RACE ]`** (Oben links) | Statistiken (nur bei Tuning) | Öffnet Dragy Beschleunigungs-Timer |
-| **Tipp `[ BESTZEITEN ]` / `[ DIAGRAMM ]`** | Race Screen | Öffnet Bestzeiten-Popup bzw. Beschleunigungs-Kurve |
-| **Tipp `[ BOOST ]`** | Fahr-Cockpit | Aktiviert 10-Sekunden Boost |
-| **Tipp `[ ECO / SPORT / RACE ]`** | Fahr-Cockpit | Schaltet Fahrmodus um |
-| **Tipp Batterie-Badge** (Oben rechts) | Fahr-Cockpit | Öffnet Einstellungsmenü |
-| **Halten auf Geschwindigkeitszahl (4s)** | Fahr-Cockpit | **Tuning-Modus aktivieren / deaktivieren** |
-| **Einzeltipp auf Geschwindigkeitszahl** | Fahr-Cockpit (aktiviert) | **Sofortige Drosselung auf 20 km/h (Polizei-Modus)** |
-| **Langer Druck unten links** | Fahr-Cockpit / Stats | Tageskilometerzähler (Trip) & Peak-Werte auf 0 zurücksetzen |
+Das gesamte System ist für schnelle, intuitive Bedienung mit Handschuhen während der Fahrt optimiert:
+
+### 🟢 Im Fahrbetrieb (Haupt-Cockpit)
+| Aktion | Touch-Geste / Bereich | Funktion |
+|:---|:---|:---|
+| **Fahrmodus wechseln** | Tipp auf `[ ECO / SPORT / RACE ]` (unten Mitte) | Schaltet zwischen den 3 Profilen um (HUD-Banner zeigt Wechsel) |
+| **Boost aktivieren** | Tipp auf `[ BOOST ]` (unten rechts) | Aktiviert für 10 Sekunden maximalen Leistungs-Boost |
+| **Statistiken / Graphen** | Wisch nach **Links** ($\leftarrow$) oder Tipp `[ STATS ]` | Öffnet Fahr-Statistiken, Wh/km und Live-Graphen |
+| **Trip zurücksetzen** | Langer Druck (2s) unten links auf den Trip-Zähler | Setzt Tageskilometer (`TRIP km`) und Spitzenwerte auf 0 |
+| **Einstellungen öffnen** | Tipp auf das Batterie-Badge (oben rechts) | Öffnet das Einstellungsmenü für Limits und Display-Optionen |
+
+### 🔒 Sicherheit & Drosselung (Polizei-Modus)
+| Aktion | Touch-Geste / Bereich | Funktion |
+|:---|:---|:---|
+| **Sofort-Drossel (20 km/h)** | **1x Tipp auf die mittlere Geschwindigkeitszahl** | Verriegelt den Scooter blitzschnell auf 20 km/h (roter Statuspunkt erscheint) |
+| **Tuning entsperren** | **4 Sekunden gedrückt halten auf die km/h-Zahl** | Schaltet offene Leistung und Höchstgeschwindigkeit wieder frei |
+| **PIN-Wegfahrsperre** | PIN auf dem On-Screen Keypad eingeben | Entsperrt das Fahrzeug beim Booten oder schaltet Diebstahl-Alarm aus |
+| **Notfall PIN-Reset** | 5 Sekunden Dauerdruck auf den PIN-Sperrbildschirm | Notfall-Rücksetzung des PINs auf Werkseinstellung (`1234`) |
+
+### 🧭 Navigation & Untermenüs
+| Aktion | Touch-Geste / Bereich | Funktion |
+|:---|:---|:---|
+| **Zurück zum Dashboard** | Tipp auf `[ < DASH ]` (oben links) | Kehrt aus jedem Menü, Race-Timer oder Lade-HUD sofort zum Cockpit zurück |
+| **Helligkeit anpassen** | Schieberegler oder `[-]` / `[+]` auf dem Stats-Screen | Displayhelligkeit stufenlos zwischen 20 % und 100 % regeln |
+| **Dragy Race starten** | Tipp auf `[ RACE ]` (Stats-Screen, nur bei Tuning) | Öffnet den Beschleunigungs-Timer mit 5s Launch Control |
+| **Parameter anpassen** | Slider / `[-]` / `[+]` in den Einstellungen | Geschwindigkeits- (km/h) und Leistungslimits (Watt) direkt verstellen |
 
 ---
 
@@ -208,14 +203,64 @@ DISPLAY=:0 python3 tools/simulator/live_demo.py
 
 ---
 
-## ⚡ Flashen auf das Board
+## ⚡ Flashen auf das Board (Schritt-für-Schritt)
 
-1. Waveshare ESP32-S3 Board per USB-C mit dem PC verbinden.
-2. In [`include/board_config.h`](include/board_config.h) `#define SIMULATION_MODE 0` setzen.
-3. Firmware mit PlatformIO bauen und übertragen:
+### 1. Voraussetzungen
+- **Hardware:** Waveshare ESP32-S3-Touch-LCD-4.3 (oder kompatibles RGB-Board aus der Liste).
+- **Kabel:** Hochwertiges USB-C Datenkabel (am USB-Port des ESP32-S3 Boards angeschlossen, nicht am reinen UART-Port).
+- **Software:** 
+  - [PlatformIO Core (CLI)](https://platformio.org/install/cli) oder **VS Code** mit installierter **PlatformIO IDE** Extension.
+  - Python 3.9+ installiert.
+
+### 2. Konfiguration vor dem Flashen
+Öffne [`include/board_config.h`](include/board_config.h) und prüfe folgende Grundeinstellungen:
+```c
+// 1 = Echte Hardware (ESP32-S3), 0 = Desktop-Simulator
+#define SIMULATION_MODE 0
+
+// 1 = CAN-Bus (500 kbps, empfohlen), 0 = UART (115200 Baud)
+#define VESC_USE_CAN_BUS 1
+
+// Fahrzeug-Parameter für exakte Geschwindigkeits- und Distanzberechnung:
+#define WHEEL_DIAMETER_INCH   10.0f   // Reifendurchmesser in Zoll (z. B. 10.0" oder 11.0")
+#define MOTOR_POLE_PAIRS      15      // Polpaare des Motors (Standard: 15 für Hub-Motoren)
+#define GEAR_RATIO            1.0f    // 1.0 bei Direktantrieb / Hub-Motor
+```
+
+### 3. Linux-Nutzer: USB-Zugriffsrechte setzen
+Unter Linux benötigt PlatformIO Schreibrechte auf die serielle USB-Schnittstelle (`/dev/ttyACM*`):
 ```bash
+# Benutzer zur dialout-Gruppe hinzufügen:
+sudo usermod -a -G dialout $USER
+
+# Alternativ temporär Schreibrechte auf den Port vergeben:
+sudo chmod 666 /dev/ttyACM*
+```
+*(Nach dem Gruppen-Befehl einmal ab- und wieder anmelden)*
+
+### 4. Kompilieren & Flashen
+Verbinde das Board per USB-C mit dem PC und starte den Build & Flash-Prozess:
+
+```bash
+# Firmware kompilieren und direkt auf den ESP32-S3 übertragen:
 pio run -t upload
 ```
+
+> [!TIP]
+> **Board wird nicht erkannt oder hängt bei `Connecting... ___...___`?**  
+> Bring das Board manuell in den ESP32-S3 Bootloader-Modus:
+> 1. Die **BOOT-Taste** auf dem Board gedrückt halten.
+> 2. Die **RESET-Taste** kurz drücken.
+> 3. Die **BOOT-Taste** loslassen.
+> 4. `pio run -t upload` erneut ausführen.
+
+### 5. Serieller Monitor & Erster Start
+Starte nach dem Flashen den seriellen Monitor, um Telemetrie- und VESC-Logs einzusehen:
+```bash
+pio device monitor -b 115200
+```
+- Beim allerersten Start startet das Display automatisch den **Ersteinrichtungs-Assistenten** (Setup Wizard).
+- Folge den 3 Schritten auf dem Touchscreen (Schnellanleitung $\rightarrow$ PIN-Wahl $\rightarrow$ Hardware-Optionen) – schon ist das Cockpit fahrbereit!
 
 ---
 
