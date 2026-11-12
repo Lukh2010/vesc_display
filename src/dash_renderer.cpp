@@ -3422,7 +3422,7 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
         _canvas->setFont(&fonts::Font2);
         _canvas->drawString("Im Fahr-Dashboard oben rechts auf das Batterie / Profil-Badge tippen!", 38, 126);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Hier kannst du jederzeit Strom-Limits (Ampere), Speed, Display-Styles & PIN anpassen.", 38, 154);
+        _canvas->drawString("Hier kannst du Geschwindigkeit (km/h), Leistung (Watt), Display & PIN anpassen.", 38, 154);
         _canvas->drawString("Oder jederzeit zurueckkehren mit einem Klick auf [< DASH] oben links.", 38, 178);
 
         // Card 2: Wie aktiviere ich Tuning & Race-Modus?
@@ -3449,15 +3449,23 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
     }
     else if (_wizard_step == 1) {
         // STEP 2 OF 3: CHOOSE SECURITY PIN
-        _canvas->fillRoundRect(160, 14, 480, 52, 12, 0x18C3);
-        _canvas->drawRoundRect(160, 14, 480, 52, 12, 0x39C7);
+        _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x18C3);
+        _canvas->drawRoundRect(20, 14, 760, 52, 12, 0x39C7);
         _canvas->setTextColor(COLOR_WHITE, 0x18C3);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
-        _canvas->drawString("SICHERHEITS-PIN WAEHLEN", 400, 30);
+        _canvas->drawString("SICHERHEITS-PIN WAEHLEN", 370, 30);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, 0x18C3);
-        _canvas->drawString("Ersteinrichtung - Schritt 2 von 3: Wegfahrsperre", 400, 52);
+        _canvas->drawString("Ersteinrichtung - Schritt 2 von 3: Wegfahrsperre", 370, 52);
+
+        // Top-Right [ UEBERSPRINGEN ] button
+        _canvas->fillRoundRect(615, 20, 155, 40, 8, 0x0821);
+        _canvas->drawRoundRect(615, 20, 155, 40, 8, COLOR_CYAN);
+        _canvas->setTextColor(COLOR_CYAN, 0x0821);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->drawString("UEBERSPRINGEN >", 692, 40);
 
         // PIN Keypad Card
         int mx = 180, my = 76, mw = 440, mh = 388;
@@ -3508,20 +3516,28 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
                 _canvas->drawRoundRect(bx, by, kw, kh, 8, border);
                 _canvas->setTextColor(COLOR_WHITE, bg);
                 _canvas->setFont(&fonts::Font4);
-                char str[4] = { key, '\0' };
+                char str[8] = { key, '\0' };
                 if (key == '<') strcpy(str, "DEL");
-                else if (key == '#') strcpy(str, "OK");
+                else if (key == '#') strcpy(str, (pinLen == 4) ? "OK" : "SKIP");
                 _canvas->drawString(str, bx + kw / 2, by + kh / 2);
             }
         }
 
-        // Bottom continue button
+        // Bottom continue / skip button
         if (pinLen == 4) {
             _canvas->fillRoundRect(mx + 20, 396, mw - 40, 52, 12, 0x03E0);
             _canvas->drawRoundRect(mx + 20, 396, mw - 40, 52, 12, COLOR_GREEN);
             _canvas->setTextColor(COLOR_WHITE, 0x03E0);
             _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::middle_center);
             _canvas->drawString("PIN UEBERNEHMEN & WEITER ->", 400, 422);
+        } else {
+            _canvas->fillRoundRect(mx + 20, 396, mw - 40, 52, 12, 0x18C3);
+            _canvas->drawRoundRect(mx + 20, 396, mw - 40, 52, 12, 0x39C7);
+            _canvas->setTextColor(COLOR_CYAN, 0x18C3);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("UEBERSPRINGEN (OHNE PIN) ->", 400, 422);
         }
     }
     else if (_wizard_step == 2) {
@@ -3615,6 +3631,17 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
     else if (_wizard_step == 1) {
         int mx = 180, mw = 440;
 
+        // 1. Top-Right [ UEBERSPRINGEN > ] Button
+        if (tx >= 600 && tx <= 780 && ty >= 14 && ty <= 68) {
+            Settings.get().pin_lock_enabled = false;
+            Settings.save();
+            _wizard_step = 2;
+            telemetry.wizard_step = 2;
+            _screen_dirty = true;
+            return true;
+        }
+
+        // 2. Keypad buttons
         int c = -1;
         if (tx >= 240 && tx < 351) c = 0;
         else if (tx >= 351 && tx < 449) c = 1;
@@ -3641,9 +3668,16 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
                     strncpy(telemetry.wizard_pin_buf, _wizard_pin_buf, sizeof(telemetry.wizard_pin_buf));
                     _screen_dirty = true;
                 }
-            } else if (key == '#') { // OK / Continue
+            } else if (key == '#') { // OK / Continue / Skip
                 if (len == 4) {
                     strncpy(Settings.get().pin_code, _wizard_pin_buf, sizeof(Settings.get().pin_code));
+                    Settings.get().pin_lock_enabled = true;
+                    Settings.save();
+                    _wizard_step = 2;
+                    telemetry.wizard_step = 2;
+                    _screen_dirty = true;
+                } else if (len == 0) {
+                    Settings.get().pin_lock_enabled = false;
                     Settings.save();
                     _wizard_step = 2;
                     telemetry.wizard_step = 2;
@@ -3660,9 +3694,14 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
             return true;
         }
 
-        // Bottom continue button
-        if (strlen(_wizard_pin_buf) == 4 && tx >= mx + 10 && tx <= mx + mw - 10 && ty >= 390 && ty <= 455) {
-            strncpy(Settings.get().pin_code, _wizard_pin_buf, sizeof(Settings.get().pin_code));
+        // 3. Bottom continue / skip button
+        if (tx >= mx + 10 && tx <= mx + mw - 10 && ty >= 390 && ty <= 455) {
+            if (strlen(_wizard_pin_buf) == 4) {
+                strncpy(Settings.get().pin_code, _wizard_pin_buf, sizeof(Settings.get().pin_code));
+                Settings.get().pin_lock_enabled = true;
+            } else {
+                Settings.get().pin_lock_enabled = false;
+            }
             Settings.save();
             _wizard_step = 2;
             telemetry.wizard_step = 2;
