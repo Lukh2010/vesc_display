@@ -1472,7 +1472,7 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
         // Footer Info
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(0x52AA, 0x0823);
-        _canvas->drawString("Notfall-Reset: Bildschirm 5s gedrueckt halten setzt PIN auf 1234", 400, 455);
+        _canvas->drawString("VESC Wegfahrsperre aktiv  |  Antrieb blockiert", 400, 455);
     }
 
     // Only update PIN Circles and Status Hint if state changed (Zero Flicker!)
@@ -1696,16 +1696,16 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         _canvas->setTextColor(COLOR_WHITE, 0x1084);
         _canvas->drawString("PIN JETZT AENDERN", 40 + 145, 365 + 27);
 
-        // Emergency Recovery Info Box
+        // Security Info Box
         _canvas->fillRoundRect(360, 350, 400, 74, 8, 0x0823);
         _canvas->drawRoundRect(360, 350, 400, 74, 8, 0x2965);
         _canvas->setFont(&fonts::Font0);
-        _canvas->setTextColor(COLOR_AMBER, 0x0823);
+        _canvas->setTextColor(COLOR_CYAN, 0x0823);
         _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->drawString("NOTFALL-RESET (5s DISPLAY GEDRUECKT HALTEN):", 375, 358);
+        _canvas->drawString("SICHERHEITSHINWEIS:", 375, 358);
         _canvas->setTextColor(COLOR_MUTED_GRAY, 0x0823);
-        _canvas->drawString("PIN vergessen? Beim Einschalten Display 5 Sekunden gedrueckt", 375, 378);
-        _canvas->drawString("halten -> PIN wird automatisch auf 1234 zurueckgesetzt.", 375, 396);
+        _canvas->drawString("Der PIN blockiert alle VESC-Leistungsausgaenge auf 0A.", 375, 378);
+        _canvas->drawString("Den gewaehlten 4-stelligen Code gut merken.", 375, 396);
 
         // Footer Strip
         _canvas->setFont(&fonts::Font0);
