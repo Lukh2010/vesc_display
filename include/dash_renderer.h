@@ -22,6 +22,7 @@ public:
     bool handleSettingsSliderDrag(int16_t cx, int16_t cy, DashTelemetry &telemetry);
     bool handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry);
     void initSetupWizard(const DashTelemetry &telemetry);
+    void resetSetupWizard();
     bool isInEditMode() const { return false; }
     uint8_t getSettingsTab() const { return _settings_tab_idx; }
     void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 6) ? tab : 0; _menu_dirty = true; }

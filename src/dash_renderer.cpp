@@ -2384,9 +2384,9 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         }
         // Button: Setup-Assistent wiederholen (x: 230..570, y: 430..475)
         if (tx >= 230 && tx <= 570 && ty >= 430 && ty <= 475) {
-            _wizard_step = 0;
-            _wizard_pin_buf[0] = '\0';
+            resetSetupWizard();
             telemetry.wizard_step = 0;
+            telemetry.wizard_pin_buf[0] = '\0';
             telemetry.screen = SCREEN_SETUP_WIZARD;
             _screen_dirty = true;
             return true;
@@ -3382,10 +3382,19 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
 // ==============================================================================
 // SCREEN 7: FIRST-TIME SETUP & ONBOARDING WIZARD (800x480 Optimized)
 // ==============================================================================
-void DashboardRenderer::initSetupWizard(const DashTelemetry &telemetry) {
-    _wizard_step = telemetry.wizard_step;
+void DashboardRenderer::resetSetupWizard() {
     _wizard_inited = false;
+    _wizard_step = 0;
     _wizard_pin_buf[0] = '\0';
+    _screen_dirty = true;
+}
+
+void DashboardRenderer::initSetupWizard(const DashTelemetry &telemetry) {
+    if (!_wizard_inited) {
+        _wizard_step = telemetry.wizard_step;
+        _wizard_pin_buf[0] = '\0';
+        _wizard_inited = true;
+    }
 }
 
 void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
@@ -3605,20 +3614,17 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
     }
     else if (_wizard_step == 1) {
         int mx = 180, mw = 440;
-        int kw = 84, kh = 44;
-        int kx0 = mx + (mw - (3 * kw + 2 * 14)) / 2;
-        int ky0 = 176;
 
         int c = -1;
-        for (int col = 0; col < 3; col++) {
-            int bx = kx0 + col * (kw + 14);
-            if (tx >= bx && tx <= bx + kw) { c = col; break; }
-        }
+        if (tx >= 240 && tx < 351) c = 0;
+        else if (tx >= 351 && tx < 449) c = 1;
+        else if (tx >= 449 && tx <= 560) c = 2;
+
         int r = -1;
-        for (int row = 0; row < 4; row++) {
-            int by = ky0 + row * (kh + 8);
-            if (ty >= by && ty <= by + kh) { r = row; break; }
-        }
+        if (ty >= 160 && ty < 224) r = 0;
+        else if (ty >= 224 && ty < 276) r = 1;
+        else if (ty >= 276 && ty < 328) r = 2;
+        else if (ty >= 328 && ty <= 385) r = 3;
 
         if (r >= 0 && c >= 0) {
             static const char KEY_LBL[4][3] = {
@@ -3632,6 +3638,7 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
             if (key == '<') { // DEL
                 if (len > 0) {
                     _wizard_pin_buf[len - 1] = '\0';
+                    strncpy(telemetry.wizard_pin_buf, _wizard_pin_buf, sizeof(telemetry.wizard_pin_buf));
                     _screen_dirty = true;
                 }
             } else if (key == '#') { // OK / Continue
@@ -3646,6 +3653,7 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
                 if (len < 4) {
                     _wizard_pin_buf[len] = key;
                     _wizard_pin_buf[len + 1] = '\0';
+                    strncpy(telemetry.wizard_pin_buf, _wizard_pin_buf, sizeof(telemetry.wizard_pin_buf));
                     _screen_dirty = true;
                 }
             }
@@ -3693,6 +3701,9 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
             Settings.save();
             telemetry.setup_completed = true;
             telemetry.screen = SCREEN_RIDE_DASH;
+            _wizard_inited = false;
+            _wizard_step = 0;
+            _wizard_pin_buf[0] = '\0';
             _screen_dirty = true;
             invalidateCache();
             triggerNeedleSweep();
