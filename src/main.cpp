@@ -158,6 +158,71 @@ void loop() {
     static uint32_t boot_ms = millis();
     uint32_t now = millis();
 
+#if SIMULATION_MODE
+    // Interactive Serial Keyboard Controls via USB (115200 Baud)
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == 'w' || c == 'W' || c == '+') {
+            float t = Vesc.getSimThrottle() + 15.0f;
+            if (t > 100.0f) t = 100.0f;
+            Vesc.setSimThrottle(t);
+            Serial.printf("[SIM] Gas gegeben: %.0f%%\n", t);
+        } else if (c == 's' || c == 'S' || c == '-') {
+            float t = Vesc.getSimThrottle() - 20.0f;
+            if (t < 0.0f) t = 0.0f;
+            Vesc.setSimThrottle(t);
+            Serial.printf("[SIM] Gebremst / Gas verringert: %.0f%%\n", t);
+        } else if (c == ' ') {
+            telemetry.boost_active = !telemetry.boost_active;
+            Renderer.markScreenDirty();
+            Serial.printf("[SIM] Boost: %s\n", telemetry.boost_active ? "AN" : "AUS");
+        } else if (c == 'c' || c == 'C') {
+            telemetry.is_charging = !telemetry.is_charging;
+            if (telemetry.is_charging) {
+                telemetry.screen = SCREEN_CHARGING_HUD;
+                telemetry.charge_power_watts = 165.0f;
+                telemetry.charge_current_amps = 3.1f;
+                telemetry.charge_est_minutes = 42.0f;
+            } else {
+                telemetry.screen = SCREEN_RIDE_DASH;
+            }
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            Serial.printf("[SIM] Lade-HUD (Charging): %s\n", telemetry.is_charging ? "AKTIV" : "INAKTIV");
+        } else if (c == 'p' || c == 'P') {
+            telemetry.is_locked = !telemetry.is_locked;
+            ModeManager::instance().setLocked(telemetry.is_locked);
+            telemetry.theft_alarm_active = false;
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            if (!telemetry.is_locked) Renderer.triggerNeedleSweep();
+            Serial.printf("[SIM] PIN-Lockscreen: %s\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
+        } else if (c == 't' || c == 'T') {
+            uint8_t th = (Settings.get().color_theme + 1) % THEME_COUNT;
+            Settings.get().color_theme = th;
+            Settings.save();
+            telemetry.color_theme = th;
+            Renderer.invalidateCache();
+            Renderer.markScreenDirty();
+            Serial.printf("[SIM] Farb-Theme: %s\n", DashboardRenderer::getThemePalette(th).name);
+        } else if (c == 'u' || c == 'U') {
+            Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
+            Settings.save();
+            Serial.printf("[SIM] FOC Turbinensound: %s\n", Settings.get().turbine_sound_enabled ? "AN" : "AUS");
+        } else if (c == 'h' || c == 'H' || c == '?') {
+            Serial.println("=== VESC Standalone Simulator Tasten ===");
+            Serial.println("  w / + : Gas geben (+15%)");
+            Serial.println("  s / - : Bremsen (-20%)");
+            Serial.println("  Space : Boost (10s Peak)");
+            Serial.println("  c     : Lade-HUD (Charging) umschalten");
+            Serial.println("  p     : PIN Lockscreen sperren / entsperren");
+            Serial.println("  t     : Farb-Theme weiterschalten");
+            Serial.println("  u     : Turbinensound umschalten");
+            Serial.println("========================================");
+        }
+    }
+#endif
+
     // Sync external tuning mode or ride mode changes from Captive Portal web UI (Core 0 -> Core 1)
     if (telemetry.tuning_mode != ModeManager::instance().isTuningMode()) {
         telemetry.tuning_mode = ModeManager::instance().isTuningMode();
@@ -915,8 +980,8 @@ void loop() {
     // 4. Debug print over USB Serial every 2 seconds (only when bridge is inactive)
     if (!Vesc.isBridgeActive() && (now - last_log_ms >= 2000)) {
         last_log_ms = now;
-        Serial.printf("[DASH] Screen: %d | Spd: %.1f km/h | Duty: %.1f%% | Bat: %.1fV (%.0f%%) | Cur: %.1fA | Pha: %.1fA | Est: %.1fkm\n",
-                      (int)telemetry.screen, telemetry.speed_kmh, telemetry.duty_cycle_pct, telemetry.voltage,
-                      telemetry.battery_pct, telemetry.current_amps, telemetry.phase_amps, telemetry.est_range_km);
+        Serial.printf("[DASH] Screen: %d | Lock: %d | Spd: %.1f km/h | Duty: %.1f%% | Bat: %.1fV (%.0f%%) | Pwr: %.0fW | Cur: %.1fA | Est: %.1fkm\n",
+                      (int)telemetry.screen, (int)telemetry.is_locked, telemetry.speed_kmh, telemetry.duty_cycle_pct, telemetry.voltage,
+                      telemetry.battery_pct, telemetry.power_watts, telemetry.current_amps, telemetry.est_range_km);
     }
 }

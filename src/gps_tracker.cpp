@@ -237,10 +237,12 @@ void GpsTracker::update(DashTelemetry &telemetry) {
         telemetry.speed_kmh = telemetry.gps.speed_kmh;
     } else {
         telemetry.use_gps_speed = false;
+#if !SIMULATION_MODE
         // Fallback to VESC motor speed if available, or keep existing speed
-        if (telemetry.vesc_motor_speed > 0.0f || telemetry.speed_kmh > 0.0f) {
+        if (telemetry.vesc_motor_speed > 0.0f) {
             telemetry.speed_kmh = telemetry.vesc_motor_speed;
         }
+#endif
     }
 
     // --------------------------------------------------------------------------

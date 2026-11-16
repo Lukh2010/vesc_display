@@ -147,10 +147,10 @@ void VescHandler::setSimThrottle(float pct) {
 }
 
 void VescHandler::update(DashTelemetry &telemetry) {
-#if SIMULATION_MODE
-    runSimulation(telemetry);
-#elif defined(NATIVE_SIMULATOR)
+#if defined(NATIVE_SIMULATOR)
     pollRealVesc(telemetry);
+#elif SIMULATION_MODE
+    runSimulation(telemetry);
 #elif VESC_USE_CAN_BUS
     pollCanVesc(telemetry);
 #else
@@ -159,7 +159,7 @@ void VescHandler::update(DashTelemetry &telemetry) {
 }
 
 // ==============================================================================
-// Realistic eBike Telemetry Simulation Engine (Bafang Mid-Drive Profile)
+// Realistic eBike Telemetry Simulation Engine (Hyper-VESC 35kW+ Profile)
 // ==============================================================================
 void VescHandler::runSimulation(DashTelemetry &telemetry) {
     uint32_t now = millis();
@@ -167,14 +167,47 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     if (dt <= 0.001f) return;
     _sim_last_update_ms = now;
 
+    static bool s_auto_drive = true;
+    static uint32_t s_cycle_start = 0;
+    if (s_cycle_start == 0) s_cycle_start = now;
+
     float sim_t = 0.0f;
+    float sim_b = 0.0f;
+
     if (_sim_throttle > 0.01f) {
         sim_t = _sim_throttle;
+        s_auto_drive = false; // Manual serial or touch override
+    } else if (s_auto_drive && !ModeManager::instance().isLocked() && !telemetry.is_locked && !telemetry.is_charging && telemetry.screen != SCREEN_SETUP_WIZARD) {
+        // Dynamic 38-second realistic demonstration drive cycle:
+        // 0..4s: Standstill / Idle at traffic light
+        // 4..16s: Smooth launch and acceleration up to ~65% throttle
+        // 16..26s: Fast cruising at ~50 km/h
+        // 26..31s: Rolling rollout / coasting
+        // 31..38s: Smooth regenerative braking (-750W green power arc!) down to 0 km/h
+        uint32_t t_mod = (now - s_cycle_start) % 38000;
+        if (t_mod < 4000) {
+            sim_t = 0.0f;
+            sim_b = 0.0f;
+        } else if (t_mod < 16000) {
+            float p = (float)(t_mod - 4000) / 12000.0f;
+            sim_t = 22.0f + (p * 50.0f); // 22% -> 72%
+            sim_b = 0.0f;
+        } else if (t_mod < 26000) {
+            sim_t = 52.0f; // Cruising
+            sim_b = 0.0f;
+        } else if (t_mod < 31000) {
+            sim_t = 0.0f;  // Coasting
+            sim_b = 0.0f;
+        } else {
+            sim_t = 0.0f;
+            sim_b = 38.0f; // Regen braking
+        }
     }
 
     // Check if vehicle is locked by boot PIN
     if (ModeManager::instance().isLocked() || telemetry.is_locked) {
         sim_t = 0.0f;
+        sim_b = 100.0f;
     }
 
     telemetry.throttle_pct = sim_t;
@@ -191,47 +224,41 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     // 1. Target Speed and Duty Cycle calculation
     uint8_t speed_limit = Settings.get().max_speed_kmh;
     float max_possible_speed = (speed_limit > 0) ? (float)speed_limit : 95.0f;
-
-    if (sim_t <= 0.01f) {
-        sim_t = 0.0f;
-        _target_speed = 0.0f;
-        telemetry.speed_kmh = 0.0f;
-        telemetry.power_watts = 0.0f;
-        telemetry.current_amps = 0.0f;
-        telemetry.phase_amps = 0.0f;
-        telemetry.duty_cycle_pct = 0.0f;
-        telemetry.rpm = 0.0f;
-        telemetry.g_force = 0.0f;
-    } else {
-        _target_speed = (sim_t / 100.0f) * max_possible_speed;
-    }
+    _target_speed = (sim_t / 100.0f) * max_possible_speed;
 
     float prev_sim_spd = telemetry.speed_kmh;
-    if (sim_t == 0.0f && telemetry.speed_kmh == 0.0f) {
-        telemetry.speed_kmh = 0.0f;
-        telemetry.g_force = 0.0f;
-    } else {
-        telemetry.speed_kmh += (_target_speed - telemetry.speed_kmh) * (dt * 1.6f);
+    if (sim_b > 0.01f) {
+        // Regenerative braking deceleration
+        float decel_k = 1.6f + (sim_b / 100.0f) * 4.2f;
+        telemetry.speed_kmh -= decel_k * 9.81f * 3.6f * dt * 0.22f;
         if (telemetry.speed_kmh < 0.2f) telemetry.speed_kmh = 0.0f;
-        if (dt > 0.001f) {
-            float dv_ms = (telemetry.speed_kmh - prev_sim_spd) / 3.6f;
-            float g_inst = (dv_ms / dt) / 9.80665f;
-            if (g_inst > 3.0f) g_inst = 3.0f;
-            if (g_inst < -3.0f) g_inst = -3.0f;
-            telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
-            if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
-            if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
-                telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
-            }
+    } else if (sim_t > 0.01f) {
+        // Accelerating
+        telemetry.speed_kmh += (_target_speed - telemetry.speed_kmh) * (dt * 1.5f);
+    } else {
+        // Natural rolling resistance coasting
+        telemetry.speed_kmh -= 2.2f * dt;
+        if (telemetry.speed_kmh < 0.2f) telemetry.speed_kmh = 0.0f;
+    }
+    telemetry.vesc_motor_speed = telemetry.speed_kmh;
+
+    if (dt > 0.001f) {
+        float dv_ms = (telemetry.speed_kmh - prev_sim_spd) / 3.6f;
+        float g_inst = (dv_ms / dt) / 9.80665f;
+        if (g_inst > 3.0f) g_inst = 3.0f;
+        if (g_inst < -3.0f) g_inst = -3.0f;
+        telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
+        if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
+        if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
+            telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
         }
     }
     telemetry.incline_deg = _sim_incline;
 
     // 2. Realistic Duty Cycle calculation (0.0% to 120.0%)
-    // Base duty cycle tracks vehicle speed / back-EMF headroom
     float base_duty = (telemetry.speed_kmh / 48.0f) * 92.0f;
     if (sim_t > 85.0f && telemetry.speed_kmh > 46.0f) {
-        // Field Weakening engaged: duty cycle pushes beyond 100% (up to 114%)
+        // Field Weakening engaged
         float fw_extra = ((sim_t - 85.0f) / 15.0f) * 18.0f;
         telemetry.duty_cycle_pct = 96.0f + fw_extra;
     } else {
@@ -240,30 +267,45 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     if (telemetry.duty_cycle_pct > 118.0f) telemetry.duty_cycle_pct = 118.0f;
     if (telemetry.duty_cycle_pct < 0.0f) telemetry.duty_cycle_pct = 0.0f;
 
-    // RPM equivalent for BBS mid-drive (crank/motor cadence)
+    // RPM equivalent
     telemetry.rpm = (telemetry.speed_kmh / 45.0f) * 130.0f * 35.0f; // ~4500 motor RPM
 
     // 3. Current & Phase Amps (Bafang Mid-Drive tuning)
-    uint16_t max_bat_a = Settings.get().max_battery_amps; // e.g. 28A
-    uint16_t max_pha_a = Settings.get().max_phase_amps;   // e.g. 160A / up to 300A
+    uint16_t max_bat_a = Settings.get().max_battery_amps > 0 ? Settings.get().max_battery_amps : 45;
+    uint16_t max_pha_a = Settings.get().max_phase_amps > 0 ? Settings.get().max_phase_amps : 160;
 
-    float target_bat_amps = (sim_t / 100.0f) * (float)max_bat_a;
-    telemetry.current_amps += (target_bat_amps - telemetry.current_amps) * (dt * 3.5f);
-    if (telemetry.current_amps < 0.0f) telemetry.current_amps = 0.0f;
+    if (sim_b > 0.01f && telemetry.speed_kmh > 1.5f) {
+        // Regenerative Braking: Negative battery amps & emerald green power readout!
+        float target_regen_a = -((sim_b / 100.0f) * 18.0f);
+        telemetry.current_amps += (target_regen_a - telemetry.current_amps) * (dt * 4.0f);
+        telemetry.phase_amps = fabsf(telemetry.current_amps) * 1.8f;
+    } else if (sim_t > 0.01f) {
+        float target_bat_amps = (sim_t / 100.0f) * (float)max_bat_a;
+        telemetry.current_amps += (target_bat_amps - telemetry.current_amps) * (dt * 3.5f);
+        if (telemetry.current_amps < 0.0f) telemetry.current_amps = 0.0f;
 
-    // Phase current is higher during low-speed high-torque launches
-    float duty_fraction = telemetry.duty_cycle_pct / 100.0f;
-    if (duty_fraction > 0.95f) duty_fraction = 0.95f;
-    if (duty_fraction < 0.35f) duty_fraction = 0.35f;
-    float calculated_phase = telemetry.current_amps / duty_fraction;
-    if (calculated_phase < telemetry.current_amps) calculated_phase = telemetry.current_amps;
-    if (calculated_phase > (float)max_pha_a) calculated_phase = (float)max_pha_a;
-    telemetry.phase_amps = calculated_phase;
+        float duty_fraction = telemetry.duty_cycle_pct / 100.0f;
+        if (duty_fraction > 0.95f) duty_fraction = 0.95f;
+        if (duty_fraction < 0.35f) duty_fraction = 0.35f;
+        float calculated_phase = telemetry.current_amps / duty_fraction;
+        if (calculated_phase < telemetry.current_amps) calculated_phase = telemetry.current_amps;
+        if (calculated_phase > (float)max_pha_a) calculated_phase = (float)max_pha_a;
+        telemetry.phase_amps = calculated_phase;
+    } else {
+        telemetry.current_amps += (0.0f - telemetry.current_amps) * (dt * 5.0f);
+        if (fabsf(telemetry.current_amps) < 0.1f) telemetry.current_amps = 0.0f;
+        telemetry.phase_amps = 0.0f;
+    }
 
     // 4. Battery Voltage & Power
-    // Nominal 53.8V for 14S pack, minor IR sag under load (~0.05 ohm internal resistance)
     telemetry.voltage = 53.8f - (telemetry.current_amps * 0.048f);
     telemetry.power_watts = telemetry.voltage * telemetry.current_amps;
+    if (telemetry.speed_kmh == 0.0f && sim_t == 0.0f) {
+        telemetry.power_watts = 0.0f;
+        telemetry.current_amps = 0.0f;
+        telemetry.phase_amps = 0.0f;
+        telemetry.duty_cycle_pct = 0.0f;
+    }
 
     // 5. Update Smart Battery SoC, Health & Range Learning
     Battery.update(telemetry, dt);
