@@ -202,7 +202,17 @@ DashboardRenderer::DashboardRenderer()
       _pin_modal_success(false),
       _pin_modal_success_ms(0),
       _wizard_step(0),
-      _wizard_inited(false) {
+      _wizard_inited(false),
+      _race_records_drawn(false),
+      _race_dyno_drawn(false),
+      _last_race_arc_angle(130.0f),
+      _last_race_speed(-1),
+      _last_race_state(255),
+      _last_race_countdown(-1),
+      _last_race_elapsed_sec(-1.0f),
+      _last_race_split_0_22(-999.0f),
+      _last_race_split_0_50(-999.0f),
+      _last_race_split_0_70(-999.0f) {
     _wizard_pin_buf[0] = '\0';
     _pin_modal_buf[0] = '\0';
     _last_needle.valid = false;
@@ -335,8 +345,8 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
                 _sweep_duty = 0.0f;
                 _sweep_speed = 0.0f;
                 _is_sweeping = false;
-                _screen_dirty = true;
-                _cache.invalidate();
+                _cache.speed = -1;
+                _anim_speed = 0.0f;
             } else {
                 float ease = _sweep_progress * _sweep_progress * (3.0f - 2.0f * _sweep_progress);
                 _sweep_duty = ease * 120.0f;
@@ -733,8 +743,6 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     float deg2rad = 3.14159265f / 180.0f;
     int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
     int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
-    int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
-    int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
 
     float spd = _is_sweeping ? _sweep_speed : telemetry.speed_kmh;
     if (spd < 0.8f) spd = 0.0f; // Deadband to filter sensor noise at standstill
@@ -758,18 +766,14 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
     // 1. Speedometer Active Arc: Incremental differential update (Zero flicker / no tripping!)
     if (!_hyper_inited) {
-        _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
-        _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
             _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
             _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
-            if (target_angle >= 140.0f) {
-                _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
-            }
+        } else {
+            _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
@@ -797,9 +801,6 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
             _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
-            if (target_angle >= 140.0f) {
-                _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
-            }
         } else {
             _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         }
@@ -815,9 +816,6 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
             _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
-            if (target_angle >= 140.0f) {
-                _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
-            }
         } else {
             // Speed DECREASING: Retract arc cleanly
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 0.5f, pal.track);
@@ -829,9 +827,6 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
                 int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
                 int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
                 _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
-                if (target_angle >= 140.0f) {
-                    _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
-                }
             } else {
                 _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
             }
@@ -3172,6 +3167,16 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
 void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
     _canvas->fillScreen(COLOR_BG);
     _cache.invalidate();
+    _race_records_drawn = false;
+    _race_dyno_drawn = false;
+    _last_race_arc_angle = 130.0f;
+    _last_race_speed = -1;
+    _last_race_state = 255;
+    _last_race_countdown = -1;
+    _last_race_elapsed_sec = -1.0f;
+    _last_race_split_0_22 = -999.0f;
+    _last_race_split_0_50 = -999.0f;
+    _last_race_split_0_70 = -999.0f;
 
     // Top-Left [< DASH] Button (x=20, y=12, w=110, h=36, r=18)
     _canvas->fillRoundRect(20, 12, 110, 36, 18, COLOR_SURFACE);
@@ -3238,13 +3243,25 @@ void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
 }
 
 void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
-    // If a modal popup is open, draw the modal cleanly and return immediately (prevents background tearing & flicker!)
+    // 0. Modal Popup Isolation (Drawn ONCE when open, Zero flicker / no 30 FPS strobing!)
     if (telemetry.race_popup_open) {
-        drawRaceRecordsModal(telemetry);
+        if (!_race_records_drawn) {
+            drawRaceRecordsModal(telemetry);
+            _race_records_drawn = true;
+        }
         return;
-    } else if (telemetry.race_dyno_open) {
-        drawRaceDynoModal(telemetry);
+    } else {
+        _race_records_drawn = false;
+    }
+
+    if (telemetry.race_dyno_open) {
+        if (!_race_dyno_drawn) {
+            drawRaceDynoModal(telemetry);
+            _race_dyno_drawn = true;
+        }
         return;
+    } else {
+        _race_dyno_drawn = false;
     }
 
     int cx = 310, cy = 255;
@@ -3252,43 +3269,58 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     float mid_r = 144.0f;
     float deg2rad = 3.14159265f / 180.0f;
 
-    // 1. Top-Center Timer Display
-    _canvas->fillRect(135, 10, 335, 46, COLOR_BG);
-    if (telemetry.race_state == 2 || telemetry.race_state == 3) {
-        char timeBuf[16];
-        snprintf(timeBuf, sizeof(timeBuf), "%.2f", telemetry.race_elapsed_sec);
-        int nw = _canvas->textWidth(timeBuf, &fonts::Font6);
-        int sw = _canvas->textWidth("s", &fonts::Font4);
-        int totalW = nw + 6 + sw;
-        int startX = 305 - totalW / 2;
+    // 1. Top-Center Timer Display (Only redrawn when state or timer text changes!)
+    int cur_cd = (telemetry.race_state == 1) ? (5 - (int)telemetry.race_elapsed_sec) : -1;
+    if (cur_cd < 1) cur_cd = 1;
+    if (cur_cd > 5) cur_cd = 5;
 
-        _canvas->setFont(&fonts::Font6);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-        _canvas->setTextDatum(textdatum_t::middle_left);
-        _canvas->drawString(timeBuf, startX, 30);
-
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
-        _canvas->setTextDatum(textdatum_t::bottom_left);
-        _canvas->drawString("s", startX + nw + 6, 42);
-    } else if (telemetry.race_state == 1) {
-        int rem_sec = 5 - (int)telemetry.race_elapsed_sec;
-        if (rem_sec < 1) rem_sec = 1;
-        if (rem_sec > 5) rem_sec = 5;
-        char cdTitle[24];
-        snprintf(cdTitle, sizeof(cdTitle), "LAUNCH IN %d s", rem_sec);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(COLOR_AMBER, COLOR_BG);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString(cdTitle, 305, 30);
-    } else {
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_BG);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString("LAUNCH CONTROL", 305, 30);
+    bool timer_needs_update = false;
+    if (telemetry.race_state != _last_race_state) {
+        timer_needs_update = true;
+    } else if (telemetry.race_state == 1 && cur_cd != _last_race_countdown) {
+        timer_needs_update = true;
+    } else if (telemetry.race_state == 2 && fabsf(telemetry.race_elapsed_sec - _last_race_elapsed_sec) >= 0.04f) {
+        timer_needs_update = true;
     }
 
-    // 2. Speedometer Arc
+    if (timer_needs_update) {
+        _last_race_elapsed_sec = telemetry.race_elapsed_sec;
+        _last_race_countdown = cur_cd;
+
+        _canvas->fillRect(135, 10, 335, 46, COLOR_BG);
+        if (telemetry.race_state == 2 || telemetry.race_state == 3) {
+            char timeBuf[16];
+            snprintf(timeBuf, sizeof(timeBuf), "%.2f", telemetry.race_elapsed_sec);
+            int nw = _canvas->textWidth(timeBuf, &fonts::Font6);
+            int sw = _canvas->textWidth("s", &fonts::Font4);
+            int totalW = nw + 6 + sw;
+            int startX = 305 - totalW / 2;
+
+            _canvas->setFont(&fonts::Font6);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+            _canvas->setTextDatum(textdatum_t::middle_left);
+            _canvas->drawString(timeBuf, startX, 30);
+
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
+            _canvas->setTextDatum(textdatum_t::bottom_left);
+            _canvas->drawString("s", startX + nw + 6, 42);
+        } else if (telemetry.race_state == 1) {
+            char cdTitle[24];
+            snprintf(cdTitle, sizeof(cdTitle), "LAUNCH IN %d s", cur_cd);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextColor(COLOR_AMBER, COLOR_BG);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString(cdTitle, 305, 30);
+        } else {
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_BG);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("LAUNCH CONTROL", 305, 30);
+        }
+    }
+
+    // 2. Speedometer Arc: Differential update (Zero erase / Zero flash / No tearing!)
     float spd = telemetry.speed_kmh;
     if (spd < 0.8f) spd = 0.0f;
     float frac = spd / 100.0f;
@@ -3297,83 +3329,123 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     if (frac <= 0.005f) target_angle = 130.0f;
 
     uint16_t arcCol = COLOR_WHITE;
-
-    // Redraw arc track and active fill
-    _canvas->fillArc(cx, cy, r_in, r_out, 130.0f, 410.0f, COLOR_SURFACE_LIGHT);
     int s_cap_x = cx + (int)roundf(cosf(130.0f * deg2rad) * mid_r);
     int s_cap_y = cy + (int)roundf(sinf(130.0f * deg2rad) * mid_r);
-    int e_cap_x = cx + (int)roundf(cosf(410.0f * deg2rad) * mid_r);
-    int e_cap_y = cy + (int)roundf(sinf(410.0f * deg2rad) * mid_r);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 14, COLOR_SURFACE_LIGHT);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 14, COLOR_SURFACE_LIGHT);
-    if (target_angle > 130.0f) {
-        _canvas->fillArc(cx, cy, r_in, r_out, 130.0f, target_angle, arcCol);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
-        int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
-        int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-        _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
-        _canvas->fillCircle(tip_x, tip_y, 5, COLOR_WHITE);
+
+    if (target_angle <= 130.0f && _last_race_arc_angle > 130.0f) {
+        // Reset to 0: retract active arc and restore clean track
+        _canvas->fillArc(cx, cy, r_in, r_out, 130.0f, _last_race_arc_angle + 1.0f, COLOR_SURFACE_LIGHT);
+        int old_tip_x = cx + (int)roundf(cosf(_last_race_arc_angle * deg2rad) * mid_r);
+        int old_tip_y = cy + (int)roundf(sinf(_last_race_arc_angle * deg2rad) * mid_r);
+        _canvas->fillCircle(old_tip_x, old_tip_y, 14, COLOR_SURFACE_LIGHT);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 14, COLOR_SURFACE_LIGHT);
+        _last_race_arc_angle = 130.0f;
+    } else if (fabsf(target_angle - _last_race_arc_angle) >= 0.8f) {
+        if (target_angle > _last_race_arc_angle) {
+            // Extend forward seamlessly
+            if (_last_race_arc_angle <= 130.0f) {
+                _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
+            }
+            _canvas->fillArc(cx, cy, r_in, r_out, _last_race_arc_angle - 0.5f, target_angle, arcCol);
+            int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
+            int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
+            _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
+        } else {
+            // Retract backward cleanly
+            _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_race_arc_angle + 0.5f, COLOR_SURFACE_LIGHT);
+            int old_tip_x = cx + (int)roundf(cosf(_last_race_arc_angle * deg2rad) * mid_r);
+            int old_tip_y = cy + (int)roundf(sinf(_last_race_arc_angle * deg2rad) * mid_r);
+            _canvas->fillCircle(old_tip_x, old_tip_y, 14, COLOR_SURFACE_LIGHT);
+            if (target_angle > 130.0f) {
+                int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
+                int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
+                _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
+            } else {
+                _canvas->fillCircle(s_cap_x, s_cap_y, 14, COLOR_SURFACE_LIGHT);
+            }
+        }
+        _last_race_arc_angle = target_angle;
     }
 
-    // Digital Speed in Center
-    _canvas->fillRect(cx - 95, cy - 80, 190, 75, COLOR_BG);
-    char spdBuf[16];
-    snprintf(spdBuf, sizeof(spdBuf), "%.0f", spd);
-    drawHeroDigitText(_canvas, spdBuf, cx, cy - 40, textdatum_t::middle_center, COLOR_WHITE, COLOR_BG);
+    // Digital Speed in Center: Only redrawn when integer speed changes
+    int cur_spd_int = (int)(spd + 0.5f);
+    if (cur_spd_int != _last_race_speed) {
+        _last_race_speed = cur_spd_int;
+        _canvas->fillRect(cx - 95, cy - 80, 190, 75, COLOR_BG);
+        char spdBuf[16];
+        snprintf(spdBuf, sizeof(spdBuf), "%d", cur_spd_int);
+        drawHeroDigitText(_canvas, spdBuf, cx, cy - 40, textdatum_t::middle_center, COLOR_WHITE, COLOR_BG);
+    }
 
-    // 3. Center State Action / Countdown / Status
-    _canvas->fillRect(cx - 105, cy + 65, 210, 62, COLOR_BG);
-    if (telemetry.race_state == 0) { // IDLE / READY
-        bool overheat = isRaceThermalBlocked(telemetry);
-        if (overheat) {
-            _canvas->fillRoundRect(cx - 95, cy + 72, 190, 42, 21, 0x3000);
-            _canvas->drawRoundRect(cx - 95, cy + 72, 190, 42, 21, COLOR_AMBER);
-            _canvas->setTextColor(COLOR_AMBER, 0x3000);
+    // 3. Center State Action / Countdown / Status: Only redrawn on state / second change
+    bool btn_needs_update = false;
+    if (telemetry.race_state != _last_race_state) {
+        btn_needs_update = true;
+    } else if (telemetry.race_state == 1 && cur_cd != _last_race_countdown) {
+        btn_needs_update = true;
+    }
+
+    if (btn_needs_update) {
+        _canvas->fillRect(cx - 105, cy + 65, 210, 62, COLOR_BG);
+        if (telemetry.race_state == 0) { // IDLE / READY
+            bool overheat = isRaceThermalBlocked(telemetry);
+            if (overheat) {
+                _canvas->fillRoundRect(cx - 95, cy + 72, 190, 42, 21, 0x3000);
+                _canvas->drawRoundRect(cx - 95, cy + 72, 190, 42, 21, COLOR_AMBER);
+                _canvas->setTextColor(COLOR_AMBER, 0x3000);
+                _canvas->setFont(&fonts::Font2);
+                _canvas->setTextDatum(textdatum_t::middle_center);
+                _canvas->drawString("TEMP > 65C", cx, cy + 93);
+            } else {
+                _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_SURFACE);
+                _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_BORDER);
+                _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+                _canvas->setFont(&fonts::Font2);
+                _canvas->setTextDatum(textdatum_t::middle_center);
+                _canvas->drawString("START LAUNCH", cx, cy + 93);
+            }
+        } else if (telemetry.race_state == 1) { // COUNTDOWN (5s)
+            char cdBuf[16];
+            if (cur_cd == 1) {
+                snprintf(cdBuf, sizeof(cdBuf), "1 ... GO!");
+            } else {
+                snprintf(cdBuf, sizeof(cdBuf), "%d ...", cur_cd);
+            }
+
+            _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, 0x3000);
+            _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_RED);
+            _canvas->setTextColor(COLOR_WHITE, 0x3000);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString(cdBuf, cx, cy + 93);
+        } else if (telemetry.race_state == 2) { // MEASURING
+            _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, 0x3000);
+            _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_RED);
+            _canvas->setTextColor(COLOR_WHITE, 0x3000);
             _canvas->setFont(&fonts::Font2);
             _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->drawString("TEMP > 65C", cx, cy + 93);
-        } else {
+            _canvas->drawString("STOP / ABORT", cx, cy + 93);
+        } else { // FINISHED
             _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_SURFACE);
-            _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_BORDER);
+            _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_WHITE);
             _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
             _canvas->setFont(&fonts::Font2);
             _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->drawString("START LAUNCH", cx, cy + 93);
+            _canvas->drawString("NEUER LAUNCH", cx, cy + 93);
         }
-    } else if (telemetry.race_state == 1) { // COUNTDOWN (5s)
-        int rem_sec = 5 - (int)telemetry.race_elapsed_sec;
-        if (rem_sec < 1) rem_sec = 1;
-        if (rem_sec > 5) rem_sec = 5;
-        char cdBuf[16];
-        if (rem_sec == 1) {
-            snprintf(cdBuf, sizeof(cdBuf), "1 ... GO!");
-        } else {
-            snprintf(cdBuf, sizeof(cdBuf), "%d ...", rem_sec);
-        }
-
-        _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, 0x3000);
-        _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_RED);
-        _canvas->setTextColor(COLOR_WHITE, 0x3000);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString(cdBuf, cx, cy + 93);
-    } else if (telemetry.race_state == 2) { // MEASURING
-        _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, 0x3000);
-        _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_RED);
-        _canvas->setTextColor(COLOR_WHITE, 0x3000);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString("STOP / ABORT", cx, cy + 93);
-    } else { // FINISHED
-        _canvas->fillRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_SURFACE);
-        _canvas->drawRoundRect(cx - 85, cy + 72, 170, 42, 21, COLOR_WHITE);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString("NEUER LAUNCH", cx, cy + 93);
     }
 
-    // 4. Update Corner Card Split Values (Clean time display without *PB*)
+    _last_race_state = telemetry.race_state;
+
+    // 4. Update Corner Card Split Values (Only when split values or active timer change)
+    bool s1_changed = (telemetry.race_split_0_22 != _last_race_split_0_22);
+    bool s2_changed = (telemetry.race_split_0_50 != _last_race_split_0_50);
+    bool s3_changed = (telemetry.race_split_0_70 != _last_race_split_0_70);
+
+    bool active_0_22 = (telemetry.race_split_0_22 <= 0.0f);
+    bool active_0_50 = (telemetry.race_split_0_22 > 0.0f && telemetry.race_split_0_50 <= 0.0f);
+    bool active_0_70 = (telemetry.race_split_0_50 > 0.0f && telemetry.race_split_0_70 <= 0.0f);
+
     auto drawSplit = [&](int y, float split_val, bool is_active) {
         _canvas->fillRect(548, y, 215, 36, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
@@ -3393,13 +3465,18 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
         }
     };
 
-    bool active_0_22 = (telemetry.race_split_0_22 <= 0.0f);
-    bool active_0_50 = (telemetry.race_split_0_22 > 0.0f && telemetry.race_split_0_50 <= 0.0f);
-    bool active_0_70 = (telemetry.race_split_0_50 > 0.0f && telemetry.race_split_0_70 <= 0.0f);
-
-    drawSplit(130, telemetry.race_split_0_22, active_0_22);
-    drawSplit(235, telemetry.race_split_0_50, active_0_50);
-    drawSplit(340, telemetry.race_split_0_70, active_0_70);
+    if (s1_changed || (telemetry.race_state == 2 && active_0_22 && timer_needs_update)) {
+        _last_race_split_0_22 = telemetry.race_split_0_22;
+        drawSplit(130, telemetry.race_split_0_22, active_0_22);
+    }
+    if (s2_changed || (telemetry.race_state == 2 && active_0_50 && timer_needs_update)) {
+        _last_race_split_0_50 = telemetry.race_split_0_50;
+        drawSplit(235, telemetry.race_split_0_50, active_0_50);
+    }
+    if (s3_changed || (telemetry.race_state == 2 && active_0_70 && timer_needs_update)) {
+        _last_race_split_0_70 = telemetry.race_split_0_70;
+        drawSplit(340, telemetry.race_split_0_70, active_0_70);
+    }
 
     // Bottom-Left G-Force Badge
     drawGForceBadge(_canvas, telemetry.g_force, 50, 416, 28);
@@ -4171,7 +4248,6 @@ void DashboardRenderer::renderChargingScreen(const DashTelemetry &telemetry) {
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
             _canvas->fillCircle(tip_x, tip_y, 12, arcCol);
-            _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
         }
 
         // 2. Center Battery Percentage & Unit (sized safely within r_in=114px)
