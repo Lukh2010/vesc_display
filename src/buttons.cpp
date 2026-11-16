@@ -109,8 +109,9 @@ void ButtonHandler::processTouch(uint32_t now) {
         if (ty >= LCD_HEIGHT) ty = LCD_HEIGHT - 1;
 
         if (!_touch_active) {
-            // Check debounce cooldown from previous release
-            if ((now - _last_touch_release_ms) < TOUCH_COOLDOWN_MS) {
+            // Check debounce cooldown from previous release (15ms when locked or in wizard for fast, zero-drop keypad typing)
+            uint32_t cooldown = (ModeManager::instance().isLocked() || _active_screen == SCREEN_SETUP_WIZARD) ? 15 : TOUCH_COOLDOWN_MS;
+            if ((now - _last_touch_release_ms) < cooldown) {
                 return;
             }
 
@@ -199,7 +200,7 @@ void ButtonHandler::processTouch(uint32_t now) {
 
             // If system is locked by PIN, directly register tap from touch_start_x/y (100% reliable keypad taps)
             if (ModeManager::instance().isLocked()) {
-                if (!_touch_long_fired && touch_dur >= 15) {
+                if (!_touch_long_fired && touch_dur >= 8) {
                     _has_tap = true;
                     _last_tap_x = _touch_start_x;
                     _last_tap_y = _touch_start_y;
