@@ -14,7 +14,25 @@ public:
     void triggerNeedleSweep();
     bool isSweeping() const { return _is_sweeping; }
     void markScreenDirty() { _screen_dirty = true; }
-    void invalidateCache() { _cache.invalidate(); _stats_cache.invalidate(); _hyper_inited = false; _stats_inited = false; _last_arc_frac = -1.0f; _last_arc_angle = 135.0f; _last_arc_col = 0; }
+    void invalidateCache() {
+        _cache.invalidate();
+        _stats_cache.invalidate();
+        _hyper_inited = false;
+        _stats_inited = false;
+        _last_arc_frac = -1.0f;
+        _last_arc_angle = 135.0f;
+        _last_arc_col = 0;
+        _race_records_drawn = false;
+        _race_dyno_drawn = false;
+        _last_race_arc_angle = 130.0f;
+        _last_race_speed = -1;
+        _last_race_state = 255;
+        _last_race_countdown = -1;
+        _last_race_elapsed_sec = -1.0f;
+        _last_race_split_0_22 = -999.0f;
+        _last_race_split_0_50 = -999.0f;
+        _last_race_split_0_70 = -999.0f;
+    }
 
     // Color Theme & Palettes
     static const ColorThemePalette& getThemePalette(uint8_t theme_id);
@@ -306,6 +324,18 @@ private:
     uint8_t  _wizard_step;       // 0=Welcome, 1=PIN, 2=Hardware
     char     _wizard_pin_buf[8]; // PIN input buffer
     bool     _wizard_inited;
+
+    // Race Screen Differential Cache (Zero Flicker & Modal Isolation)
+    bool     _race_records_drawn;
+    bool     _race_dyno_drawn;
+    float    _last_race_arc_angle;
+    int      _last_race_speed;
+    uint8_t  _last_race_state;
+    int      _last_race_countdown;
+    float    _last_race_elapsed_sec;
+    float    _last_race_split_0_22;
+    float    _last_race_split_0_50;
+    float    _last_race_split_0_70;
 };
 
 extern DashboardRenderer Renderer;
