@@ -3,7 +3,6 @@
 #include "vesc_uart.h"
 #include "fault_manager.h"
 #include "mode_manager.h"
-#include "ble_keyless_manager.h"
 #include <math.h>
 #include <lgfx/Fonts/GFXFF/FreeSansBold24pt7b.h>
 #include <lgfx/Fonts/GFXFF/FreeSansBold18pt7b.h>
@@ -2020,112 +2019,58 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     }
 
     if (_settings_tab_idx == 5) {
-        // PIN & KEYLESS-GO SECURITY SETTINGS (y: 126..452)
+        // PIN & SICHERHEIT SETTINGS (y: 126..452)
         const ColorThemePalette &pal = currentTheme();
 
-        // Card 1: PIN AENDERN (y: 126..246, h: 120)
-        drawCard(20, 126, 760, 120, COLOR_SURFACE, COLOR_BORDER);
+        // Card 1: PIN-SPERRE & CONFIG (y: 128..274, h: 146)
+        drawCard(20, 128, 760, 146, COLOR_SURFACE, COLOR_BORDER);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextDatum(textdatum_t::top_left);
         _canvas->setTextColor(pal.primary, COLOR_SURFACE);
-        _canvas->drawString("PIN AENDERN", 40, 138);
+        _canvas->drawString("PIN-WEGFAHRSPERRE", 40, 140);
 
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Wegfahrsperre beim Start (VESC auf 0A gesperrt)", 40, 168);
+        _canvas->drawString("Elektronische Wegfahrsperre beim Start (VESC-Motorstrom 0A)", 40, 170);
 
-        // Toggle PIN-Sperre Button (x: 480, y: 136, w: 280, h: 48)
+        // Toggle PIN-Sperre Button (x: 470, y: 138, w: 290, h: 50)
         bool pin_en = Settings.get().pin_lock_enabled;
-        _canvas->fillRoundRect(480, 136, 280, 48, 10, pin_en ? pal.primary : pal.surface);
-        _canvas->drawRoundRect(480, 136, 280, 48, 10, pin_en ? pal.primary : pal.border);
+        _canvas->fillRoundRect(470, 138, 290, 50, 10, pin_en ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(470, 138, 290, 50, 10, pin_en ? pal.primary : pal.border);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(pin_en ? COLOR_BG : COLOR_MUTED_GRAY, pin_en ? pal.primary : pal.surface);
-        _canvas->drawString(pin_en ? "[ PIN-SPERRE: AN ]" : "[ PIN-SPERRE: AUS ]", 480 + 140, 136 + 24);
+        _canvas->drawString(pin_en ? "[ PIN-SPERRE: AN ]" : "[ PIN-SPERRE: AUS ]", 470 + 145, 138 + 25);
 
-        // [ PIN AENDERN ] Button (x: 40, y: 190, w: 250, h: 44)
-        _canvas->fillRoundRect(40, 190, 250, 44, 10, pal.surface);
-        _canvas->drawRoundRect(40, 190, 250, 44, 10, pal.primary);
+        // [ PIN AENDERN ] Button (x: 40, y: 204, w: 280, h: 50)
+        _canvas->fillRoundRect(40, 204, 280, 50, 10, pal.surface);
+        _canvas->drawRoundRect(40, 204, 280, 50, 10, pal.primary);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(pal.primary, pal.surface);
-        _canvas->drawString("[ PIN AENDERN ]", 40 + 125, 190 + 22);
+        _canvas->drawString("[ PIN AENDERN ]", 40 + 140, 204 + 25);
 
-        // Security hint
+        // Security hint next to button
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextDatum(textdatum_t::top_left);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("PIN-Code im NVS Flash gesichert (Fallback)", 310, 202);
+        _canvas->drawString("Oeffnet Tastenfeld zum Festlegen des 4-stelligen Codes", 340, 218);
 
-        // Card 2: BLUETOOTH UNLOCK (y: 256..452, h: 196)
-        drawCard(20, 256, 760, 196, COLOR_SURFACE, COLOR_BORDER);
+        // Card 2: SICHERHEITSHINWEISE & ENTSPERRUNG (y: 286..446, h: 160)
+        drawCard(20, 286, 760, 160, COLOR_SURFACE, COLOR_BORDER);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextDatum(textdatum_t::top_left);
         _canvas->setTextColor(pal.primary, COLOR_SURFACE);
-        _canvas->drawString("BLUETOOTH UNLOCK", 40, 268);
+        _canvas->drawString("STATUS & ENTSPERRUNG", 40, 298);
 
-        // Subtitle showing device info:
         _canvas->setFont(&fonts::Font2);
-        if (telemetry.ble_paired) {
-            char devBuf[96];
-            const char *dName = (telemetry.ble_device_name[0] != '\0') ? telemetry.ble_device_name : "Keyless Device";
-            if (telemetry.ble_connected) {
-                _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
-                snprintf(devBuf, sizeof(devBuf), "Gekoppelt: %s  (Verbunden)", dName);
-            } else {
-                _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-                snprintf(devBuf, sizeof(devBuf), "Gekoppelt: %s  (Nicht Verbunden)", dName);
-            }
-            _canvas->drawString(devBuf, 40, 298);
-        } else if (telemetry.ble_pairing_active) {
-            _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-            _canvas->drawString("Wartet auf Kopplung... 'VESC-Keyless' waehlen", 40, 298);
-        } else {
-            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-            _canvas->drawString("Nicht gekoppelt", 40, 298);
-        }
-
-        // Clean buttons:
-        // Button 1 (x: 40, y: 326, w: 345, h: 48): [ ENTKOPPELN ] or [ PHONE ANLERNEN ] / [ ABBRECHEN ]
-        if (telemetry.ble_paired) {
-            _canvas->fillRoundRect(40, 326, 345, 48, 10, pal.surface);
-            _canvas->drawRoundRect(40, 326, 345, 48, 10, pal.border);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextColor(pal.primary, pal.surface);
-            _canvas->drawString("[ ENTKOPPELN ]", 40 + 172, 326 + 24);
-        } else if (telemetry.ble_pairing_active) {
-            _canvas->fillRoundRect(40, 326, 345, 48, 10, pal.surface);
-            _canvas->drawRoundRect(40, 326, 345, 48, 10, pal.border);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextColor(pal.primary, pal.surface);
-            _canvas->drawString("[ ABBRECHEN ]", 40 + 172, 326 + 24);
-        } else {
-            _canvas->fillRoundRect(40, 326, 345, 48, 10, pal.primary);
-            _canvas->drawRoundRect(40, 326, 345, 48, 10, pal.primary);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextColor(COLOR_BG, pal.primary);
-            _canvas->drawString("[ PHONE ANLERNEN ]", 40 + 172, 326 + 24);
-        }
-
-        // Button 2 (x: 415, y: 326, w: 345, h: 48): [ AUTO-LOCK: AN ] / [ AUTO-LOCK: AUS ]
-        bool al_en = Settings.get().ble_autolock_enabled;
-        _canvas->fillRoundRect(415, 326, 345, 48, 10, al_en ? pal.primary : pal.surface);
-        _canvas->drawRoundRect(415, 326, 345, 48, 10, al_en ? pal.primary : pal.border);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(al_en ? COLOR_BG : COLOR_MUTED_GRAY, al_en ? pal.primary : pal.surface);
-        _canvas->drawString(al_en ? "[ AUTO-LOCK: AN ]" : "[ AUTO-LOCK: AUS ]", 415 + 172, 326 + 24);
-
-        // Explanatory note
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+        _canvas->drawString("Wegfahrsperre aktiv beim Einschalten (0A-Cutoff).", 40, 330);
+        _canvas->setTextColor(pal.primary, COLOR_SURFACE);
+        _canvas->drawString("Entsperrung via 4-stelligem PIN oder VESC-Tool Verbindung.", 40, 356);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Auto-Unlock entsperrt bei Naehe. Auto-Lock sperrt bei Verlassen (>4m/10s).", 40, 386);
-        _canvas->setTextColor(pal.primary, COLOR_SURFACE);
-        _canvas->drawString("Sicherheit: Auto-Lock sperrt niemals waehrend der Fahrt (nur bei Stillstand).", 40, 412);
+        _canvas->drawString("Master-PIN ist 100% autark im internen NVS Flash-Speicher gesichert.", 40, 382);
+        _canvas->drawString("Notfall-Reset: PIN per USB-Serial mit Befehl 'r' auf 1234 zuruecksetzbar.", 40, 408);
 
         // Footer Strip
         _canvas->setFont(&fonts::Font0);
@@ -2666,39 +2611,20 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         return false;
     }
 
-    // Tab 5: PIN & SECURITY
+    // Tab 5: PIN & SICHERHEIT
     if (_settings_tab_idx == 5) {
-        // Card 1: Toggle PIN lock on boot (button bounds: x: 460..770, y: 125..190)
-        if (tx >= 460 && tx <= 770 && ty >= 125 && ty <= 190) {
+        // Card 1: Toggle PIN lock on boot (button bounds: x: 460..770, y: 130..195)
+        if (tx >= 460 && tx <= 770 && ty >= 130 && ty <= 195) {
             Settings.get().pin_lock_enabled = !Settings.get().pin_lock_enabled;
             Settings.save();
             _menu_dirty = true;
             return true;
         }
-        // Card 1: [ PIN AENDERN ] Button (tx: 30..300, ty: 180..245)
-        if (tx >= 30 && tx <= 300 && ty >= 180 && ty <= 245) {
+        // Card 1: [ PIN AENDERN ] Button (tx: 30..330, ty: 198..265)
+        if (tx >= 30 && tx <= 330 && ty >= 198 && ty <= 265) {
             _pin_modal_open = true;
             _pin_modal_buf[0] = '\0';
             _pin_modal_success = false;
-            _menu_dirty = true;
-            return true;
-        }
-        // Card 2: Button 1: [ PHONE ANLERNEN ] / [ ENTKOPPELN ] / [ ABBRECHEN ] (tx: 30..395, ty: 315..385)
-        if (tx >= 30 && tx <= 395 && ty >= 315 && ty <= 385) {
-            if (Settings.get().ble_paired) {
-                BleKeylessManager::instance().unpair();
-            } else if (BleKeylessManager::instance().isPairingActive()) {
-                BleKeylessManager::instance().cancelPairing();
-            } else {
-                BleKeylessManager::instance().startPairing();
-            }
-            _menu_dirty = true;
-            return true;
-        }
-        // Card 2: Button 2: Toggle Walk-Away Auto-Lock (tx: 405..770, ty: 315..385)
-        if (tx >= 405 && tx <= 770 && ty >= 315 && ty <= 385) {
-            Settings.get().ble_autolock_enabled = !Settings.get().ble_autolock_enabled;
-            Settings.save();
             _menu_dirty = true;
             return true;
         }
@@ -3910,7 +3836,7 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
             _canvas->drawString("WILLKOMMEN ZUM VESC HYPER DISPLAY", 400, 30);
             _canvas->setFont(&fonts::Font2);
             _canvas->setTextColor(COLOR_CYAN, 0x0188);
-            _canvas->drawString("Ersteinrichtung - Schritt 1 von 4: Schnellanleitung", 400, 52);
+            _canvas->drawString("Ersteinrichtung - Schritt 1 von 3: Schnellanleitung", 400, 52);
 
             // Card 1: Wie oeffne ich die Einstellungen?
             drawCard(20, 78, 760, 130, COLOR_SURFACE, COLOR_BORDER);
@@ -3965,7 +3891,7 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
             _canvas->drawString("SICHERHEITS-PIN WAEHLEN", 370, 30);
             _canvas->setFont(&fonts::Font2);
             _canvas->setTextColor(COLOR_MUTED_GRAY, 0x18C3);
-            _canvas->drawString("Ersteinrichtung - Schritt 2 von 4: Wegfahrsperre", 370, 52);
+            _canvas->drawString("Ersteinrichtung - Schritt 2 von 3: Wegfahrsperre", 370, 52);
 
             // Top-Right [ UEBERSPRINGEN ] button
             _canvas->fillRoundRect(615, 20, 155, 40, 8, 0x0821);
@@ -4064,105 +3990,7 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
     }
     else if (_wizard_step == 2) {
         if (step_changed) {
-            // STEP 3 OF 4: KEYLESS-GO & BLUETOOTH PAIRING
-            _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x0188);
-            _canvas->drawRoundRect(20, 14, 760, 52, 12, COLOR_CYAN);
-            _canvas->setTextColor(COLOR_WHITE, 0x0188);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->drawString("KEYLESS-GO & BLUETOOTH KOPPLUNG", 370, 30);
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextColor(COLOR_CYAN, 0x0188);
-            _canvas->drawString("Ersteinrichtung - Schritt 3 von 4: Proximity Auto-Unlock", 370, 52);
-
-            // Top-Right [ UEBERSPRINGEN ] button
-            _canvas->fillRoundRect(615, 20, 155, 40, 8, 0x0821);
-            _canvas->drawRoundRect(615, 20, 155, 40, 8, COLOR_CYAN);
-            _canvas->setTextColor(COLOR_CYAN, 0x0821);
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->drawString("UEBERSPRINGEN >", 692, 40);
-
-            // Card 1: Smartphone Auto-Pairing
-            drawCard(20, 76, 760, 172, COLOR_SURFACE, COLOR_BORDER);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextDatum(textdatum_t::top_left);
-            _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-            _canvas->drawString("SMARTPHONE KOPPELN (1-TAP PROXIMITY)", 38, 90);
-
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-            _canvas->drawString("Halte dein Smartphone mit Bluetooth neben das Display:", 38, 122);
-            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-            _canvas->drawString("Oeffne Bluetooth am Smartphone und waehle: ", 38, 146);
-            _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->drawString("VESC-Keyless", 395, 144);
-
-            // Card 2: Walk-Away Auto-Lock Option
-            drawCard(20, 258, 760, 84, COLOR_SURFACE, COLOR_BORDER);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextDatum(textdatum_t::top_left);
-            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-            _canvas->drawString("WALK-AWAY AUTO-LOCK", 38, 270);
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-            _canvas->drawString("Sperrt VESC & Display automatisch bei Verlassen (>4m oder getrennt).", 38, 302);
-        }
-
-        // Status Card inside Card 1 (x: 38, y: 176, w: 724, h: 58)
-        bool paired = telemetry.ble_paired || telemetry.ble_connected;
-        uint16_t stat_bg = paired ? 0x0280 : 0x0986;
-        uint16_t stat_brd = paired ? COLOR_GREEN : COLOR_CYAN;
-        _canvas->fillRoundRect(38, 176, 724, 58, 8, stat_bg);
-        _canvas->drawRoundRect(38, 176, 724, 58, 8, stat_brd);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::middle_left);
-        if (paired) {
-            _canvas->setTextColor(COLOR_WHITE, stat_bg);
-            char okBuf[64];
-            snprintf(okBuf, sizeof(okBuf), "GEKOPPELT: %s", telemetry.ble_device_name);
-            _canvas->drawString(okBuf, 55, 196);
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextColor(COLOR_GREEN, stat_bg);
-            _canvas->drawString("Proximity Auto-Unlock aktiv! Display entsperrt automatisch bei Naehe.", 55, 218);
-        } else {
-            _canvas->setTextColor(COLOR_WHITE, stat_bg);
-            _canvas->drawString("SUCHE VERBINDUNG...", 55, 196);
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextColor(COLOR_MUTED_GRAY, stat_bg);
-            _canvas->drawString("Warte auf Bluetooth-Verbindung von deinem Handy (VESC-Keyless)...", 55, 218);
-        }
-
-        // Auto-Lock toggle inside Card 2
-        bool alockOn = Settings.get().ble_autolock_enabled;
-        _canvas->fillRoundRect(550, 272, 205, 54, 10, alockOn ? 0x03E0 : 0x18C3);
-        _canvas->drawRoundRect(550, 272, 205, 54, 10, alockOn ? COLOR_GREEN : COLOR_BORDER);
-        _canvas->setTextColor(alockOn ? COLOR_WHITE : COLOR_MUTED_GRAY, alockOn ? 0x03E0 : 0x18C3);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->drawString(alockOn ? "[ AKTIV (AN) ]" : "[ AUS ]", 652, 299);
-
-        // Bottom Button
-        if (paired) {
-            _canvas->fillRoundRect(160, 362, 480, 68, 16, 0x03E0);
-            _canvas->drawRoundRect(160, 362, 480, 68, 16, COLOR_GREEN);
-            _canvas->setTextColor(COLOR_WHITE, 0x03E0);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->drawString("WEITER: FEATURES ANPASSEN ->", 400, 396);
-        } else {
-            _canvas->fillRoundRect(160, 362, 480, 68, 16, 0x0188);
-            _canvas->drawRoundRect(160, 362, 480, 68, 16, COLOR_CYAN);
-            _canvas->setTextColor(COLOR_WHITE, 0x0188);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->drawString("OHNE KOPPLUNG WEITER ->", 400, 396);
-        }
-    }
-    else if (_wizard_step == 3) {
-        if (step_changed) {
-            // STEP 4 OF 4: DASHBOARD FEATURES & HARDWARE
+            // STEP 3 OF 3: DASHBOARD FEATURES & HARDWARE
             _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x0188);
             _canvas->drawRoundRect(20, 14, 760, 52, 12, COLOR_CYAN);
             _canvas->setTextColor(COLOR_WHITE, 0x0188);
@@ -4171,7 +3999,7 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
             _canvas->drawString("DASHBOARD FEATURES ANPASSEN", 400, 30);
             _canvas->setFont(&fonts::Font2);
             _canvas->setTextColor(COLOR_CYAN, 0x0188);
-            _canvas->drawString("Ersteinrichtung - Schritt 4 von 4: Hardware-Ausstattung", 400, 52);
+            _canvas->drawString("Ersteinrichtung - Schritt 3 von 3: Hardware-Ausstattung", 400, 52);
 
             // Toggle 1: GPS & Live-Uhrzeit
             drawCard(20, 76, 760, 84, COLOR_SURFACE, COLOR_BORDER);
@@ -4193,15 +4021,15 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
             _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
             _canvas->drawString("Zeigt Gyro-Nickwinkel & Beschleunigungskraefte unten links.", 38, 214);
 
-            // Toggle 3: Kein Bluetooth? (WiFi-Bridge)
+            // Toggle 3: VESC Tool WiFi-Bridge
             drawCard(20, 264, 760, 84, COLOR_SURFACE, COLOR_BORDER);
             _canvas->setFont(&fonts::Font4);
             _canvas->setTextDatum(textdatum_t::top_left);
             _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-            _canvas->drawString("KEIN BLUETOOTH-MODUL (WIFI-BRIDGE)", 38, 276);
+            _canvas->drawString("VESC TOOL WIFI-BRIDGE", 38, 276);
             _canvas->setFont(&fonts::Font2);
             _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-            _canvas->drawString("Aktiviert die SoftAP WiFi-Bridge als kabellosen Fallback fuer VESC Tool.", 38, 308);
+            _canvas->drawString("Aktiviert die SoftAP WiFi-Bridge fuer kabellose Verbindung mit VESC Tool.", 38, 308);
 
             // Final Button: Setup abschliessen & losfahren
             _canvas->fillRoundRect(160, 372, 480, 68, 16, 0x03E0);
@@ -4234,7 +4062,7 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
         _canvas->setTextColor(wifiOn ? COLOR_WHITE : COLOR_MUTED_GRAY, wifiOn ? 0x31A0 : 0x18C3);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
-        _canvas->drawString(wifiOn ? "[ AKTIVIERT ]" : "[ STANDARD (BLE) ]", 652, 305);
+        _canvas->drawString(wifiOn ? "[ AKTIVIERT ]" : "[ INAKTIV ]", 652, 305);
     }
 }
 
@@ -4340,34 +4168,7 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
         }
     }
     else if (_wizard_step == 2) {
-        // Step 2: Keyless-Go & Bluetooth Proximity
-        // 1. Top-Right [ UEBERSPRINGEN > ] Button (tx: 600..780, ty: 14..68)
-        if (tx >= 600 && tx <= 780 && ty >= 14 && ty <= 68) {
-            _wizard_step = 3;
-            telemetry.wizard_step = 3;
-            _screen_dirty = true;
-            return true;
-        }
-
-        // 2. Toggle Walk-Away Auto-Lock (tx: 530..770, ty: 260..340)
-        if (tx >= 530 && tx <= 770 && ty >= 260 && ty <= 340) {
-            Settings.get().ble_autolock_enabled = !Settings.get().ble_autolock_enabled;
-            Settings.save();
-            telemetry.ble_autolock_enabled = Settings.get().ble_autolock_enabled;
-            _screen_dirty = true;
-            return true;
-        }
-
-        // 3. Bottom continue button (tx: 140..660, ty: 355..440)
-        if (tx >= 140 && tx <= 660 && ty >= 355 && ty <= 440) {
-            _wizard_step = 3;
-            telemetry.wizard_step = 3;
-            _screen_dirty = true;
-            return true;
-        }
-    }
-    else if (_wizard_step == 3) {
-        // Step 3: Hardware Features
+        // Step 2: Hardware Features
         // Toggle 1: GPS (y: 80..155)
         if (tx >= 530 && tx <= 770 && ty >= 80 && ty <= 155) {
             Settings.get().gps_enabled = !Settings.get().gps_enabled;
