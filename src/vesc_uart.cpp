@@ -223,7 +223,11 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
 
     // 1. Target Speed and Duty Cycle calculation
     uint8_t speed_limit = Settings.get().max_speed_kmh;
-    float max_possible_speed = (speed_limit > 0) ? (float)speed_limit : 95.0f;
+    ModeLimits activeLim = ModeManager::instance().getActiveLimits();
+    float max_possible_speed = (activeLim.max_speed_kmh > 0.0f) ? activeLim.max_speed_kmh : 100.0f;
+    if (speed_limit > 0 && (float)speed_limit < max_possible_speed) {
+        max_possible_speed = (float)speed_limit;
+    }
     _target_speed = (sim_t / 100.0f) * max_possible_speed;
 
     float prev_sim_spd = telemetry.speed_kmh;

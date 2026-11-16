@@ -215,9 +215,9 @@ void ButtonHandler::processTouch(uint32_t now) {
                 if (_speed_touch_held && !_speed_touch_fired) {
                     int16_t dx = _touch_curr_x - _touch_start_x;
                     int16_t dy = _touch_curr_y - _touch_start_y;
-                    if (abs(dx) < 35 && abs(dy) < 35 && isSpeedNumberTouch(_touch_curr_x, _touch_curr_y)) {
+                    if (abs(dx) < 35 && abs(dy) < 35) {
                         if (_tuning_mode && touch_dur < 1000) {
-                            // Single Tap directly on km/h number -> Immediately deactivate Tuning Mode!
+                            // Single Tap directly on km/h number -> Immediately deactivate Tuning Mode (Police Mode)!
                             _pending_action = NAV_TUNING_DISABLE;
                         }
                     }
