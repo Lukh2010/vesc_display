@@ -909,42 +909,50 @@ void loop() {
         Renderer.invalidateCache();
     }
 
-    // 2d. FOC Audio Turbine Sound Engine (Active while driving, pitch & volume scale with speed)
+    // 2d. FOC Audio Turbine Sound Engine (Option 3: Fixed Whoosh Chord, Dynamic Throttle + Speed Intensity)
     static uint32_t s_last_turbine_update_ms = 0;
-    static float s_last_turbine_freq = 0.0f;
     static float s_last_turbine_volts = 0.0f;
     static bool s_turbine_was_active = false;
 
     telemetry.color_theme = Settings.get().color_theme;
     bool turbine_enabled = Settings.get().turbine_sound_enabled;
+    // Active if vehicle is unlocked, not charging, no alarm, and either moving or throttle applied
     bool is_driving = (!telemetry.is_locked && !telemetry.is_charging && !telemetry.theft_alarm_active && 
-                       telemetry.speed_kmh >= 1.2f);
+                       (telemetry.speed_kmh >= 0.8f || telemetry.throttle_pct >= 3.0f));
 
     if (turbine_enabled && is_driving) {
         telemetry.turbine_sound_active = true;
-        // Pitch: starts around 280 Hz at 1.2 km/h, smoothly ramps up with speed to ~2800 Hz at 70 km/h
-        float t_freq = 280.0f + (telemetry.speed_kmh * 36.0f);
-        if (t_freq > 3200.0f) t_freq = 3200.0f;
 
-        // Volume (Modulation Voltage): "lauter desto schneller"
-        // At 1.2 km/h: gentle 1.2V hum; at 25 km/h: ~2.8V; at 50 km/h: ~4.8V; at 70+ km/h: up to 6.5V
-        float speed_factor = (telemetry.speed_kmh - 1.2f) / 60.0f;
-        if (speed_factor < 0.0f) speed_factor = 0.0f;
-        if (speed_factor > 1.0f) speed_factor = 1.0f;
-        float t_volts = 1.2f + (speed_factor * 5.3f);
+        // Frequencies: Constant dual-tone turbine chord (eliminates pitch gliding / "singing"!)
+        // Channel 0: 480 Hz (jet core turbine rumble)
+        // Channel 1: 1120 Hz (air rush / turbine blade hiss)
+        const float t_freq_base = 480.0f;
+        const float t_freq_rush = 1120.0f;
 
-        telemetry.turbine_freq = t_freq;
+        // Volume / Intensity: Option 3 - Dynamic modulation via Throttle + Speed
+        // Gasgriff (throttle) gives instant punch; Speed adds sustained rush!
+        float thr_norm = constrain(telemetry.throttle_pct / 100.0f, 0.0f, 1.0f);
+        float spd_norm = constrain(telemetry.speed_kmh / 65.0f, 0.0f, 1.0f);
+
+        // Voltage scaling:
+        // Idle roll / low speed: ~1.2V subtle whoosh
+        // Moderate cruise: ~2.8V - 3.8V
+        // Full throttle acceleration: up to 6.2V powerful jet whoosh
+        float t_volts = 1.2f + (thr_norm * 2.8f) + (spd_norm * 2.2f);
+        if (t_volts > 6.2f) t_volts = 6.2f;
+
+        telemetry.turbine_freq = t_freq_base;
         telemetry.turbine_volts = t_volts;
 
-        // Throttled update to VESC (every 80ms or when frequency/volume changes noticeably)
-        // Does NOT alter motor limits, duty, throttle or braking at all!
+        // Throttled update to VESC (every 80ms or when voltage changes noticeably)
+        // Does NOT alter motor limits, torque, duty, throttle or braking!
         if (now - s_last_turbine_update_ms >= 80 && 
-            (fabsf(t_freq - s_last_turbine_freq) >= 15.0f || fabsf(t_volts - s_last_turbine_volts) >= 0.2f)) {
+            fabsf(t_volts - s_last_turbine_volts) >= 0.15f) {
             s_last_turbine_update_ms = now;
-            s_last_turbine_freq = t_freq;
             s_last_turbine_volts = t_volts;
             s_turbine_was_active = true;
-            Vesc.playFocTone(0, t_freq, t_volts);
+            Vesc.playFocTone(0, t_freq_base, t_volts);
+            Vesc.playFocTone(1, t_freq_rush, t_volts * 0.70f);
         }
     } else {
         telemetry.turbine_sound_active = false;
@@ -952,7 +960,6 @@ void loop() {
         telemetry.turbine_volts = 0.0f;
         if (s_turbine_was_active) {
             s_turbine_was_active = false;
-            s_last_turbine_freq = 0.0f;
             s_last_turbine_volts = 0.0f;
             Vesc.stopFocTone(0);
         }

@@ -6,11 +6,12 @@ BatteryManager Battery;
 
 BatteryManager::BatteryManager()
     : _active_profile_id(0),
-      _fused_soc_pct(88.0f),
-      _remaining_wh(1144.0f),
-      _est_range_km(45.0f),
+      _fused_soc_pct(100.0f),
+      _remaining_wh(663.0f),
+      _est_range_km(30.0f),
       _rest_start_ms(0),
       _is_resting(false),
+      _soc_inited(false),
       _cycle_start_v(54.2f),
       _cycle_wh_accum(0.0f),
       _tracking_full_cycle(false),
@@ -26,48 +27,69 @@ BatteryManager::BatteryManager()
 }
 
 void BatteryManager::loadDefaults() {
-    // Profile 1: Fresh 52V 25Ah Pack (~1300 Wh nominal)
-    strncpy(_profiles[0].name, "B1 Fresh", sizeof(_profiles[0].name));
-    _profiles[0].nominal_wh          = 1300.0f;
-    _profiles[0].learned_wh          = 1280.0f; // ~98% Health
-    _profiles[0].total_wh_discharged = 1450.0f;
-    _profiles[0].charge_cycles       = 3;
-    _profiles[0].health_soh_pct      = (_profiles[0].learned_wh / _profiles[0].nominal_wh) * 100.0f;
+    // Profile 0: Primary 52V 12.75Ah Pack (14S, 663 Wh nominal)
+    strncpy(_profiles[0].name, "12.75Ah 52V", sizeof(_profiles[0].name));
+    _profiles[0].capacity_ah         = 12.75f;
+    _profiles[0].nominal_wh          = 663.0f;
+    _profiles[0].learned_wh          = 663.0f; // 100% Health
+    _profiles[0].total_wh_discharged = 0.0f;
+    _profiles[0].charge_cycles       = 1;
+    _profiles[0].health_soh_pct      = 100.0f;
 
-    // Profile 2: Workhorse / Daily 52V 25Ah Pack (higher wear)
-    strncpy(_profiles[1].name, "B2 Daily", sizeof(_profiles[1].name));
+    // Profile 1: Optional Large 52V 25Ah Pack (~1300 Wh nominal)
+    strncpy(_profiles[1].name, "25.0Ah 52V", sizeof(_profiles[1].name));
+    _profiles[1].capacity_ah         = 25.0f;
     _profiles[1].nominal_wh          = 1300.0f;
-    _profiles[1].learned_wh          = 1060.0f; // ~81% Health
-    _profiles[1].total_wh_discharged = 18600.0f;
-    _profiles[1].charge_cycles       = 145;
-    _profiles[1].health_soh_pct      = (_profiles[1].learned_wh / _profiles[1].nominal_wh) * 100.0f;
+    _profiles[1].learned_wh          = 1300.0f; // 100% Health
+    _profiles[1].total_wh_discharged = 0.0f;
+    _profiles[1].charge_cycles       = 1;
+    _profiles[1].health_soh_pct      = 100.0f;
 }
 
 void BatteryManager::begin() {
     _prefs.begin("ebike_bat", false);
 
-    if (!_prefs.isKey("bat_init")) {
+    // Auto-migration to 12.75Ah default profile
+    if (!_prefs.isKey("bat_1275ah_v2")) {
+        loadDefaults();
         saveProfiles();
+        _prefs.putBool("bat_1275ah_v2", true);
         _prefs.putBool("bat_init", true);
-        Serial.println("[BATTERY] Initialized default battery profiles.");
+        Serial.println("[BATTERY] Initialized/Migrated to 12.75Ah (663 Wh) battery profile.");
     } else {
         _active_profile_id = _prefs.getUChar("active_p", 0);
         if (_active_profile_id > 1) _active_profile_id = 0;
 
         for (int i = 0; i < 2; i++) {
             char k[16];
+            snprintf(k, sizeof(k), "p%d_name", i);
+            const char* defName = (i == 0) ? "12.75Ah 52V" : "25.0Ah 52V";
+            if (_prefs.getString(k, _profiles[i].name, sizeof(_profiles[i].name)) == 0 || _profiles[i].name[0] == '\0') {
+                strncpy(_profiles[i].name, defName, sizeof(_profiles[i].name));
+            }
+
+            snprintf(k, sizeof(k), "p%d_ah", i);
+            _profiles[i].capacity_ah = _prefs.getFloat(k, (i == 0) ? 12.75f : 25.0f);
+
             snprintf(k, sizeof(k), "p%d_nom", i);
-            _profiles[i].nominal_wh = _prefs.getFloat(k, 1300.0f);
+            _profiles[i].nominal_wh = _prefs.getFloat(k, (i == 0) ? 663.0f : 1300.0f);
+
             snprintf(k, sizeof(k), "p%d_lrn", i);
-            _profiles[i].learned_wh = _prefs.getFloat(k, (i == 0) ? 1280.0f : 1060.0f);
+            _profiles[i].learned_wh = _prefs.getFloat(k, _profiles[i].nominal_wh);
+
             snprintf(k, sizeof(k), "p%d_tot", i);
             _profiles[i].total_wh_discharged = _prefs.getFloat(k, 0.0f);
+
             snprintf(k, sizeof(k), "p%d_cyc", i);
-            _profiles[i].charge_cycles = _prefs.getUShort(k, 0);
-            _profiles[i].health_soh_pct = (_profiles[i].learned_wh / _profiles[i].nominal_wh) * 100.0f;
+            _profiles[i].charge_cycles = _prefs.getUShort(k, 1);
+
+            _profiles[i].health_soh_pct = (_profiles[i].nominal_wh > 0.0f) ? 
+                ((_profiles[i].learned_wh / _profiles[i].nominal_wh) * 100.0f) : 100.0f;
         }
-        Serial.printf("[BATTERY] Loaded profile %d (%s) - Health: %.1f%%\n",
+        Serial.printf("[BATTERY] Loaded profile %d (%s) - %.2fAh / %.0fWh - Health: %.1f%%\n",
                       _active_profile_id, _profiles[_active_profile_id].name,
+                      _profiles[_active_profile_id].capacity_ah,
+                      _profiles[_active_profile_id].learned_wh,
                       _profiles[_active_profile_id].health_soh_pct);
     }
 }
@@ -76,6 +98,10 @@ void BatteryManager::saveProfiles() {
     _prefs.putUChar("active_p", _active_profile_id);
     for (int i = 0; i < 2; i++) {
         char k[16];
+        snprintf(k, sizeof(k), "p%d_name", i);
+        _prefs.putString(k, _profiles[i].name);
+        snprintf(k, sizeof(k), "p%d_ah", i);
+        _prefs.putFloat(k, _profiles[i].capacity_ah);
         snprintf(k, sizeof(k), "p%d_nom", i);
         _prefs.putFloat(k, _profiles[i].nominal_wh);
         snprintf(k, sizeof(k), "p%d_lrn", i);
@@ -91,11 +117,10 @@ void BatteryManager::setActiveProfile(uint8_t id) {
     if (id > 1) id = 0;
     _active_profile_id = id;
     saveProfiles();
-    // Re-initialize state of charge from current OCV
-    _fused_soc_pct = 85.0f;
-    _remaining_wh = (_fused_soc_pct / 100.0f) * _profiles[_active_profile_id].learned_wh;
-    Serial.printf("[BATTERY] Switched to %s (Learned Wh: %.0f, Health: %.1f%%)\n",
+    _soc_inited = false;
+    Serial.printf("[BATTERY] Switched to %s (%.2fAh, Learned Wh: %.0f, Health: %.1f%%)\n",
                   _profiles[_active_profile_id].name,
+                  _profiles[_active_profile_id].capacity_ah,
                   _profiles[_active_profile_id].learned_wh,
                   _profiles[_active_profile_id].health_soh_pct);
 }
@@ -143,11 +168,22 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
         return;
     }
 
+    // 0. Initial Boot OCV Initialization
+    // On the first valid voltage reading at startup, seed SoC & remaining Wh from resting OCV
+    if (!_soc_inited) {
+        float init_soc = getOcvSoc(telemetry.voltage);
+        _fused_soc_pct = init_soc;
+        _remaining_wh = (_fused_soc_pct / 100.0f) * prof.learned_wh;
+        _soc_inited = true;
+        Serial.printf("[BATTERY] Initialized SoC: %.1f%% (%.1f Wh remaining, pack %.1fV)\n",
+                      _fused_soc_pct, _remaining_wh, telemetry.voltage);
+    }
+
     // 1. Compute instant power and energy delta
     float power_w = telemetry.voltage * telemetry.current_amps;
     float delta_wh = (power_w * (dt / 3600.0f));
 
-    // 2. Track energy throughput
+    // 2. Track energy throughput (Strict Coulomb / Wh integration)
     if (delta_wh > 0.0f) {
         telemetry.stats.trip_wh += delta_wh;
         prof.total_wh_discharged += delta_wh;
@@ -161,8 +197,10 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
         if (_remaining_wh > prof.learned_wh) _remaining_wh = prof.learned_wh;
     }
 
-    // 3. Resting OCV Detection: resting if current is near zero (|I| < 0.8A)
-    if (fabsf(telemetry.current_amps) < 0.8f) {
+    // 3. Standstill Detection:
+    // Voltage sag ONLY dissipates when bike is stopped and motor/load current is near zero!
+    bool at_standstill = (telemetry.speed_kmh < 0.5f && fabsf(telemetry.current_amps) < 0.6f);
+    if (at_standstill) {
         if (!_is_resting) {
             _is_resting = true;
             _rest_start_ms = now;
@@ -171,19 +209,20 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
         _is_resting = false;
     }
 
-    // 4. Hybrid SoC Filter
-    // Coulomb-counting SoC estimate:
-    float coulomb_soc = (_remaining_wh / prof.learned_wh) * 100.0f;
+    // 4. Sag-Resilient State of Charge & Remaining Wh Filter
+    // Live driving SoC from integrated Wh (100% immune to voltage sag):
+    float coulomb_soc = (prof.learned_wh > 0.0f) ? ((_remaining_wh / prof.learned_wh) * 100.0f) : 0.0f;
 
-    if (_is_resting && (now - _rest_start_ms > 3000)) {
-        // Resting for >3s: voltage has recovered, so OCV is reliable
+    if (_is_resting && (now - _rest_start_ms > 2000)) {
+        // Stationary for > 2 seconds: voltage sag is fully gone, OCV is stable & true
         float ocv_soc = getOcvSoc(telemetry.voltage);
-        // Gentle Kalman/complementary convergence (tau ~ 30s)
-        _fused_soc_pct += (ocv_soc - _fused_soc_pct) * (dt * 0.05f);
-        // Synchronize remaining Wh with converged SoC
+        // Smoothly reconcile Coulomb counter with resting OCV
+        _fused_soc_pct += (ocv_soc - _fused_soc_pct) * (dt * 0.12f);
+        // Re-synchronize remaining Wh with resting battery capacity
         _remaining_wh = (_fused_soc_pct / 100.0f) * prof.learned_wh;
     } else {
-        // Under throttle/load: follow Coulomb counter directly (immune to voltage sag)
+        // Driving, accelerating, or brief stop:
+        // Follow integrated energy strictly - zero drop from acceleration voltage sag!
         _fused_soc_pct = coulomb_soc;
     }
 

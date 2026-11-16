@@ -6,7 +6,8 @@
 
 struct BatteryProfile {
     char     name[16];
-    float    nominal_wh;        // e.g. 1300.0 Wh (52V 25Ah)
+    float    capacity_ah;       // e.g. 12.75 Ah
+    float    nominal_wh;        // e.g. 663.0 Wh (52V 12.75Ah)
     float    learned_wh;        // True learned full capacity
     float    total_wh_discharged; // Lifetime energy delivered
     uint16_t charge_cycles;     // Estimated full cycle equivalents
@@ -46,6 +47,7 @@ private:
     float    _est_range_km;
     uint32_t _rest_start_ms;
     bool     _is_resting;
+    bool     _soc_inited;
     float    _cycle_start_v;
     float    _cycle_wh_accum;
     bool     _tracking_full_cycle;
