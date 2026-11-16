@@ -1558,25 +1558,18 @@ void testKeylessGoAndProximityAutoLock() {
     assert(ModeManager::instance().isLocked() == false);
     printf("[PASS] 5. Safety Invariant: Auto-Lock strictly prevented while moving (speed >= 0.5 km/h).\n");
 
-    // 6. Settings Menu Tab 5 Touch Controls
+    // 6. Settings Menu Tab 5 Touch Controls (Clean 2-button layout: Button 1 Unpair/Pair, Button 2 Auto-Lock)
     t.screen = SCREEN_SETTINGS_MENU;
     Renderer.setSettingsTab(5);
 
-    // Toggle Auto-Unlock
-    bool prev_k = Settings.get().ble_keyless_enabled;
-    Renderer.handleSettingsTouch(350, 335, t);
-    assert(Settings.get().ble_keyless_enabled == !prev_k);
-    Settings.get().ble_keyless_enabled = prev_k;
-    Settings.save();
-
-    // Toggle Auto-Lock
+    // Toggle Auto-Lock (Button 2 at 600, 335)
     bool prev_al = Settings.get().ble_autolock_enabled;
     Renderer.handleSettingsTouch(600, 335, t);
     assert(Settings.get().ble_autolock_enabled == !prev_al);
     Settings.get().ble_autolock_enabled = prev_al;
     Settings.save();
 
-    // Unpair device
+    // Unpair device (Button 1 at 100, 335)
     Renderer.handleSettingsTouch(100, 335, t);
     assert(Settings.get().ble_paired == false);
     printf("[PASS] 6. Settings Tab 5 Keyless toggles and Unpair touch handling verified.\n");
