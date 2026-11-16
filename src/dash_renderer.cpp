@@ -1015,26 +1015,26 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
         if (!_hyper_inited || cur_pha != _cache.phase_x10) {
             _cache.phase_x10 = cur_pha;
-            _canvas->fillRect(440, 246, 165, 32, COLOR_BG);
-            _canvas->setFont(&fonts::Font4);
+            _canvas->fillRect(440, 246, 160, 32, COLOR_BG);
+            _canvas->setFont(&fonts::FreeSansBold9pt7b);
             _canvas->setTextSize(1);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
             _canvas->setTextDatum(textdatum_t::top_left);
             char motBuf[32];
             snprintf(motBuf, sizeof(motBuf), "MOTOR %d A", cur_pha);
-            _canvas->drawString(motBuf, 445, 250);
+            _canvas->drawString(motBuf, 445, 252);
         }
 
         if (!_hyper_inited || cur_a != _cache.current_x10) {
             _cache.current_x10 = cur_a;
-            _canvas->fillRect(605, 246, 165, 32, COLOR_BG);
-            _canvas->setFont(&fonts::Font4);
+            _canvas->fillRect(600, 246, 170, 32, COLOR_BG);
+            _canvas->setFont(&fonts::FreeSansBold9pt7b);
             _canvas->setTextSize(1);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
             _canvas->setTextDatum(textdatum_t::top_right);
             char bBuf[32];
-            snprintf(bBuf, sizeof(bBuf), "BAT %d A", cur_a);
-            _canvas->drawString(bBuf, 765, 250);
+            snprintf(bBuf, sizeof(bBuf), "BATTERY %d A", cur_a);
+            _canvas->drawString(bBuf, 765, 252);
         }
     }
 
