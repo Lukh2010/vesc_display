@@ -168,6 +168,7 @@ DashboardRenderer::DashboardRenderer()
       _active_style(STYLE_HYPER_35KW),
       _screen_dirty(true),
       _mode_banner_active(false),
+      _mode_banner_drawn_mode(-1),
       _settings_tab_idx(255),
       _last_rendered_tab(255),
       _settings_inited(false),
@@ -632,6 +633,7 @@ static void drawThermalsWithDegrees(LovyanGFX *canvas, const char *prefix, float
 void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     _canvas->fillScreen(COLOR_BG);
     _mode_banner_active = (millis() < telemetry.mode_badge_until);
+    _mode_banner_drawn_mode = -1;
     _hyper_inited = false;
     _cache.invalidate();
     _last_arc_frac = -1.0f;
@@ -706,6 +708,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     bool banner_now = (millis() < telemetry.mode_badge_until);
     if (banner_now != _mode_banner_active) {
         _mode_banner_active = banner_now;
+        _mode_banner_drawn_mode = -1;
         _canvas->fillRect(410, 170, 370, 110, COLOR_BG);
         _cache.battery_pct = -1;
         _cache.voltage_x10 = -1;
@@ -754,7 +757,9 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
     const ColorThemePalette &pal = currentTheme();
     uint16_t arcCol = pal.primary;
-    if (telemetry.boost_active) {
+    if (_is_sweeping) {
+        arcCol = pal.primary;
+    } else if (telemetry.boost_active) {
         arcCol = pal.secondary;
     } else if (spd >= 85.0f) {
         arcCol = COLOR_RED;
@@ -842,27 +847,22 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->drawString(telemetry.rider_tag, cx, 110);
     }
 
-    // 3. Hero Digital Speed Readout (Only redrawn when integer speed, sweep or GPS status changes)
+    // 3. Hero Digital Speed Readout (Only redrawn when integer speed or boost status changes)
     int cur_spd_int = (int)(spd + 0.5f);
     bool gps_connected = telemetry.gps_enabled && (telemetry.gps.valid && telemetry.gps.satellites >= 4);
-    if (!_hyper_inited || cur_spd_int != _cache.speed || _is_sweeping ||
-        telemetry.boost_active != _cache.boost_active || gps_connected != _cache.gps_valid ||
-        gps_en_changed) {
+    if (!_hyper_inited || cur_spd_int != _cache.speed || telemetry.boost_active != _cache.boost_active) {
         _cache.speed = cur_spd_int;
-        _cache.gps_valid = gps_connected;
-        _canvas->fillRect(cx - 100, 140, 200, 165, COLOR_BG);
+        _canvas->fillRect(cx - 70, 155, 140, 75, COLOR_BG);
         char spdBuf[16];
         snprintf(spdBuf, sizeof(spdBuf), "%d", cur_spd_int);
-        uint16_t spdCol = telemetry.boost_active ? COLOR_CYAN : ((spd >= 85.0f) ? COLOR_RED : COLOR_WHITE);
+        uint16_t spdCol = (_is_sweeping) ? COLOR_WHITE : (telemetry.boost_active ? COLOR_CYAN : ((spd >= 85.0f) ? COLOR_RED : COLOR_WHITE));
         drawHeroDigitText(_canvas, spdBuf, cx, 195, textdatum_t::middle_center, spdCol, COLOR_BG);
+    }
 
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextSize(1);
-        _canvas->setTextDatum(textdatum_t::top_center);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-        _canvas->drawString("km/h", cx, 245);
-
-        // Under "km/h": Draw small satellite icon ONLY when GPS is enabled and connected, otherwise nothing!
+    // Satellite icon: isolated update (zero erase/flicker of speed digits or km/h label)
+    if (!_hyper_inited || gps_connected != _cache.gps_valid || gps_en_changed) {
+        _cache.gps_valid = gps_connected;
+        _canvas->fillRect(cx - 20, 275, 40, 30, COLOR_BG);
         if (gps_connected) {
             drawMiniSatellite(_canvas, cx, 285);
         }
@@ -941,42 +941,44 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     uint16_t bannerCol = mCol;
 
     if (banner_now) {
-        // Redraw banner card while active
-        int bX = 410, bY = 170, bW = 365, bH = 108;
-        _canvas->fillRect(bX, bY, bW, bH, COLOR_BG);
-        int cX = 430, cY = 174, cW = 335, cH = 100;
-        _canvas->fillRoundRect(cX, cY, cW, cH, 14, COLOR_BG);
-        _canvas->drawRoundRect(cX, cY, cW, cH, 14, bannerCol);
-        _canvas->drawRoundRect(cX + 1, cY + 1, cW - 2, cH - 2, 13, bannerCol);
+        if (_mode_banner_drawn_mode != (int8_t)telemetry.ride_mode) {
+            _mode_banner_drawn_mode = (int8_t)telemetry.ride_mode;
+            int bX = 410, bY = 170, bW = 365, bH = 108;
+            _canvas->fillRect(bX, bY, bW, bH, COLOR_BG);
+            int cX = 430, cY = 174, cW = 335, cH = 100;
+            _canvas->fillRoundRect(cX, cY, cW, cH, 14, COLOR_BG);
+            _canvas->drawRoundRect(cX, cY, cW, cH, 14, bannerCol);
+            _canvas->drawRoundRect(cX + 1, cY + 1, cW - 2, cH - 2, 13, bannerCol);
 
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextSize(1);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
-        const char *tagStr = telemetry.tuning_mode ? "RIDE MODE ACTIVATED" : "DRIVE MODE ACTIVE";
-        _canvas->drawString(tagStr, cX + cW / 2, cY + 22);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextSize(1);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
+            const char *tagStr = telemetry.tuning_mode ? "RIDE MODE ACTIVATED" : "DRIVE MODE ACTIVE";
+            _canvas->drawString(tagStr, cX + cW / 2, cY + 22);
 
-        _canvas->setFont(&fonts::FreeSansBold24pt7b);
-        _canvas->setTextSize(1);
-        _canvas->setTextColor(bannerCol, COLOR_BG);
-        _canvas->drawString(mNames[mIdx], cX + cW / 2, cY + 54);
+            _canvas->setFont(&fonts::FreeSansBold24pt7b);
+            _canvas->setTextSize(1);
+            _canvas->setTextColor(bannerCol, COLOR_BG);
+            _canvas->drawString(mNames[mIdx], cX + cW / 2, cY + 54);
 
-        int32_t rem_ms = (int32_t)(telemetry.mode_badge_until - millis());
-        float anim_p = (rem_ms > 0 && rem_ms <= 2000) ? ((float)rem_ms / 2000.0f) : 1.0f;
-        int pBarW = (int)(anim_p * (cW - 40));
-        _canvas->fillRoundRect(cX + 20, cY + cH - 12, cW - 40, 3, 1, 0x18C6);
-        if (pBarW > 0) {
-            _canvas->fillRoundRect(cX + 20, cY + cH - 12, pBarW, 3, bannerCol);
+            _canvas->fillRoundRect(cX + 20, cY + cH - 12, cW - 40, 3, 1, 0x18C6);
+            _canvas->fillRoundRect(cX + 20, cY + cH - 12, cW - 40, 3, bannerCol);
         }
     } else {
+        _mode_banner_drawn_mode = -1;
+
         int cur_bat = (int)(telemetry.battery_pct + 0.5f);
         int cur_v10 = (int)(telemetry.voltage * 10.0f + 0.5f);
-        int cur_pha = (int)(telemetry.phase_amps + 0.5f);
-        int cur_a = (int)(telemetry.current_amps + 0.5f);
+        float p_amps = telemetry.phase_amps;
+        if (fabsf(p_amps) < 0.8f) p_amps = 0.0f;
+        float b_amps = telemetry.current_amps;
+        if (fabsf(b_amps) < 0.5f) b_amps = 0.0f;
+        int cur_pha = (int)roundf(p_amps);
+        int cur_a = (int)roundf(b_amps);
 
-        if (!_hyper_inited || cur_bat != _cache.battery_pct || cur_v10 != _cache.voltage_x10) {
+        if (!_hyper_inited || cur_bat != _cache.battery_pct) {
             _cache.battery_pct = cur_bat;
-            _cache.voltage_x10 = cur_v10;
             _canvas->fillRect(440, 170, 140, 42, COLOR_BG);
             char batBuf[16];
             snprintf(batBuf, sizeof(batBuf), "%d%%", cur_bat);
@@ -985,13 +987,6 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->setTextDatum(textdatum_t::top_left);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
             _canvas->drawString(batBuf, 445, 174);
-
-            _canvas->fillRect(650, 170, 125, 42, COLOR_BG);
-            char vBuf[16];
-            snprintf(vBuf, sizeof(vBuf), "%.1f V", telemetry.voltage);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextDatum(textdatum_t::top_right);
-            _canvas->drawString(vBuf, 765, 180);
 
             _canvas->fillRoundRect(445, 218, 320, 14, 7, pal.track);
             int bFillW = (int)((telemetry.battery_pct / 100.0f) * 320.0f);
@@ -1005,10 +1000,20 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             }
         }
 
-        if (!_hyper_inited || cur_pha != _cache.phase_x10 || cur_a != _cache.current_x10) {
+        if (!_hyper_inited || cur_v10 != _cache.voltage_x10) {
+            _cache.voltage_x10 = cur_v10;
+            _canvas->fillRect(650, 170, 125, 42, COLOR_BG);
+            char vBuf[16];
+            snprintf(vBuf, sizeof(vBuf), "%.1f V", telemetry.voltage);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::top_right);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+            _canvas->drawString(vBuf, 765, 180);
+        }
+
+        if (!_hyper_inited || cur_pha != _cache.phase_x10) {
             _cache.phase_x10 = cur_pha;
-            _cache.current_x10 = cur_a;
-            _canvas->fillRect(435, 246, 345, 34, COLOR_BG);
+            _canvas->fillRect(440, 246, 160, 32, COLOR_BG);
             _canvas->setFont(&fonts::Font4);
             _canvas->setTextSize(1);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
@@ -1016,7 +1021,14 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             char motBuf[32];
             snprintf(motBuf, sizeof(motBuf), "MOTOR %d A", cur_pha);
             _canvas->drawString(motBuf, 445, 250);
+        }
 
+        if (!_hyper_inited || cur_a != _cache.current_x10) {
+            _cache.current_x10 = cur_a;
+            _canvas->fillRect(610, 246, 160, 32, COLOR_BG);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextSize(1);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
             _canvas->setTextDatum(textdatum_t::top_right);
             char bBuf[32];
             snprintf(bBuf, sizeof(bBuf), "BATTERY %d A", cur_a);

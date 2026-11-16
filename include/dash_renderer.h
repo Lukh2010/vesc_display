@@ -33,6 +33,7 @@ public:
         _last_race_split_0_50 = -999.0f;
         _last_race_split_0_70 = -999.0f;
         _last_race_g_force_x10 = -999;
+        _mode_banner_drawn_mode = -1;
     }
 
     // Color Theme & Palettes
@@ -115,6 +116,7 @@ private:
     DashboardStyle  _active_style;
     bool            _screen_dirty;
     bool            _mode_banner_active;
+    int8_t          _mode_banner_drawn_mode;
 
     // Menu / Settings Configurator State
     uint8_t  _settings_tab_idx; // 0 = ECO, 1 = SPORT, 2 = RACE, 3 = DRAGY, 4 = DASH, 5 = PIN
