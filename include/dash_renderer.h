@@ -32,6 +32,7 @@ public:
         _last_race_split_0_22 = -999.0f;
         _last_race_split_0_50 = -999.0f;
         _last_race_split_0_70 = -999.0f;
+        _last_race_g_force_x10 = -999;
     }
 
     // Color Theme & Palettes
@@ -336,6 +337,7 @@ private:
     float    _last_race_split_0_22;
     float    _last_race_split_0_50;
     float    _last_race_split_0_70;
+    int      _last_race_g_force_x10;
 };
 
 extern DashboardRenderer Renderer;
