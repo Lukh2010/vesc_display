@@ -207,6 +207,9 @@ DashboardRenderer::DashboardRenderer()
       _pin_modal_success_ms(0),
       _wizard_step(0),
       _wizard_inited(false),
+      _last_wizard_step(-1),
+      _last_wizard_pin_len(-1),
+      _wifi_bridge_inited(false),
       _race_records_drawn(false),
       _race_dyno_drawn(false),
       _last_race_arc_angle(130.0f),
@@ -366,6 +369,10 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         _screen_dirty = true;
         _cache.invalidate();
         _last_needle.valid = false;
+        _wifi_bridge_inited = false;
+        _wizard_inited = false;
+        _last_wizard_step = -1;
+        _last_wizard_pin_len = -1;
     }
 
     // 3. Detect Style Switch in Ride Dashboard
@@ -425,9 +432,10 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             break;
 
         case SCREEN_WIFI_BRIDGE:
-            if (_screen_dirty) {
+            if (!_wifi_bridge_inited) {
                 _canvas->fillScreen(COLOR_BG);
                 initWifiBridgeScreen(telemetry);
+                _wifi_bridge_inited = true;
                 _screen_dirty = false;
             }
             renderWifiBridgeScreen(telemetry);
@@ -443,10 +451,8 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             break;
 
         case SCREEN_SETUP_WIZARD:
-            if (_screen_dirty) {
-                renderSetupWizard(telemetry);
-                _screen_dirty = false;
-            }
+            renderSetupWizard(telemetry);
+            _screen_dirty = false;
             break;
 
         case SCREEN_CHARGING_HUD:
@@ -1905,12 +1911,12 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         // DASHBOARD OPTIONS, COLOR THEME & FOC TURBINE SOUND (y: 122..470)
         const ColorThemePalette &pal = currentTheme();
 
-        // Card 1: FARB-SCHEMA / THEME (y: 124..196, h: 72)
+        // Card 1: THEME (y: 124..196, h: 72)
         drawCard(20, 124, 760, 72, COLOR_SURFACE, COLOR_BORDER);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextDatum(textdatum_t::top_left);
         _canvas->setTextColor(pal.primary, COLOR_SURFACE);
-        _canvas->drawString("FARB-SCHEMA / THEME", 40, 134);
+        _canvas->drawString("THEME", 40, 134);
 
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
@@ -1920,11 +1926,11 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
 
         // Interactive Selector: [<] [ THEME NAME ] [>]
         // Button [<] (x: 520..565)
-        _canvas->fillRoundRect(520, 134, 45, 52, 10, 0x18C3);
+        _canvas->fillRoundRect(520, 134, 45, 52, 10, pal.surface);
         _canvas->drawRoundRect(520, 134, 45, 52, 10, pal.border);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+        _canvas->setTextColor(pal.primary, pal.surface);
         _canvas->drawString("<", 542, 160);
 
         // Center Badge Preview (x: 572..718)
@@ -1936,30 +1942,30 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         _canvas->drawString(pal.name, 645, 160);
 
         // Button [>] (x: 725..770)
-        _canvas->fillRoundRect(725, 134, 45, 52, 10, 0x18C3);
+        _canvas->fillRoundRect(725, 134, 45, 52, 10, pal.surface);
         _canvas->drawRoundRect(725, 134, 45, 52, 10, pal.border);
         _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+        _canvas->setTextColor(pal.primary, pal.surface);
         _canvas->drawString(">", 747, 160);
 
-        // Card 2: FOC TURBINEN-SOUND (y: 204..276, h: 72)
+        // Card 2: TURBINE SOUND (y: 204..276, h: 72)
         drawCard(20, 204, 760, 72, COLOR_SURFACE, COLOR_BORDER);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextDatum(textdatum_t::top_left);
         _canvas->setTextColor(pal.primary, COLOR_SURFACE);
-        _canvas->drawString("FOC TURBINEN-SOUND (MOTOR-AUDIO)", 40, 214);
+        _canvas->drawString("TURBINE SOUND", 40, 214);
 
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
         _canvas->drawString("Spaceship-Turbine beim Fahren (lauter & hoeher je schneller).", 40, 244);
 
         bool turbOn = Settings.get().turbine_sound_enabled;
-        _canvas->fillRoundRect(520, 214, 250, 52, 10, turbOn ? 0x03E0 : 0x18C3);
-        _canvas->drawRoundRect(520, 214, 250, 52, 10, turbOn ? COLOR_GREEN : 0x39C7);
+        _canvas->fillRoundRect(520, 214, 250, 52, 10, turbOn ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(520, 214, 250, 52, 10, turbOn ? pal.primary : pal.border);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(turbOn ? COLOR_WHITE : COLOR_MUTED_GRAY, turbOn ? 0x03E0 : 0x18C3);
-        _canvas->drawString(turbOn ? "[ TURBINE: AN ]" : "[ AUS ]", 645, 240);
+        _canvas->setTextColor(turbOn ? COLOR_BG : COLOR_MUTED_GRAY, turbOn ? pal.primary : pal.surface);
+        _canvas->drawString(turbOn ? "[ AN ]" : "[ AUS ]", 645, 240);
 
         // Card 3: GPS & IMU HARDWARE (y: 284..356, h: 72)
         drawCard(20, 284, 760, 72, COLOR_SURFACE, COLOR_BORDER);
@@ -1974,34 +1980,35 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         bool gpsOn = Settings.get().gps_enabled;
         bool incOn = Settings.get().incline_gforce_enabled;
         // GPS button (x: 520..640)
-        _canvas->fillRoundRect(520, 294, 120, 52, 10, gpsOn ? 0x03E0 : 0x18C3);
-        _canvas->drawRoundRect(520, 294, 120, 52, 10, gpsOn ? COLOR_GREEN : 0x39C7);
+        _canvas->fillRoundRect(520, 294, 120, 52, 10, gpsOn ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(520, 294, 120, 52, 10, gpsOn ? pal.primary : pal.border);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(gpsOn ? COLOR_WHITE : COLOR_MUTED_GRAY, gpsOn ? 0x03E0 : 0x18C3);
+        _canvas->setTextColor(gpsOn ? COLOR_BG : COLOR_MUTED_GRAY, gpsOn ? pal.primary : pal.surface);
         _canvas->drawString(gpsOn ? "GPS: AN" : "GPS: AUS", 580, 320);
 
         // IMU button (x: 650..770)
-        _canvas->fillRoundRect(650, 294, 120, 52, 10, incOn ? 0x01E8 : 0x18C3);
-        _canvas->drawRoundRect(650, 294, 120, 52, 10, incOn ? COLOR_CYAN : 0x39C7);
+        _canvas->fillRoundRect(650, 294, 120, 52, 10, incOn ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(650, 294, 120, 52, 10, incOn ? pal.primary : pal.border);
         _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(incOn ? COLOR_WHITE : COLOR_MUTED_GRAY, incOn ? 0x01E8 : 0x18C3);
+        _canvas->setTextColor(incOn ? COLOR_BG : COLOR_MUTED_GRAY, incOn ? pal.primary : pal.surface);
         _canvas->drawString(incOn ? "IMU: AN" : "IMU: AUS", 710, 320);
 
         // Card 4: WIFI-BRIDGE & SETUP (y: 364..436, h: 72)
         drawCard(20, 364, 760, 72, COLOR_SURFACE, COLOR_BORDER);
         // Left Button: WiFi Bridge (x: 35..380, y: 374..426)
-        _canvas->fillRoundRect(35, 374, 345, 52, 10, 0x31A0);
-        _canvas->drawRoundRect(35, 374, 345, 52, 10, COLOR_AMBER);
+        _canvas->fillRoundRect(35, 374, 345, 52, 10, pal.surface);
+        _canvas->drawRoundRect(35, 374, 345, 52, 10, pal.primary);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_WHITE, 0x31A0);
+        _canvas->setTextColor(pal.primary, pal.surface);
         _canvas->drawString("WIFI VESC-TOOL BRIDGE", 35 + 172, 374 + 26);
 
         // Right Button: Setup Wizard (x: 400..745, y: 374..426)
-        _canvas->fillRoundRect(400, 374, 345, 52, 10, 0x18C3);
-        _canvas->drawRoundRect(400, 374, 345, 52, 10, 0x39C7);
-        _canvas->setTextColor(COLOR_LIGHT_GRAY, 0x18C3);
+        _canvas->fillRoundRect(400, 374, 345, 52, 10, pal.surface);
+        _canvas->drawRoundRect(400, 374, 345, 52, 10, pal.border);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_WHITE, pal.surface);
         _canvas->drawString("SETUP-ASSISTENT WIEDERHOLEN", 400 + 172, 374 + 26);
 
         // Footer Note (y: 456)
@@ -2014,37 +2021,35 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
 
     if (_settings_tab_idx == 5) {
         // PIN & KEYLESS-GO SECURITY SETTINGS (y: 126..452)
+        const ColorThemePalette &pal = currentTheme();
 
-        // Card 1: PIN-Sperre beim Start (y: 126..246, h: 120)
+        // Card 1: PIN AENDERN (y: 126..246, h: 120)
         drawCard(20, 126, 760, 120, COLOR_SURFACE, COLOR_BORDER);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("PIN-SPERRE BEIM START", 40, 138);
+        _canvas->setTextColor(pal.primary, COLOR_SURFACE);
+        _canvas->drawString("PIN AENDERN", 40, 138);
 
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Blockiert Motor & Gasgriff auf 0A bis zur PIN-Eingabe", 40, 168);
+        _canvas->drawString("Wegfahrsperre beim Start (VESC auf 0A gesperrt)", 40, 168);
 
-        // Toggle PIN-Sperre Button (x: 520, y: 136, w: 235, h: 48)
+        // Toggle PIN-Sperre Button (x: 480, y: 136, w: 280, h: 48)
         bool pin_en = Settings.get().pin_lock_enabled;
-        uint16_t tog_bg  = pin_en ? 0x0380 : 0x18C3;
-        uint16_t tog_brd = pin_en ? COLOR_GREEN : 0x39C7;
-        uint16_t tog_txt = pin_en ? COLOR_GREEN : COLOR_MUTED_GRAY;
-        _canvas->fillRoundRect(520, 136, 235, 48, 10, tog_bg);
-        _canvas->drawRoundRect(520, 136, 235, 48, 10, tog_brd);
+        _canvas->fillRoundRect(480, 136, 280, 48, 10, pin_en ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(480, 136, 280, 48, 10, pin_en ? pal.primary : pal.border);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(tog_txt, tog_bg);
-        _canvas->drawString(pin_en ? "AKTIVIERT" : "DEAKTIVIERT", 520 + 117, 136 + 24);
+        _canvas->setTextColor(pin_en ? COLOR_BG : COLOR_MUTED_GRAY, pin_en ? pal.primary : pal.surface);
+        _canvas->drawString(pin_en ? "[ PIN-SPERRE: AN ]" : "[ PIN-SPERRE: AUS ]", 480 + 140, 136 + 24);
 
-        // [ PIN CODE AENDERN ] Button (x: 40, y: 190, w: 250, h: 44)
-        _canvas->fillRoundRect(40, 190, 250, 44, 10, 0x1084);
-        _canvas->drawRoundRect(40, 190, 250, 44, 10, COLOR_CYAN);
+        // [ PIN AENDERN ] Button (x: 40, y: 190, w: 250, h: 44)
+        _canvas->fillRoundRect(40, 190, 250, 44, 10, pal.surface);
+        _canvas->drawRoundRect(40, 190, 250, 44, 10, pal.primary);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(COLOR_WHITE, 0x1084);
-        _canvas->drawString("PIN JETZT AENDERN", 40 + 125, 190 + 22);
+        _canvas->setTextColor(pal.primary, pal.surface);
+        _canvas->drawString("[ PIN AENDERN ]", 40 + 125, 190 + 22);
 
         // Security hint
         _canvas->setFont(&fonts::Font2);
@@ -2052,91 +2057,75 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
         _canvas->drawString("PIN-Code im NVS Flash gesichert (Fallback)", 310, 202);
 
-        // Card 2: KEYLESS-GO PROXIMITY & AUTO-LOCK (y: 256..452, h: 196)
+        // Card 2: BLUETOOTH UNLOCK (y: 256..452, h: 196)
         drawCard(20, 256, 760, 196, COLOR_SURFACE, COLOR_BORDER);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("KEYLESS-GO & BLUETOOTH PROXIMITY", 40, 268);
+        _canvas->setTextColor(pal.primary, COLOR_SURFACE);
+        _canvas->drawString("BLUETOOTH UNLOCK", 40, 268);
 
-        // Status Line
+        // Subtitle showing device info:
         _canvas->setFont(&fonts::Font2);
         if (telemetry.ble_paired) {
             char devBuf[96];
+            const char *dName = (telemetry.ble_device_name[0] != '\0') ? telemetry.ble_device_name : "Keyless Device";
             if (telemetry.ble_connected) {
                 _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
-                snprintf(devBuf, sizeof(devBuf), "Gekoppelt: %s  (Verbunden | RSSI: %d dBm)",
-                         telemetry.ble_device_name, telemetry.ble_rssi);
+                snprintf(devBuf, sizeof(devBuf), "Gekoppelt: %s  (Verbunden)", dName);
             } else {
                 _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-                snprintf(devBuf, sizeof(devBuf), "Gekoppelt: %s  (Nicht in Reichweite)",
-                         telemetry.ble_device_name);
+                snprintf(devBuf, sizeof(devBuf), "Gekoppelt: %s  (Nicht Verbunden)", dName);
             }
             _canvas->drawString(devBuf, 40, 298);
         } else if (telemetry.ble_pairing_active) {
             _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-            _canvas->drawString("Wartet auf Kopplung... Waehle 'VESC-Keyless' im Smartphone!", 40, 298);
+            _canvas->drawString("Wartet auf Kopplung... 'VESC-Keyless' waehlen", 40, 298);
         } else {
             _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-            _canvas->drawString("Kein Smartphone gekoppelt. Halte Smartphone ans Display.", 40, 298);
+            _canvas->drawString("Nicht gekoppelt", 40, 298);
         }
 
-        // Action Button: [ PHONE ANLERNEN ] or [ ENTKOPPELN ] or [ ABBRECHEN ]
-        // (x: 40, y: 326, w: 230, h: 48)
+        // Clean buttons:
+        // Button 1 (x: 40, y: 326, w: 345, h: 48): [ ENTKOPPELN ] or [ PHONE ANLERNEN ] / [ ABBRECHEN ]
         if (telemetry.ble_paired) {
-            _canvas->fillRoundRect(40, 326, 230, 48, 10, 0x4002);
-            _canvas->drawRoundRect(40, 326, 230, 48, 10, COLOR_RED);
+            _canvas->fillRoundRect(40, 326, 345, 48, 10, pal.surface);
+            _canvas->drawRoundRect(40, 326, 345, 48, 10, pal.border);
             _canvas->setTextDatum(textdatum_t::middle_center);
             _canvas->setFont(&fonts::Font4);
-            _canvas->setTextColor(0xFCA5, 0x4002);
-            _canvas->drawString("ENTKOPPELN", 40 + 115, 326 + 24);
+            _canvas->setTextColor(pal.primary, pal.surface);
+            _canvas->drawString("[ ENTKOPPELN ]", 40 + 172, 326 + 24);
         } else if (telemetry.ble_pairing_active) {
-            _canvas->fillRoundRect(40, 326, 230, 48, 10, 0x31A0);
-            _canvas->drawRoundRect(40, 326, 230, 48, 10, COLOR_AMBER);
+            _canvas->fillRoundRect(40, 326, 345, 48, 10, pal.surface);
+            _canvas->drawRoundRect(40, 326, 345, 48, 10, pal.border);
             _canvas->setTextDatum(textdatum_t::middle_center);
             _canvas->setFont(&fonts::Font4);
-            _canvas->setTextColor(COLOR_WHITE, 0x31A0);
-            _canvas->drawString("ABBRECHEN", 40 + 115, 326 + 24);
+            _canvas->setTextColor(pal.primary, pal.surface);
+            _canvas->drawString("[ ABBRECHEN ]", 40 + 172, 326 + 24);
         } else {
-            _canvas->fillRoundRect(40, 326, 230, 48, 10, 0x01E8);
-            _canvas->drawRoundRect(40, 326, 230, 48, 10, COLOR_CYAN);
+            _canvas->fillRoundRect(40, 326, 345, 48, 10, pal.primary);
+            _canvas->drawRoundRect(40, 326, 345, 48, 10, pal.primary);
             _canvas->setTextDatum(textdatum_t::middle_center);
             _canvas->setFont(&fonts::Font4);
-            _canvas->setTextColor(COLOR_WHITE, 0x01E8);
-            _canvas->drawString("PHONE ANLERNEN", 40 + 115, 326 + 24);
+            _canvas->setTextColor(COLOR_BG, pal.primary);
+            _canvas->drawString("[ PHONE ANLERNEN ]", 40 + 172, 326 + 24);
         }
 
-        // Toggle 1: Auto-Unlock (x: 285, y: 326, w: 230, h: 48)
-        bool k_en = Settings.get().ble_keyless_enabled;
-        uint16_t k_bg  = k_en ? 0x0380 : 0x18C3;
-        uint16_t k_brd = k_en ? COLOR_GREEN : 0x39C7;
-        uint16_t k_txt = k_en ? COLOR_GREEN : COLOR_MUTED_GRAY;
-        _canvas->fillRoundRect(285, 326, 230, 48, 10, k_bg);
-        _canvas->drawRoundRect(285, 326, 230, 48, 10, k_brd);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(k_txt, k_bg);
-        _canvas->drawString(k_en ? "AUTO-UNLOCK: AN" : "AUTO-UNLOCK: AUS", 285 + 115, 326 + 24);
-
-        // Toggle 2: Walk-Away Auto-Lock (x: 525, y: 326, w: 230, h: 48)
+        // Button 2 (x: 415, y: 326, w: 345, h: 48): [ AUTO-LOCK: AN ] / [ AUTO-LOCK: AUS ]
         bool al_en = Settings.get().ble_autolock_enabled;
-        uint16_t al_bg  = al_en ? 0x01E8 : 0x18C3;
-        uint16_t al_brd = al_en ? COLOR_CYAN : 0x39C7;
-        uint16_t al_txt = al_en ? COLOR_WHITE : COLOR_MUTED_GRAY;
-        _canvas->fillRoundRect(525, 326, 230, 48, 10, al_bg);
-        _canvas->drawRoundRect(525, 326, 230, 48, 10, al_brd);
+        _canvas->fillRoundRect(415, 326, 345, 48, 10, al_en ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(415, 326, 345, 48, 10, al_en ? pal.primary : pal.border);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(al_txt, al_bg);
-        _canvas->drawString(al_en ? "AUTO-LOCK: AN" : "AUTO-LOCK: AUS", 525 + 115, 326 + 24);
+        _canvas->setTextColor(al_en ? COLOR_BG : COLOR_MUTED_GRAY, al_en ? pal.primary : pal.surface);
+        _canvas->drawString(al_en ? "[ AUTO-LOCK: AN ]" : "[ AUTO-LOCK: AUS ]", 415 + 172, 326 + 24);
 
         // Explanatory note
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextDatum(textdatum_t::top_left);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Auto-Unlock entsperrt bei Naehe (<1.5m). Auto-Lock sperrt bei Verlassen (>4m/10s).", 40, 386);
-        _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
-        _canvas->drawString("Sicherheits-Schutz: Auto-Lock sperrt niemals waehrend der Fahrt (nur bei Stillstand).", 40, 412);
+        _canvas->drawString("Auto-Unlock entsperrt bei Naehe. Auto-Lock sperrt bei Verlassen (>4m/10s).", 40, 386);
+        _canvas->setTextColor(pal.primary, COLOR_SURFACE);
+        _canvas->drawString("Sicherheit: Auto-Lock sperrt niemals waehrend der Fahrt (nur bei Stillstand).", 40, 412);
 
         // Footer Strip
         _canvas->setFont(&fonts::Font0);
@@ -2679,14 +2668,14 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
 
     // Tab 5: PIN & SECURITY
     if (_settings_tab_idx == 5) {
-        // Card 1: Toggle PIN lock on boot (button bounds: x: 500..770, y: 125..190)
-        if (tx >= 500 && tx <= 770 && ty >= 125 && ty <= 190) {
+        // Card 1: Toggle PIN lock on boot (button bounds: x: 460..770, y: 125..190)
+        if (tx >= 460 && tx <= 770 && ty >= 125 && ty <= 190) {
             Settings.get().pin_lock_enabled = !Settings.get().pin_lock_enabled;
             Settings.save();
             _menu_dirty = true;
             return true;
         }
-        // Card 1: [ PIN JETZT AENDERN ] Button (tx: 30..300, ty: 180..245)
+        // Card 1: [ PIN AENDERN ] Button (tx: 30..300, ty: 180..245)
         if (tx >= 30 && tx <= 300 && ty >= 180 && ty <= 245) {
             _pin_modal_open = true;
             _pin_modal_buf[0] = '\0';
@@ -2694,8 +2683,8 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             _menu_dirty = true;
             return true;
         }
-        // Card 2: [ PHONE ANLERNEN ] / [ ENTKOPPELN ] / [ ABBRECHEN ] (tx: 30..280, ty: 315..385)
-        if (tx >= 30 && tx <= 280 && ty >= 315 && ty <= 385) {
+        // Card 2: Button 1: [ PHONE ANLERNEN ] / [ ENTKOPPELN ] / [ ABBRECHEN ] (tx: 30..395, ty: 315..385)
+        if (tx >= 30 && tx <= 395 && ty >= 315 && ty <= 385) {
             if (Settings.get().ble_paired) {
                 BleKeylessManager::instance().unpair();
             } else if (BleKeylessManager::instance().isPairingActive()) {
@@ -2706,15 +2695,8 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             _menu_dirty = true;
             return true;
         }
-        // Card 2: Toggle Keyless-Go Auto-Unlock (tx: 280..520, ty: 315..385)
-        if (tx >= 280 && tx <= 520 && ty >= 315 && ty <= 385) {
-            Settings.get().ble_keyless_enabled = !Settings.get().ble_keyless_enabled;
-            Settings.save();
-            _menu_dirty = true;
-            return true;
-        }
-        // Card 2: Toggle Walk-Away Auto-Lock (tx: 520..770, ty: 315..385)
-        if (tx >= 520 && tx <= 770 && ty >= 315 && ty <= 385) {
+        // Card 2: Button 2: Toggle Walk-Away Auto-Lock (tx: 405..770, ty: 315..385)
+        if (tx >= 405 && tx <= 770 && ty >= 315 && ty <= 385) {
             Settings.get().ble_autolock_enabled = !Settings.get().ble_autolock_enabled;
             Settings.save();
             _menu_dirty = true;
@@ -3891,6 +3873,8 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
 // ==============================================================================
 void DashboardRenderer::resetSetupWizard() {
     _wizard_inited = false;
+    _last_wizard_step = -1;
+    _last_wizard_pin_len = -1;
     _wizard_step = 0;
     _wizard_pin_buf[0] = '\0';
     _screen_dirty = true;
@@ -3900,190 +3884,233 @@ void DashboardRenderer::initSetupWizard(const DashTelemetry &telemetry) {
     if (!_wizard_inited) {
         _wizard_step = telemetry.wizard_step;
         _wizard_pin_buf[0] = '\0';
+        _last_wizard_step = -1;
+        _last_wizard_pin_len = -1;
         _wizard_inited = true;
     }
 }
 
 void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
-    _canvas->fillScreen(COLOR_BG);
+    bool step_changed = (_wizard_step != _last_wizard_step) || !_wizard_inited;
+    if (step_changed) {
+        _canvas->fillScreen(COLOR_BG);
+        _last_wizard_step = _wizard_step;
+        _wizard_inited = true;
+        _last_wizard_pin_len = -1;
+    }
 
     if (_wizard_step == 0) {
-        // STEP 1 OF 4: WELCOME & NAVIGATION / TUNING GUIDE
-        _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x0188); // Dark Cyan
-        _canvas->drawRoundRect(20, 14, 760, 52, 12, COLOR_CYAN);
-        _canvas->setTextColor(COLOR_WHITE, 0x0188);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->drawString("WILLKOMMEN ZUM VESC HYPER DISPLAY", 400, 30);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_CYAN, 0x0188);
-        _canvas->drawString("Ersteinrichtung - Schritt 1 von 4: Schnellanleitung", 400, 52);
+        if (step_changed) {
+            // STEP 1 OF 4: WELCOME & NAVIGATION / TUNING GUIDE
+            _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x0188); // Dark Cyan
+            _canvas->drawRoundRect(20, 14, 760, 52, 12, COLOR_CYAN);
+            _canvas->setTextColor(COLOR_WHITE, 0x0188);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->drawString("WILLKOMMEN ZUM VESC HYPER DISPLAY", 400, 30);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_CYAN, 0x0188);
+            _canvas->drawString("Ersteinrichtung - Schritt 1 von 4: Schnellanleitung", 400, 52);
 
-        // Card 1: Wie oeffne ich die Einstellungen?
-        drawCard(20, 78, 760, 130, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->drawString("WIE OEFFNE ICH DIE EINSTELLUNGEN?", 38, 92);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->drawString("Im Fahr-Dashboard oben rechts auf das Batterie / Profil-Badge tippen!", 38, 126);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Hier kannst du Geschwindigkeit (km/h), Leistung (Watt), Display & PIN anpassen.", 38, 154);
-        _canvas->drawString("Oder jederzeit zurueckkehren mit einem Klick auf [< DASH] oben links.", 38, 178);
+            // Card 1: Wie oeffne ich die Einstellungen?
+            drawCard(20, 78, 760, 130, COLOR_SURFACE, COLOR_BORDER);
+            _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->drawString("WIE OEFFNE ICH DIE EINSTELLUNGEN?", 38, 92);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->drawString("Im Fahr-Dashboard oben rechts auf das Batterie / Profil-Badge tippen!", 38, 126);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->drawString("Hier kannst du Geschwindigkeit (km/h), Leistung (Watt), Display & PIN anpassen.", 38, 154);
+            _canvas->drawString("Oder jederzeit zurueckkehren mit einem Klick auf [< DASH] oben links.", 38, 178);
 
-        // Card 2: Wie aktiviere ich Tuning & Race-Modus?
-        drawCard(20, 220, 760, 148, COLOR_SURFACE, 0x8004);
-        _canvas->setTextColor(COLOR_RACE, COLOR_SURFACE);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->drawString("WIE AKTIVIERE ICH TUNING & DEN RACE-MODUS?", 38, 234);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->drawString("GEHEIMER TRICK: Halte die grosse km/h Geschwindigkeits-Zahl fuer 4s gedrueckt!", 38, 268);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Der diskrete rote Statuspunkt oben rechts erlischt -> Tuning & Dragy Splits sind aktiv.", 38, 296);
-        _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
-        _canvas->drawString("Sofortige Drosselung (Polizei-Modus): Ein Einzeltipp auf die km/h Zahl sperrt auf 20 km/h!", 38, 324);
+            // Card 2: Wie aktiviere ich Tuning & Race-Modus?
+            drawCard(20, 220, 760, 148, COLOR_SURFACE, 0x8004);
+            _canvas->setTextColor(COLOR_RACE, COLOR_SURFACE);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->drawString("WIE AKTIVIERE ICH TUNING & DEN RACE-MODUS?", 38, 234);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->drawString("GEHEIMER TRICK: Halte die grosse km/h Geschwindigkeits-Zahl fuer 4s gedrueckt!", 38, 268);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->drawString("Der diskrete rote Statuspunkt oben rechts erlischt -> Tuning & Dragy Splits sind aktiv.", 38, 296);
+            _canvas->setTextColor(COLOR_GREEN, COLOR_SURFACE);
+            _canvas->drawString("Sofortige Drosselung (Polizei-Modus): Ein Einzeltipp auf die km/h Zahl sperrt auf 20 km/h!", 38, 324);
 
-        // Bottom Button: Weiter zu PIN Festlegen
-        _canvas->fillRoundRect(200, 386, 400, 64, 16, 0x01E8);
-        _canvas->drawRoundRect(200, 386, 400, 64, 16, COLOR_CYAN);
-        _canvas->setTextColor(COLOR_WHITE, 0x01E8);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString("WEITER: PIN FESTLEGEN  ->", 400, 418);
+            // Bottom Button: Weiter zu PIN Festlegen
+            _canvas->fillRoundRect(200, 386, 400, 64, 16, 0x01E8);
+            _canvas->drawRoundRect(200, 386, 400, 64, 16, COLOR_CYAN);
+            _canvas->setTextColor(COLOR_WHITE, 0x01E8);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("WEITER: PIN FESTLEGEN  ->", 400, 418);
+        }
     }
     else if (_wizard_step == 1) {
-        // STEP 2 OF 4: CHOOSE SECURITY PIN
-        _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x18C3);
-        _canvas->drawRoundRect(20, 14, 760, 52, 12, 0x39C7);
-        _canvas->setTextColor(COLOR_WHITE, 0x18C3);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->drawString("SICHERHEITS-PIN WAEHLEN", 370, 30);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, 0x18C3);
-        _canvas->drawString("Ersteinrichtung - Schritt 2 von 4: Wegfahrsperre", 370, 52);
-
-        // Top-Right [ UEBERSPRINGEN ] button
-        _canvas->fillRoundRect(615, 20, 155, 40, 8, 0x0821);
-        _canvas->drawRoundRect(615, 20, 155, 40, 8, COLOR_CYAN);
-        _canvas->setTextColor(COLOR_CYAN, 0x0821);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString("UEBERSPRINGEN >", 692, 40);
-
-        // PIN Keypad Card
-        int mx = 180, my = 76, mw = 440, mh = 388;
-        drawCard(mx, my, mw, mh, COLOR_SURFACE, COLOR_BORDER);
-
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString("Gib deinen gewuenschten 4-stelligen PIN ein:", 400, 98);
-
-        // 4 Digit Boxes
         int pinLen = strlen(_wizard_pin_buf);
-        for (int i = 0; i < 4; i++) {
-            int bx = 265 + i * 70;
-            int by = 118;
-            _canvas->fillRoundRect(bx, by, 58, 48, 8, 0x0821);
-            _canvas->drawRoundRect(bx, by, 58, 48, 8, (i < pinLen) ? COLOR_CYAN : COLOR_BORDER);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextColor(COLOR_WHITE, 0x0821);
-            if (i < pinLen) {
-                char chStr[2] = { _wizard_pin_buf[i], '\0' };
-                _canvas->drawString(chStr, bx + 29, by + 24);
-            } else {
-                _canvas->drawString("-", bx + 29, by + 24);
-            }
-        }
-
-        // Keypad buttons
+        int mx = 180, my = 76, mw = 440, mh = 388;
         int kw = 84, kh = 44;
         int kx0 = mx + (mw - (3 * kw + 2 * 14)) / 2;
         int ky0 = 176;
 
-        static const char KEY_LBL[4][3] = {
-            { '1', '2', '3' },
-            { '4', '5', '6' },
-            { '7', '8', '9' },
-            { '<', '0', '#' }
-        };
+        if (step_changed) {
+            // STEP 2 OF 4: CHOOSE SECURITY PIN
+            _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x18C3);
+            _canvas->drawRoundRect(20, 14, 760, 52, 12, 0x39C7);
+            _canvas->setTextColor(COLOR_WHITE, 0x18C3);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->drawString("SICHERHEITS-PIN WAEHLEN", 370, 30);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, 0x18C3);
+            _canvas->drawString("Ersteinrichtung - Schritt 2 von 4: Wegfahrsperre", 370, 52);
 
-        for (int r = 0; r < 4; r++) {
-            for (int c = 0; c < 3; c++) {
-                int bx = kx0 + c * (kw + 14);
-                int by = ky0 + r * (kh + 8);
-                char key = KEY_LBL[r][c];
-                uint16_t bg = (key == '#') ? ((pinLen == 4) ? 0x03E0 : 0x18C3) : ((key == '<') ? 0x4002 : 0x18C3);
-                uint16_t border = (key == '#') ? ((pinLen == 4) ? COLOR_GREEN : COLOR_BORDER) : ((key == '<') ? COLOR_RED : 0x39C7);
-                _canvas->fillRoundRect(bx, by, kw, kh, 8, bg);
-                _canvas->drawRoundRect(bx, by, kw, kh, 8, border);
-                _canvas->setTextColor(COLOR_WHITE, bg);
-                _canvas->setFont(&fonts::Font4);
-                char str[8] = { key, '\0' };
-                if (key == '<') strcpy(str, "DEL");
-                else if (key == '#') strcpy(str, (pinLen == 4) ? "OK" : "SKIP");
-                _canvas->drawString(str, bx + kw / 2, by + kh / 2);
+            // Top-Right [ UEBERSPRINGEN ] button
+            _canvas->fillRoundRect(615, 20, 155, 40, 8, 0x0821);
+            _canvas->drawRoundRect(615, 20, 155, 40, 8, COLOR_CYAN);
+            _canvas->setTextColor(COLOR_CYAN, 0x0821);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("UEBERSPRINGEN >", 692, 40);
+
+            // PIN Keypad Card
+            drawCard(mx, my, mw, mh, COLOR_SURFACE, COLOR_BORDER);
+
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("Gib deinen gewuenschten 4-stelligen PIN ein:", 400, 98);
+
+            // Keypad buttons
+            static const char KEY_LBL[4][3] = {
+                { '1', '2', '3' },
+                { '4', '5', '6' },
+                { '7', '8', '9' },
+                { '<', '0', '#' }
+            };
+
+            for (int r = 0; r < 4; r++) {
+                for (int c = 0; c < 3; c++) {
+                    if (r == 3 && c == 2) continue; // '#' key drawn below
+                    int bx = kx0 + c * (kw + 14);
+                    int by = ky0 + r * (kh + 8);
+                    char key = KEY_LBL[r][c];
+                    uint16_t bg = (key == '<') ? 0x4002 : 0x18C3;
+                    uint16_t border = (key == '<') ? COLOR_RED : 0x39C7;
+                    _canvas->fillRoundRect(bx, by, kw, kh, 8, bg);
+                    _canvas->drawRoundRect(bx, by, kw, kh, 8, border);
+                    _canvas->setTextColor(COLOR_WHITE, bg);
+                    _canvas->setFont(&fonts::Font4);
+                    _canvas->setTextDatum(textdatum_t::middle_center);
+                    char str[8] = { key, '\0' };
+                    if (key == '<') strcpy(str, "DEL");
+                    _canvas->drawString(str, bx + kw / 2, by + kh / 2);
+                }
             }
         }
 
-        // Bottom continue / skip button
-        if (pinLen == 4) {
-            _canvas->fillRoundRect(mx + 20, 396, mw - 40, 52, 12, 0x03E0);
-            _canvas->drawRoundRect(mx + 20, 396, mw - 40, 52, 12, COLOR_GREEN);
-            _canvas->setTextColor(COLOR_WHITE, 0x03E0);
+        // Differential update for PIN digits, '#' button, and bottom button
+        if (step_changed || pinLen != _last_wizard_pin_len) {
+            _last_wizard_pin_len = pinLen;
+
+            // 4 Digit Boxes
+            for (int i = 0; i < 4; i++) {
+                int bx = 265 + i * 70;
+                int by = 118;
+                _canvas->fillRoundRect(bx, by, 58, 48, 8, 0x0821);
+                _canvas->drawRoundRect(bx, by, 58, 48, 8, (i < pinLen) ? COLOR_CYAN : COLOR_BORDER);
+                _canvas->setFont(&fonts::Font4);
+                _canvas->setTextDatum(textdatum_t::middle_center);
+                _canvas->setTextColor(COLOR_WHITE, 0x0821);
+                if (i < pinLen) {
+                    char chStr[2] = { _wizard_pin_buf[i], '\0' };
+                    _canvas->drawString(chStr, bx + 29, by + 24);
+                } else {
+                    _canvas->drawString("-", bx + 29, by + 24);
+                }
+            }
+
+            // Keypad '#' button (r=3, c=2)
+            int bx = kx0 + 2 * (kw + 14);
+            int by = ky0 + 3 * (kh + 8);
+            uint16_t bg = (pinLen == 4) ? 0x03E0 : 0x18C3;
+            uint16_t border = (pinLen == 4) ? COLOR_GREEN : 0x39C7;
+            _canvas->fillRoundRect(bx, by, kw, kh, 8, bg);
+            _canvas->drawRoundRect(bx, by, kw, kh, 8, border);
+            _canvas->setTextColor(COLOR_WHITE, bg);
             _canvas->setFont(&fonts::Font4);
             _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->drawString("PIN UEBERNEHMEN & WEITER ->", 400, 422);
-        } else {
-            _canvas->fillRoundRect(mx + 20, 396, mw - 40, 52, 12, 0x18C3);
-            _canvas->drawRoundRect(mx + 20, 396, mw - 40, 52, 12, 0x39C7);
-            _canvas->setTextColor(COLOR_CYAN, 0x18C3);
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextDatum(textdatum_t::middle_center);
-            _canvas->drawString("UEBERSPRINGEN (OHNE PIN) ->", 400, 422);
+            _canvas->drawString((pinLen == 4) ? "OK" : "SKIP", bx + kw / 2, by + kh / 2);
+
+            // Bottom continue / skip button
+            if (pinLen == 4) {
+                _canvas->fillRoundRect(mx + 20, 396, mw - 40, 52, 12, 0x03E0);
+                _canvas->drawRoundRect(mx + 20, 396, mw - 40, 52, 12, COLOR_GREEN);
+                _canvas->setTextColor(COLOR_WHITE, 0x03E0);
+                _canvas->setFont(&fonts::Font4);
+                _canvas->setTextDatum(textdatum_t::middle_center);
+                _canvas->drawString("PIN UEBERNEHMEN & WEITER ->", 400, 422);
+            } else {
+                _canvas->fillRoundRect(mx + 20, 396, mw - 40, 52, 12, 0x18C3);
+                _canvas->drawRoundRect(mx + 20, 396, mw - 40, 52, 12, 0x39C7);
+                _canvas->setTextColor(COLOR_CYAN, 0x18C3);
+                _canvas->setFont(&fonts::Font4);
+                _canvas->setTextDatum(textdatum_t::middle_center);
+                _canvas->drawString("UEBERSPRINGEN (OHNE PIN) ->", 400, 422);
+            }
         }
     }
     else if (_wizard_step == 2) {
-        // STEP 3 OF 4: KEYLESS-GO & BLUETOOTH PAIRING
-        _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x0188);
-        _canvas->drawRoundRect(20, 14, 760, 52, 12, COLOR_CYAN);
-        _canvas->setTextColor(COLOR_WHITE, 0x0188);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->drawString("KEYLESS-GO & BLUETOOTH KOPPLUNG", 370, 30);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_CYAN, 0x0188);
-        _canvas->drawString("Ersteinrichtung - Schritt 3 von 4: Proximity Auto-Unlock", 370, 52);
+        if (step_changed) {
+            // STEP 3 OF 4: KEYLESS-GO & BLUETOOTH PAIRING
+            _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x0188);
+            _canvas->drawRoundRect(20, 14, 760, 52, 12, COLOR_CYAN);
+            _canvas->setTextColor(COLOR_WHITE, 0x0188);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->drawString("KEYLESS-GO & BLUETOOTH KOPPLUNG", 370, 30);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_CYAN, 0x0188);
+            _canvas->drawString("Ersteinrichtung - Schritt 3 von 4: Proximity Auto-Unlock", 370, 52);
 
-        // Top-Right [ UEBERSPRINGEN ] button
-        _canvas->fillRoundRect(615, 20, 155, 40, 8, 0x0821);
-        _canvas->drawRoundRect(615, 20, 155, 40, 8, COLOR_CYAN);
-        _canvas->setTextColor(COLOR_CYAN, 0x0821);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString("UEBERSPRINGEN >", 692, 40);
+            // Top-Right [ UEBERSPRINGEN ] button
+            _canvas->fillRoundRect(615, 20, 155, 40, 8, 0x0821);
+            _canvas->drawRoundRect(615, 20, 155, 40, 8, COLOR_CYAN);
+            _canvas->setTextColor(COLOR_CYAN, 0x0821);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("UEBERSPRINGEN >", 692, 40);
 
-        // Card 1: Smartphone Auto-Pairing
-        drawCard(20, 76, 760, 172, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->drawString("SMARTPHONE KOPPELN (1-TAP PROXIMITY)", 38, 90);
+            // Card 1: Smartphone Auto-Pairing
+            drawCard(20, 76, 760, 172, COLOR_SURFACE, COLOR_BORDER);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
+            _canvas->drawString("SMARTPHONE KOPPELN (1-TAP PROXIMITY)", 38, 90);
 
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->drawString("Halte dein Smartphone mit Bluetooth neben das Display:", 38, 122);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Oeffne Bluetooth am Smartphone und waehle: ", 38, 146);
-        _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->drawString("VESC-Keyless", 395, 144);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+            _canvas->drawString("Halte dein Smartphone mit Bluetooth neben das Display:", 38, 122);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->drawString("Oeffne Bluetooth am Smartphone und waehle: ", 38, 146);
+            _canvas->setTextColor(COLOR_CYAN, COLOR_SURFACE);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->drawString("VESC-Keyless", 395, 144);
 
-        // Status Card inside Card 1
+            // Card 2: Walk-Away Auto-Lock Option
+            drawCard(20, 258, 760, 84, COLOR_SURFACE, COLOR_BORDER);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+            _canvas->drawString("WALK-AWAY AUTO-LOCK", 38, 270);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->drawString("Sperrt VESC & Display automatisch bei Verlassen (>4m oder getrennt).", 38, 302);
+        }
+
+        // Status Card inside Card 1 (x: 38, y: 176, w: 724, h: 58)
         bool paired = telemetry.ble_paired || telemetry.ble_connected;
         uint16_t stat_bg = paired ? 0x0280 : 0x0986;
         uint16_t stat_brd = paired ? COLOR_GREEN : COLOR_CYAN;
@@ -4107,16 +4134,7 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
             _canvas->drawString("Warte auf Bluetooth-Verbindung von deinem Handy (VESC-Keyless)...", 55, 218);
         }
 
-        // Card 2: Walk-Away Auto-Lock Option
-        drawCard(20, 258, 760, 84, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->drawString("WALK-AWAY AUTO-LOCK", 38, 270);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Sperrt VESC & Display automatisch bei Verlassen (>4m oder getrennt).", 38, 302);
-
+        // Auto-Lock toggle inside Card 2
         bool alockOn = Settings.get().ble_autolock_enabled;
         _canvas->fillRoundRect(550, 272, 205, 54, 10, alockOn ? 0x03E0 : 0x18C3);
         _canvas->drawRoundRect(550, 272, 205, 54, 10, alockOn ? COLOR_GREEN : COLOR_BORDER);
@@ -4143,26 +4161,56 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
         }
     }
     else if (_wizard_step == 3) {
-        // STEP 4 OF 4: DASHBOARD FEATURES & HARDWARE
-        _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x0188);
-        _canvas->drawRoundRect(20, 14, 760, 52, 12, COLOR_CYAN);
-        _canvas->setTextColor(COLOR_WHITE, 0x0188);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->drawString("DASHBOARD FEATURES ANPASSEN", 400, 30);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_CYAN, 0x0188);
-        _canvas->drawString("Ersteinrichtung - Schritt 4 von 4: Hardware-Ausstattung", 400, 52);
+        if (step_changed) {
+            // STEP 4 OF 4: DASHBOARD FEATURES & HARDWARE
+            _canvas->fillRoundRect(20, 14, 760, 52, 12, 0x0188);
+            _canvas->drawRoundRect(20, 14, 760, 52, 12, COLOR_CYAN);
+            _canvas->setTextColor(COLOR_WHITE, 0x0188);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->drawString("DASHBOARD FEATURES ANPASSEN", 400, 30);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_CYAN, 0x0188);
+            _canvas->drawString("Ersteinrichtung - Schritt 4 von 4: Hardware-Ausstattung", 400, 52);
 
-        // Toggle 1: GPS & Live-Uhrzeit
-        drawCard(20, 76, 760, 84, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->drawString("GPS & LIVE-UHRZEIT", 38, 88);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Zeigt die Uhrzeit oben zentriert & Satelliten-Icon bei 3D-Fix unter km/h.", 38, 120);
+            // Toggle 1: GPS & Live-Uhrzeit
+            drawCard(20, 76, 760, 84, COLOR_SURFACE, COLOR_BORDER);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+            _canvas->drawString("GPS & LIVE-UHRZEIT", 38, 88);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->drawString("Zeigt die Uhrzeit oben zentriert & Satelliten-Icon bei 3D-Fix unter km/h.", 38, 120);
+
+            // Toggle 2: Neigung & G-Force
+            drawCard(20, 170, 760, 84, COLOR_SURFACE, COLOR_BORDER);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+            _canvas->drawString("NEIGUNG & G-FORCE (IMU)", 38, 182);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->drawString("Zeigt Gyro-Nickwinkel & Beschleunigungskraefte unten links.", 38, 214);
+
+            // Toggle 3: Kein Bluetooth? (WiFi-Bridge)
+            drawCard(20, 264, 760, 84, COLOR_SURFACE, COLOR_BORDER);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
+            _canvas->drawString("KEIN BLUETOOTH-MODUL (WIFI-BRIDGE)", 38, 276);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+            _canvas->drawString("Aktiviert die SoftAP WiFi-Bridge als kabellosen Fallback fuer VESC Tool.", 38, 308);
+
+            // Final Button: Setup abschliessen & losfahren
+            _canvas->fillRoundRect(160, 372, 480, 68, 16, 0x03E0);
+            _canvas->drawRoundRect(160, 372, 480, 68, 16, COLOR_GREEN);
+            _canvas->setTextColor(COLOR_WHITE, 0x03E0);
+            _canvas->setFont(&fonts::Font4);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("SETUP ABSCHLIESSEN & STARTEN", 400, 406);
+        }
 
         bool gpsOn = Settings.get().gps_enabled;
         _canvas->fillRoundRect(550, 90, 205, 54, 10, gpsOn ? 0x03E0 : 0x18C3);
@@ -4172,16 +4220,6 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
         _canvas->setFont(&fonts::Font4);
         _canvas->drawString(gpsOn ? "[ AKTIV (AN) ]" : "[ AUS ]", 652, 117);
 
-        // Toggle 2: Neigung & G-Force
-        drawCard(20, 170, 760, 84, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        _canvas->drawString("NEIGUNG & G-FORCE (IMU)", 38, 182);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Zeigt Gyro-Nickwinkel & Beschleunigungskraefte unten links.", 38, 214);
-
         bool incOn = Settings.get().incline_gforce_enabled;
         _canvas->fillRoundRect(550, 184, 205, 54, 10, incOn ? 0x01E8 : 0x18C3);
         _canvas->drawRoundRect(550, 184, 205, 54, 10, incOn ? COLOR_CYAN : COLOR_BORDER);
@@ -4190,16 +4228,6 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
         _canvas->setFont(&fonts::Font4);
         _canvas->drawString(incOn ? "[ ANZEIGEN ]" : "[ AUS ]", 652, 211);
 
-        // Toggle 3: Kein Bluetooth? (WiFi-Bridge)
-        drawCard(20, 264, 760, 84, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
-        _canvas->drawString("KEIN BLUETOOTH-MODUL (WIFI-BRIDGE)", 38, 276);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Aktiviert die SoftAP WiFi-Bridge als kabellosen Fallback fuer VESC Tool.", 38, 308);
-
         bool wifiOn = Settings.get().wifi_bridge_enabled;
         _canvas->fillRoundRect(550, 278, 205, 54, 10, wifiOn ? 0x31A0 : 0x18C3);
         _canvas->drawRoundRect(550, 278, 205, 54, 10, wifiOn ? COLOR_AMBER : COLOR_BORDER);
@@ -4207,14 +4235,6 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font4);
         _canvas->drawString(wifiOn ? "[ AKTIVIERT ]" : "[ STANDARD (BLE) ]", 652, 305);
-
-        // Final Button: Setup abschliessen & losfahren
-        _canvas->fillRoundRect(160, 372, 480, 68, 16, 0x03E0);
-        _canvas->drawRoundRect(160, 372, 480, 68, 16, COLOR_GREEN);
-        _canvas->setTextColor(COLOR_WHITE, 0x03E0);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->drawString("SETUP ABSCHLIESSEN & STARTEN", 400, 406);
     }
 }
 

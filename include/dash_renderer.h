@@ -14,6 +14,7 @@ public:
     void triggerNeedleSweep();
     bool isSweeping() const { return _is_sweeping; }
     void markScreenDirty() { _screen_dirty = true; }
+    void markMenuDirty() { _menu_dirty = true; }
     void invalidateCache() {
         _cache.invalidate();
         _stats_cache.invalidate();
@@ -336,6 +337,9 @@ private:
     uint8_t  _wizard_step;       // 0=Welcome, 1=PIN, 2=Hardware
     char     _wizard_pin_buf[8]; // PIN input buffer
     bool     _wizard_inited;
+    int      _last_wizard_step;
+    int      _last_wizard_pin_len;
+    bool     _wifi_bridge_inited;
 
     // Race Screen Differential Cache (Zero Flicker & Modal Isolation)
     bool     _race_records_drawn;

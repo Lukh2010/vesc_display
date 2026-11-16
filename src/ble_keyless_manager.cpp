@@ -93,6 +93,7 @@ BleKeylessManager::BleKeylessManager()
     , _disconnect_time_ms(0)
     , _last_rssi_poll_ms(0)
     , _conn_id(0)
+    , _last_telemetry(nullptr)
 {
     memset(_peer_bda, 0, sizeof(_peer_bda));
 }
@@ -232,6 +233,24 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
     _connect_time_ms = millis();
     _rssi = -55; // Initial proximity RSSI
     memcpy(_peer_bda, bda, 6);
+
+    // Immediately update telemetry so settings and status reflect connection with zero delay
+    if (_last_telemetry) {
+        _last_telemetry->ble_connected = true;
+        _last_telemetry->ble_paired = Settings.get().ble_paired;
+        _last_telemetry->ble_pairing_active = _pairing_active;
+        _last_telemetry->ble_rssi = _rssi;
+        _last_telemetry->ble_signal_bars = getSignalBars();
+        if (strlen(Settings.get().ble_paired_name) > 0 && strcmp(Settings.get().ble_paired_name, "Smartphone") != 0) {
+            strncpy(_last_telemetry->ble_device_name, Settings.get().ble_paired_name, sizeof(_last_telemetry->ble_device_name));
+        } else if (strlen(Settings.get().ble_paired_addr) > 0) {
+            strncpy(_last_telemetry->ble_device_name, Settings.get().ble_paired_addr, sizeof(_last_telemetry->ble_device_name));
+        } else {
+            strncpy(_last_telemetry->ble_device_name, "Smartphone", sizeof(_last_telemetry->ble_device_name));
+        }
+    }
+    Renderer.markMenuDirty();
+    Renderer.markScreenDirty();
     return true;
 }
 
@@ -240,6 +259,13 @@ void BleKeylessManager::onClientDisconnect() {
     _conn_id = 0;
     _disconnect_time_ms = millis();
     _rssi = 0;
+    if (_last_telemetry) {
+        _last_telemetry->ble_connected = false;
+        _last_telemetry->ble_rssi = 0;
+        _last_telemetry->ble_signal_bars = 0;
+    }
+    Renderer.markMenuDirty();
+    Renderer.markScreenDirty();
     Serial.println("[BLE KEYLESS] Smartphone disconnected. Waiting for reconnect or walk-away timeout...");
 }
 
@@ -259,14 +285,24 @@ uint8_t BleKeylessManager::getSignalBars() const {
 
 void BleKeylessManager::startPairing() {
     _pairing_active = true;
+    if (_last_telemetry) {
+        _last_telemetry->ble_pairing_active = true;
+    }
 #if !defined(NATIVE_SIMULATOR)
     BLEDevice::startAdvertising();
 #endif
+    Renderer.markMenuDirty();
+    Renderer.markScreenDirty();
     Serial.println("[BLE KEYLESS] Pairing mode started. Waiting for smartphone connection to 'VESC-Keyless'...");
 }
 
 void BleKeylessManager::cancelPairing() {
     _pairing_active = false;
+    if (_last_telemetry) {
+        _last_telemetry->ble_pairing_active = false;
+    }
+    Renderer.markMenuDirty();
+    Renderer.markScreenDirty();
 }
 
 void BleKeylessManager::unpair() {
@@ -287,10 +323,27 @@ void BleKeylessManager::unpair() {
 #endif
         _conn_id = 0;
     }
+    if (_last_telemetry) {
+        _last_telemetry->ble_paired = false;
+        _last_telemetry->ble_connected = false;
+        _last_telemetry->ble_pairing_active = false;
+        _last_telemetry->ble_device_name[0] = '\0';
+        _last_telemetry->ble_rssi = 0;
+        _last_telemetry->ble_signal_bars = 0;
+    }
+    Renderer.markMenuDirty();
+    Renderer.markScreenDirty();
     Serial.println("[BLE KEYLESS] Unpaired smartphone. Settings cleared.");
 }
 
 void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
+    _last_telemetry = &telemetry;
+
+    bool state_changed = (telemetry.ble_connected != _connected) ||
+                         (telemetry.ble_paired != Settings.get().ble_paired) ||
+                         (telemetry.ble_pairing_active != _pairing_active) ||
+                         (telemetry.ble_signal_bars != getSignalBars());
+
     // 1. Sync telemetry state
     telemetry.ble_keyless_enabled  = Settings.get().ble_keyless_enabled;
     telemetry.ble_autolock_enabled = Settings.get().ble_autolock_enabled;
@@ -310,6 +363,11 @@ void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
         }
     } else {
         telemetry.ble_device_name[0] = '\0';
+    }
+
+    if (state_changed) {
+        Renderer.markMenuDirty();
+        Renderer.markScreenDirty();
     }
 
 
