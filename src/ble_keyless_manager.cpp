@@ -170,7 +170,7 @@ void BleKeylessManager::begin() {
 
     // 3. Configure Advertising
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->setAppearance(0x03C4); // HID Gamepad / Remote Control appearance
+    pAdvertising->setAppearance(0x0180); // HID Generic Remote Control appearance (Apple Accessory Guidelines)
     pAdvertising->addServiceUUID(s_hidDevice->hidService()->getUUID()); // 0x1812
     pAdvertising->addServiceUUID(BLEUUID((uint16_t)0x180F));            // 0x180F Battery
     pAdvertising->setMinInterval(32); // 20 ms fast Apple & Android reconnection interval
@@ -182,8 +182,8 @@ void BleKeylessManager::begin() {
     pAdvertising->setScanResponseData(scanResponseData);
 
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06); // for iOS fast connection
-    pAdvertising->setMaxPreferred(0x12);
+    pAdvertising->setMinPreferred(0x0C); // 15 ms connection interval (Apple Accessory Guidelines)
+    pAdvertising->setMaxPreferred(0x18); // 30 ms connection interval
     BLEDevice::startAdvertising();
 
     Serial.println("[BLE KEYLESS] Bluetooth Low Energy active: Advertising as 'VESC-Keyless' (HID+Battery, ScanRsp: Custom UUID)");
@@ -226,6 +226,12 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
     _connect_time_ms = millis();
     _rssi = -55; // Initial proximity RSSI
     memcpy(_peer_bda, bda, 6);
+
+#if !defined(NATIVE_SIMULATOR)
+    if (s_bleServer) {
+        s_bleServer->updateConnParams(connId, 12, 24, 0, 600); // 15ms-30ms interval, 6s timeout (Apple Accessory Guidelines)
+    }
+#endif
 
     // Immediately update telemetry so settings and status reflect connection with zero delay
     if (_last_telemetry) {
