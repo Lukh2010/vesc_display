@@ -123,6 +123,9 @@ void BleKeylessManager::begin() {
     pSecurity->setCapability(ESP_IO_CAP_NONE);
     pSecurity->setAuthenticationMode(true, false, true); // Bond=true, MITM=false, SC=true
     pSecurity->setForceAuthentication(true);             // Triggers permanent OS bonding request on first connect!
+    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK); // Distribute LTK encryption key and IRK identity key (Required for iOS RPA reconnect)
+    pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    pSecurity->setKeySize(16);
     BLEDevice::setSecurityCallbacks(new VescSecurityCallbacks());
 
     s_bleServer = BLEDevice::createServer();
