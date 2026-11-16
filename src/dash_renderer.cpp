@@ -1718,12 +1718,6 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
                 _canvas->drawString(label, bx + 55, by + 27);
             }
         }
-
-        // Bottom Emergency Reset Text
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(alarm ? COLOR_RED : 0x52AA, 0x0823);
-        _canvas->drawString("Notfall-Reset: 5s gedrueckt halten (PIN -> 1234)", 400, 455);
     }
 
     // Only update PIN Circles and Status Hint if state changed (Zero Flicker!)
@@ -1760,63 +1754,6 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
         } else {
             _canvas->setTextColor(COLOR_MUTED_GRAY, 0x0823);
             _canvas->drawString("4-stelligen Entsperrcode eingeben", 400, 142);
-        }
-    }
-
-    // Dynamic Bluetooth Keyless-Go Badge (Top-Right, Zero Flicker)
-    if (telemetry.ble_connected != _last_ble_conn || telemetry.ble_signal_bars != _last_ble_bars || !_pin_screen_drawn) {
-        _last_ble_conn = telemetry.ble_connected;
-        _last_ble_bars = telemetry.ble_signal_bars;
-
-        int bx = 575, by = 16, bw = 205, bh = 50;
-        if (telemetry.ble_connected) {
-            drawCard(bx, by, bw, bh, 0x01E8, COLOR_CYAN);
-            _canvas->setTextDatum(textdatum_t::top_left);
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextColor(COLOR_WHITE, 0x01E8);
-            _canvas->drawString("PHONE VERBUNDEN", bx + 12, by + 8);
-
-            // 4 Signal strength bars
-            int sx = bx + 165;
-            for (int b = 0; b < 4; b++) {
-                int bh_bar = 6 + b * 4;
-                uint16_t bcol = (b < telemetry.ble_signal_bars) ? COLOR_GREEN : 0x2104;
-                _canvas->fillRect(sx + b * 7, by + 26 - bh_bar, 5, bh_bar, bcol);
-            }
-
-            _canvas->setFont(&fonts::Font0);
-            _canvas->setTextColor(COLOR_GREEN, 0x01E8);
-            _canvas->drawString("Proximity Unlock aktiv", bx + 12, by + 30);
-        } else if (telemetry.ble_keyless_enabled && telemetry.ble_paired) {
-            drawCard(bx, by, bw, bh, 0x1084, 0x2965);
-            _canvas->setTextDatum(textdatum_t::top_left);
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextColor(COLOR_CYAN, 0x1084);
-            _canvas->drawString("KEYLESS-GO", bx + 12, by + 8);
-
-            _canvas->setFont(&fonts::Font0);
-            _canvas->setTextColor(COLOR_MUTED_GRAY, 0x1084);
-            _canvas->drawString("Suche Smartphone...", bx + 12, by + 30);
-        } else if (telemetry.ble_pairing_active) {
-            drawCard(bx, by, bw, bh, 0x31A0, COLOR_AMBER);
-            _canvas->setTextDatum(textdatum_t::top_left);
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextColor(COLOR_WHITE, 0x31A0);
-            _canvas->drawString("BLE KOPPLUNG", bx + 12, by + 8);
-
-            _canvas->setFont(&fonts::Font0);
-            _canvas->setTextColor(COLOR_AMBER, 0x31A0);
-            _canvas->drawString("VESC-Keyless waehlen", bx + 12, by + 30);
-        } else {
-            drawCard(bx, by, bw, bh, 0x0821, 0x2104);
-            _canvas->setTextDatum(textdatum_t::top_left);
-            _canvas->setFont(&fonts::Font2);
-            _canvas->setTextColor(COLOR_MUTED_GRAY, 0x0821);
-            _canvas->drawString("KEYLESS: AUS", bx + 12, by + 8);
-
-            _canvas->setFont(&fonts::Font0);
-            _canvas->setTextColor(0x52AA, 0x0821);
-            _canvas->drawString("PIN-Code eingeben", bx + 12, by + 30);
         }
     }
 }
@@ -1881,9 +1818,6 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         _last_rendered_tab = _settings_tab_idx;
         _cache.invalidate();
 
-        // Clear entire tab bar and content region (everything below header bar y >= 56)
-        _canvas->fillRect(0, 56, 800, 424, COLOR_BG);
-
         for (int i = 0; i < 6; i++) {
             bool isSel = (i == _settings_tab_idx);
             uint16_t borderCol = isSel ? tabCols[i] : COLOR_BORDER;
@@ -1906,8 +1840,8 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
             _canvas->drawString(tabSub[i], tabX[i] + tabW[i] / 2, tabY + 41);
         }
 
-        // Clear content area below the tabs with background color
-        _canvas->fillRect(0, 116, 800, 364, COLOR_BG);
+        // Clear content area below the tabs with background color (Zero Flicker on tab bar)
+        _canvas->fillRect(0, 122, 800, 355, COLOR_BG);
     }
 
     if (_settings_tab_idx == 3) {
