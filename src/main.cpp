@@ -145,9 +145,11 @@ void setup() {
         ModeManager::instance().setLocked(false);
         Serial.println("[SETUP] First-Time Onboarding Wizard ACTIVE.");
     } else if (Settings.get().pin_lock_enabled) {
+        telemetry.is_locked = true;
         ModeManager::instance().setLocked(true);
         Serial.println("[SECURITY] Boot PIN-Lockscreen ACTIVE. VESC locked at 0A.");
     } else {
+        telemetry.is_locked = false;
         ModeManager::instance().setLocked(false);
     }
     Serial.println("[OK] Mode Manager initialized: Stealth limits dispatched to VESC on boot.");
@@ -159,8 +161,8 @@ void setup() {
     // 10. Initialize ATGM336H GPS+BDS Satellite Tracker on GPIO 6
     GpsTracker::instance().init();
 
-    // 11. Initialize Bluetooth Low Energy Keyless-Go Manager
-    BleKeylessManager::instance().begin();
+    // 11. Bluetooth Low Energy Keyless-Go Manager disabled as requested
+    // BleKeylessManager::instance().begin();
 
     Serial.println("[OK] Setup complete. Entering main render loop.");
 }
@@ -172,6 +174,7 @@ void loop() {
     uint32_t now = millis();
 
 #if SIMULATION_MODE
+    static bool s_sim_vesc_app_connected = false;
     // Interactive Serial Keyboard Controls via USB (115200 Baud)
     while (Serial.available()) {
         char c = (char)Serial.read();
@@ -222,16 +225,19 @@ void loop() {
             Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
             Settings.save();
             Serial.printf("[SIM] FOC Turbinensound: %s\n", Settings.get().turbine_sound_enabled ? "AN" : "AUS");
-        } else if (c == 'k' || c == 'K') {
-            if (BleKeylessManager::instance().isConnected()) {
-                BleKeylessManager::instance().onClientDisconnect();
-            } else {
-                static const uint8_t mock_bda[6] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
-                BleKeylessManager::instance().onClientConnect(mock_bda);
-            }
+        } else if (c == 'v' || c == 'V') {
+            s_sim_vesc_app_connected = !s_sim_vesc_app_connected;
             Renderer.markScreenDirty();
             Renderer.invalidateCache();
-            Serial.printf("[SIM] Keyless-Go BLE Phone: %s\n", BleKeylessManager::instance().isConnected() ? "VERBUNDEN" : "GETRENNT");
+            Serial.printf("[SIM] VESC-App Verbindung: %s\n", s_sim_vesc_app_connected ? "VERBUNDEN" : "GETRENNT");
+            if (s_sim_vesc_app_connected && telemetry.is_locked) {
+                telemetry.is_locked = false;
+                ModeManager::instance().setLocked(false);
+                Renderer.markScreenDirty();
+                Renderer.invalidateCache();
+                Renderer.triggerNeedleSweep();
+                Serial.println("[SECURITY] Durch VESC-App Verbindung automatisch entsperrt!");
+            }
         } else if (c == 'r' || c == 'R') {
             strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
             Settings.save();
@@ -246,16 +252,13 @@ void loop() {
         } else if (c == 'i' || c == 'I') {
             Serial.println("=== SYSTEM STATUS ===");
             Serial.printf("  PIN-Code: '%s' (Lock: %s)\n", Settings.get().pin_code, telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
-            Serial.printf("  BLE Paired: %s (MAC: %s, Name: %s)\n",
-                          Settings.get().ble_paired ? "JA" : "NEIN",
-                          Settings.get().ble_paired_addr,
-                          Settings.get().ble_paired_name);
-            Serial.printf("  BLE Connected: %s (RSSI: %d dBm)\n",
-                          BleKeylessManager::instance().isConnected() ? "JA" : "NEIN",
-                          telemetry.ble_rssi);
-            Serial.printf("  Auto-Lock: %s | Keyless: %s\n",
-                          Settings.get().ble_autolock_enabled ? "AN" : "AUS",
-                          Settings.get().ble_keyless_enabled ? "AN" : "AUS");
+            Serial.printf("  PIN-Sperre: %s\n", Settings.get().pin_lock_enabled ? "AN" : "AUS");
+            Serial.printf("  VESC Connected: %s\n", telemetry.vesc_connected ? "JA" : "NEIN");
+            Serial.printf("  WiFi Bridge: %s (Client: %s)\n",
+                          Vesc.isWifiBridgeActive() ? "AKTIV" : "INAKTIV",
+                          Vesc.isWifiClientConnected() ? Vesc.getWifiClientIp() : "KEINER");
+            Serial.printf("  USB Bridge: %s\n", Vesc.isUsbBridgeActive() ? "AKTIV" : "INAKTIV");
+            Serial.printf("  Sim VESC-App: %s\n", s_sim_vesc_app_connected ? "VERBUNDEN" : "GETRENNT");
             Serial.println("=====================");
         } else if (c == 'h' || c == 'H' || c == '?') {
             Serial.println("=== VESC Standalone Simulator Tasten ===");
@@ -266,9 +269,9 @@ void loop() {
             Serial.println("  p     : PIN Lockscreen sperren / entsperren");
             Serial.println("  r     : PIN auf 1234 zuruecksetzen & entsperren");
             Serial.println("  i     : System Info & PIN Status anzeigen");
+            Serial.println("  v     : VESC-App Verbindung simulieren (Auto-Unlock)");
             Serial.println("  t     : Farb-Theme weiterschalten");
             Serial.println("  u     : Turbinensound umschalten");
-            Serial.println("  k     : Keyless-Go Smartphone verbinden / trennen");
             Serial.println("========================================");
         }
     }
@@ -308,8 +311,26 @@ void loop() {
         Renderer.triggerNeedleSweep();
     }
 
-    // BLE Keyless-Go Proximity Auto-Unlock & Walk-Away Auto-Lock
-    BleKeylessManager::instance().update(telemetry, now);
+    // VESC-App Auto-Unlock: Unlock if VESC App connects via WiFi Bridge, USB Bridge, or active bridge traffic
+    bool vesc_app_connected = Vesc.isWifiBridgeActive() ||
+                              Vesc.isUsbBridgeActive() ||
+                              (Vesc.isBridgeActive() && (Vesc.getBridgePcToVescBytes() > 0 || Vesc.getBridgeWifiToVescBytes() > 0))
+#if SIMULATION_MODE
+                              || s_sim_vesc_app_connected
+#endif
+                              ;
+
+    if (telemetry.is_locked && vesc_app_connected) {
+        telemetry.is_locked = false;
+        ModeManager::instance().setLocked(false);
+        Renderer.markScreenDirty();
+        Renderer.invalidateCache();
+        Renderer.triggerNeedleSweep();
+        Serial.println("[SECURITY] VESC-App Verbindung aktiv: Display & VESC entsperrt!");
+    }
+
+    // BLE Keyless-Go disabled as requested
+    // BleKeylessManager::instance().update(telemetry, now);
 
     // 1. Process Touch & Button Navigation Inputs
     Buttons.setActiveScreen(telemetry.screen);
