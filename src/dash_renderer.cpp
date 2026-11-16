@@ -463,10 +463,14 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
     // When tuningMode == false (Stealth / Drossel Mode): permanently lit small red dot
     // When tuningMode == true (Tuning Mode): completely vanishes
     if (telemetry.screen != SCREEN_SETUP_WIZARD) {
-        if (!telemetry.tuning_mode) {
-            _canvas->fillCircle(790, 10, 4, COLOR_RED);
-        } else {
-            _canvas->fillCircle(790, 10, 5, COLOR_BG);
+        int8_t want_dot = telemetry.tuning_mode ? 0 : 1;
+        if (_cache.tuning_mode_dot != want_dot) {
+            _cache.tuning_mode_dot = want_dot;
+            if (want_dot == 1) {
+                _canvas->fillCircle(790, 10, 4, COLOR_RED);
+            } else {
+                _canvas->fillCircle(790, 10, 5, COLOR_BG);
+            }
         }
     }
 }
@@ -520,7 +524,6 @@ static void drawHeroDigitText(LovyanGFX *canvas, const char *str, int x, int y, 
 }
 
 static void drawGForceBadge(LovyanGFX *canvas, float g_force, int cx, int cy, int r) {
-    canvas->fillCircle(cx, cy, r, COLOR_BG);
     uint16_t ringCol = COLOR_BORDER;
     uint16_t textCol = COLOR_WHITE;
     if (g_force > 0.15f) {
@@ -549,7 +552,6 @@ static void drawGForceBadge(LovyanGFX *canvas, float g_force, int cx, int cy, in
 }
 
 static void drawInclineBadge(LovyanGFX *canvas, float incline_deg, int cx, int cy, int r) {
-    canvas->fillCircle(cx, cy, r, COLOR_BG);
     uint16_t ringCol = COLOR_BORDER;
     if (incline_deg > 15.0f) {
         ringCol = COLOR_CYAN;
@@ -823,16 +825,18 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         strncpy(_cache.clock_str, telemetry.clock_str, sizeof(_cache.clock_str));
         _cache.gps_enabled = telemetry.gps_enabled;
 
-        // Clear center top area (x=340 to 460, y=16 to 56)
-        _canvas->fillRect(340, 16, 120, 40, COLOR_BG);
-
         if (telemetry.gps_enabled) {
-            // Render Clock ("14:35") in middle-center on exact same height as STATS button
+            // Render Clock ("14:35") in middle-center on exact same height as STATS button (zero-flash native padding)
             _canvas->setFont(&fonts::Font4);
             _canvas->setTextSize(1);
             _canvas->setTextDatum(textdatum_t::middle_center);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+            _canvas->setTextPadding(120);
             _canvas->drawString(telemetry.clock_str[0] ? telemetry.clock_str : "--:--", 400, 36);
+            _canvas->setTextPadding(0);
+        } else {
+            // Clear center top area (x=340 to 460, y=16 to 56) when GPS disabled
+            _canvas->fillRect(340, 16, 120, 40, COLOR_BG);
         }
     }
 
@@ -938,26 +942,17 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->setTextPadding(0);
     }
 
-    // 6b. Duty Progress Bar: Decoupled from text, differential update
-    if (!_hyper_inited || cur_d_fill != _cache.duty_fill_w) {
+    // 6b. Duty Progress Bar: Decoupled from text, differential update (solid clean bar, 0 white pip)
+    if (!_hyper_inited || cur_d_fill != _cache.duty_fill_w || dutyCol != _cache.duty_col) {
         int old_fill = _hyper_inited ? _cache.duty_fill_w : 0;
+        bool col_changed = (dutyCol != _cache.duty_col);
         _cache.duty_fill_w = cur_d_fill;
-        if (!_hyper_inited) {
+        _cache.duty_col = dutyCol;
+        if (!_hyper_inited || cur_d_fill < old_fill || col_changed) {
             _canvas->fillRoundRect(445, 150, 320, 10, 5, pal.track);
         }
-        if (cur_d_fill > old_fill) {
+        if (cur_d_fill > 0) {
             _canvas->fillRoundRect(445, 150, cur_d_fill, 10, 5, dutyCol);
-            if (cur_d_fill >= 6) {
-                _canvas->fillRoundRect(445 + cur_d_fill - 4, 150, 4, 10, 2, COLOR_WHITE);
-            }
-        } else if (cur_d_fill < old_fill) {
-            _canvas->fillRoundRect(445, 150, 320, 10, 5, pal.track);
-            if (cur_d_fill > 0) {
-                _canvas->fillRoundRect(445, 150, cur_d_fill, 10, 5, dutyCol);
-                if (cur_d_fill >= 6) {
-                    _canvas->fillRoundRect(445 + cur_d_fill - 4, 150, 4, 10, 2, COLOR_WHITE);
-                }
-            }
         }
     }
 
@@ -1022,21 +1017,19 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             if (bFillW > 0) {
                 uint16_t bCol = (telemetry.battery_pct > 25.0f) ? COLOR_WHITE : ((telemetry.battery_pct > 12.0f) ? COLOR_AMBER : COLOR_RED);
                 _canvas->fillRoundRect(445, 218, bFillW, 14, 7, bCol);
-                if (bFillW >= 8) {
-                    _canvas->fillRoundRect(445 + bFillW - 5, 218, 5, 14, 3, COLOR_WHITE);
-                }
             }
         }
 
         if (!_hyper_inited || cur_v10 != _cache.voltage_x10) {
             _cache.voltage_x10 = cur_v10;
-            _canvas->fillRect(650, 170, 125, 42, COLOR_BG);
             char vBuf[16];
             snprintf(vBuf, sizeof(vBuf), "%.1f V", telemetry.voltage);
             _canvas->setFont(&fonts::Font4);
             _canvas->setTextDatum(textdatum_t::top_right);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+            _canvas->setTextPadding(125);
             _canvas->drawString(vBuf, 765, 180);
+            _canvas->setTextPadding(0);
         }
 
         if (!_hyper_inited || cur_pha != _cache.phase_x10) {
@@ -1066,34 +1059,36 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         }
     }
 
-    // 8. Range Readout (Only redrawn when range changes)
+    // 8. Range Readout (Only redrawn when range changes, zero-flash native padding)
     int cur_range = (int)(telemetry.est_range_km + 0.5f);
     if (!_hyper_inited || cur_range != _cache.est_range) {
         _cache.est_range = cur_range;
-        _canvas->fillRect(445, 322, 160, 36, COLOR_BG);
-        _canvas->setFont(&fonts::FreeSansBold18pt7b);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-        _canvas->setTextDatum(textdatum_t::top_left);
         char rngBuf[16];
         if (telemetry.est_range_km < 0.0f) {
             snprintf(rngBuf, sizeof(rngBuf), "-- km");
         } else {
             snprintf(rngBuf, sizeof(rngBuf), "%d km", cur_range);
         }
-        _canvas->drawString(rngBuf, 445, 322);
-    }
-
-    // 8b. Trip Distance Readout (Above [ MODE ] button at x=615..765, y=298..360)
-    int cur_trip_x10 = (int)roundf(telemetry.trip_km * 10.0f);
-    if (!_hyper_inited || cur_trip_x10 != _cache.trip_x10) {
-        _cache.trip_x10 = cur_trip_x10;
-        _canvas->fillRect(615, 322, 150, 36, COLOR_BG);
         _canvas->setFont(&fonts::FreeSansBold18pt7b);
         _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
         _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextPadding(160);
+        _canvas->drawString(rngBuf, 445, 322);
+        _canvas->setTextPadding(0);
+    }
+
+    // 8b. Trip Distance Readout (Above [ MODE ] button at x=615..765, y=298..360, zero-flash native padding)
+    int cur_trip_x10 = (int)roundf(telemetry.trip_km * 10.0f);
+    if (!_hyper_inited || cur_trip_x10 != _cache.trip_x10) {
+        _cache.trip_x10 = cur_trip_x10;
         char tripBuf[16];
         snprintf(tripBuf, sizeof(tripBuf), "%.1f km", telemetry.trip_km);
+        _canvas->setFont(&fonts::FreeSansBold18pt7b);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+        _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextPadding(150);
         _canvas->drawString(tripBuf, 615, 322);
+        _canvas->setTextPadding(0);
     }
 
     // 9. Right Column: Bottom Touch Action Buttons (Only redrawn when state changes)
@@ -3463,9 +3458,9 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     bool active_0_70 = (telemetry.race_split_0_50 > 0.0f && telemetry.race_split_0_70 <= 0.0f);
 
     auto drawSplit = [&](int y, float split_val, bool is_active) {
-        _canvas->fillRect(548, y, 215, 36, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextPadding(215);
         char sBuf[32];
         if (split_val > 0.0f) {
             snprintf(sBuf, sizeof(sBuf), "%.2f s", split_val);
@@ -3479,6 +3474,7 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
             _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
             _canvas->drawString("--.-- s", 548, y);
         }
+        _canvas->setTextPadding(0);
     };
 
     if (s1_changed || (telemetry.race_state == 2 && active_0_22 && timer_needs_update)) {
