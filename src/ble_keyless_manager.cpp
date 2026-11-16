@@ -9,6 +9,9 @@
 #include <BLEAdvertising.h>
 #include <BLEHIDDevice.h>
 #include <BLESecurity.h>
+#if defined(CONFIG_BLUEDROID_ENABLED)
+#include <esp_gap_ble_api.h>
+#endif
 
 #define KEYLESS_BLE_NAME "VESC-Keyless"
 #define SERVICE_UUID_KEYLESS "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -119,6 +122,7 @@ void BleKeylessManager::begin() {
     BLESecurity *pSecurity = new BLESecurity();
     pSecurity->setCapability(ESP_IO_CAP_NONE);
     pSecurity->setAuthenticationMode(true, false, true); // Bond=true, MITM=false, SC=true
+    pSecurity->setForceAuthentication(true);             // Triggers permanent OS bonding request on first connect!
     BLEDevice::setSecurityCallbacks(new VescSecurityCallbacks());
 
     s_bleServer = BLEDevice::createServer();
@@ -169,6 +173,8 @@ void BleKeylessManager::begin() {
     pAdvertising->setAppearance(0x03C4); // HID Gamepad / Remote Control appearance
     pAdvertising->addServiceUUID(s_hidDevice->hidService()->getUUID()); // 0x1812
     pAdvertising->addServiceUUID(BLEUUID((uint16_t)0x180F));            // 0x180F Battery
+    pAdvertising->setMinInterval(32); // 20 ms fast Apple & Android reconnection interval
+    pAdvertising->setMaxInterval(48); // 30 ms
 
     BLEAdvertisementData scanResponseData;
     scanResponseData.setCompleteServices(BLEUUID(SERVICE_UUID_KEYLESS));
@@ -203,29 +209,16 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
     snprintf(addrStr, sizeof(addrStr), "%02X:%02X:%02X:%02X:%02X:%02X",
              bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
 
-    // Whitelist / Exclusive Pairing Lockout:
-    // If a phone is already paired and not in pairing mode, ONLY that paired MAC is allowed.
-    if (Settings.get().ble_paired && strlen(Settings.get().ble_paired_addr) > 0 && !_pairing_active) {
-        if (strcasecmp(addrStr, Settings.get().ble_paired_addr) != 0) {
-            Serial.printf("[BLE KEYLESS] Lockout: Unauthorized client %s rejected! Paired device is %s.\n",
-                          addrStr, Settings.get().ble_paired_addr);
-            _connected = false;
-#if !defined(NATIVE_SIMULATOR)
-            if (s_bleServer) {
-                s_bleServer->disconnect(connId);
-                BLEDevice::startAdvertising();
-            }
-#endif
-            return false;
-        }
-        Serial.printf("[BLE KEYLESS] Paired smartphone reconnected! MAC: %s\n", addrStr);
-    } else {
-        // Not paired yet (or in active pairing mode): Pair with this client
+    // If not paired yet (or in active pairing mode): Pair with this client
+    if (!Settings.get().ble_paired || _pairing_active) {
         strncpy(Settings.get().ble_paired_addr, addrStr, sizeof(Settings.get().ble_paired_addr));
         Settings.get().ble_paired = true;
         _pairing_active = false;
         Settings.save();
         Serial.printf("[BLE KEYLESS] Paired successfully with %s! Saved to NVS.\n", addrStr);
+    } else {
+        // Paired smartphone reconnected! (iOS/Android RPA random private addresses resolve seamlessly via BLE bonding)
+        Serial.printf("[BLE KEYLESS] Paired smartphone reconnected! Address: %s\n", addrStr);
     }
 
     _connected = true;
@@ -311,16 +304,29 @@ void BleKeylessManager::unpair() {
     strncpy(Settings.get().ble_paired_name, "Smartphone", sizeof(Settings.get().ble_paired_name));
     Settings.save();
     _pairing_active = false;
+#if !defined(NATIVE_SIMULATOR)
+#if defined(CONFIG_BLUEDROID_ENABLED)
+    int dev_num = esp_ble_get_bond_device_num();
+    if (dev_num > 0) {
+        esp_ble_bond_dev_t *dev_list = (esp_ble_bond_dev_t *)malloc(sizeof(esp_ble_bond_dev_t) * dev_num);
+        if (dev_list) {
+            esp_ble_get_bond_device_list(&dev_num, dev_list);
+            for (int i = 0; i < dev_num; i++) {
+                esp_ble_remove_bond_device(dev_list[i].bd_addr);
+            }
+            free(dev_list);
+        }
+    }
+#endif
+    if (s_bleServer && _conn_id != 0) {
+        s_bleServer->disconnect(_conn_id);
+        BLEDevice::startAdvertising();
+    }
+#endif
     if (_connected) {
         _connected = false;
         _disconnect_time_ms = millis();
         _rssi = 0;
-#if !defined(NATIVE_SIMULATOR)
-        if (s_bleServer) {
-            s_bleServer->disconnect(_conn_id);
-            BLEDevice::startAdvertising();
-        }
-#endif
         _conn_id = 0;
     }
     if (_last_telemetry) {

@@ -232,6 +232,31 @@ void loop() {
             Renderer.markScreenDirty();
             Renderer.invalidateCache();
             Serial.printf("[SIM] Keyless-Go BLE Phone: %s\n", BleKeylessManager::instance().isConnected() ? "VERBUNDEN" : "GETRENNT");
+        } else if (c == 'r' || c == 'R') {
+            strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
+            Settings.save();
+            telemetry.is_locked = false;
+            telemetry.pin_error = false;
+            telemetry.pin_entry[0] = '\0';
+            ModeManager::instance().setLocked(false);
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            Renderer.triggerNeedleSweep();
+            Serial.println("[SERIAL] PIN wurde auf '1234' zurueckgesetzt & Display entsperrt!");
+        } else if (c == 'i' || c == 'I') {
+            Serial.println("=== SYSTEM STATUS ===");
+            Serial.printf("  PIN-Code: '%s' (Lock: %s)\n", Settings.get().pin_code, telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
+            Serial.printf("  BLE Paired: %s (MAC: %s, Name: %s)\n",
+                          Settings.get().ble_paired ? "JA" : "NEIN",
+                          Settings.get().ble_paired_addr,
+                          Settings.get().ble_paired_name);
+            Serial.printf("  BLE Connected: %s (RSSI: %d dBm)\n",
+                          BleKeylessManager::instance().isConnected() ? "JA" : "NEIN",
+                          telemetry.ble_rssi);
+            Serial.printf("  Auto-Lock: %s | Keyless: %s\n",
+                          Settings.get().ble_autolock_enabled ? "AN" : "AUS",
+                          Settings.get().ble_keyless_enabled ? "AN" : "AUS");
+            Serial.println("=====================");
         } else if (c == 'h' || c == 'H' || c == '?') {
             Serial.println("=== VESC Standalone Simulator Tasten ===");
             Serial.println("  w / + : Gas geben (+15%)");
@@ -239,6 +264,8 @@ void loop() {
             Serial.println("  Space : Boost (10s Peak)");
             Serial.println("  c     : Lade-HUD (Charging) umschalten");
             Serial.println("  p     : PIN Lockscreen sperren / entsperren");
+            Serial.println("  r     : PIN auf 1234 zuruecksetzen & entsperren");
+            Serial.println("  i     : System Info & PIN Status anzeigen");
             Serial.println("  t     : Farb-Theme weiterschalten");
             Serial.println("  u     : Turbinensound umschalten");
             Serial.println("  k     : Keyless-Go Smartphone verbinden / trennen");
@@ -297,6 +324,8 @@ void loop() {
         if (telemetry.pin_error) {
             if (millis() >= telemetry.pin_error_end_ms) {
                 telemetry.pin_error = false;
+                telemetry.pin_entry[0] = '\0'; // Clear buffer AFTER red error display window ends!
+                Renderer.markScreenDirty();
             } else {
                 // Debounce / spam immunity: Discard any taps while error indicator is showing
                 int16_t dummy_x, dummy_y;
@@ -328,12 +357,17 @@ void loop() {
                 };
                 char key = KEY_CHARS[r][c];
                 Serial.printf("[TOUCH PIN] tx=%d, ty=%d -> r=%d, c=%d, key='%c'\n", tx, ty, r, c, key);
+
+                // Tactile / acoustic motor tick feedback on button press
+                Vesc.triggerFocBeep(2600.0f, 0.03f, 1.8f);
+
                 int len = strlen(telemetry.pin_entry);
 
                 if (key == '<') { // DEL
                     if (len > 0) {
                         telemetry.pin_entry[len - 1] = '\0';
                         telemetry.pin_error = false;
+                        Renderer.markScreenDirty();
                     }
                 } else if (key == '#') { // OK / enter
                     if (strcmp(telemetry.pin_entry, Settings.get().pin_code) == 0) {
@@ -346,12 +380,16 @@ void loop() {
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
                         Renderer.triggerNeedleSweep();
+                        Vesc.triggerFocBeep(1800.0f, 0.12f, 3.5f); // Pleasant unlock chime
                         Serial.println("[PIN] System UNLOCKED with valid PIN code! Alarm disarmed.");
                     } else {
                         telemetry.pin_error = true;
                         telemetry.pin_error_end_ms = millis() + 800;
-                        telemetry.pin_entry[0] = '\0';
-                        Serial.println("[PIN] Invalid PIN code entered!");
+                        // Keep pin_entry intact so all 4 dots are shown in bright red!
+                        Renderer.markScreenDirty();
+                        Vesc.triggerFocBeep(450.0f, 0.20f, 4.0f);
+                        Serial.printf("[PIN] Invalid PIN code '%s' entered! (Expected: '%s')\n",
+                                      telemetry.pin_entry, Settings.get().pin_code);
                     }
                 } else if (key >= '0' && key <= '9') {
                     if (len < 4) {
@@ -359,6 +397,7 @@ void loop() {
                         telemetry.pin_entry[len + 1] = '\0';
                         telemetry.pin_error = false;
                         len++;
+                        Renderer.markScreenDirty();
 
                         if (len == 4) {
                             if (strcmp(telemetry.pin_entry, Settings.get().pin_code) == 0) {
@@ -371,12 +410,16 @@ void loop() {
                                 Renderer.markScreenDirty();
                                 Renderer.invalidateCache();
                                 Renderer.triggerNeedleSweep();
+                                Vesc.triggerFocBeep(1800.0f, 0.12f, 3.5f); // Pleasant unlock chime
                                 Serial.println("[PIN] System UNLOCKED automatically upon 4 digits! Alarm disarmed.");
                             } else {
                                 telemetry.pin_error = true;
                                 telemetry.pin_error_end_ms = millis() + 800;
-                                telemetry.pin_entry[0] = '\0';
-                                Serial.println("[PIN] Invalid PIN code entered!");
+                                // Keep pin_entry intact so all 4 dots are shown in bright red!
+                                Renderer.markScreenDirty();
+                                Vesc.triggerFocBeep(450.0f, 0.20f, 4.0f);
+                                Serial.printf("[PIN] Invalid PIN code '%s' entered! (Expected: '%s')\n",
+                                              telemetry.pin_entry, Settings.get().pin_code);
                             }
                         }
                     }

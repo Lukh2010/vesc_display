@@ -4309,8 +4309,16 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
                 if (len < 4) {
                     _wizard_pin_buf[len] = key;
                     _wizard_pin_buf[len + 1] = '\0';
+                    len++;
                     strncpy(telemetry.wizard_pin_buf, _wizard_pin_buf, sizeof(telemetry.wizard_pin_buf));
                     _screen_dirty = true;
+                    if (len == 4) {
+                        strncpy(Settings.get().pin_code, _wizard_pin_buf, sizeof(Settings.get().pin_code));
+                        Settings.get().pin_lock_enabled = true;
+                        Settings.save();
+                        _wizard_step = 2;
+                        telemetry.wizard_step = 2;
+                    }
                 }
             }
             return true;
