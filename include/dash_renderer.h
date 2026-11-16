@@ -129,6 +129,7 @@ private:
         int speed;
         int duty_x10;
         int duty_fill_w;
+        uint16_t duty_col;
         int throttle_pct;
         int throttle_fill_w;
         int battery_pct;
@@ -174,6 +175,7 @@ private:
         bool use_gps_speed;
         bool gps_enabled;
         bool incline_gforce_enabled;
+        int8_t tuning_mode_dot;
 
         void invalidate() {
             clock_str[0] = '\0';
@@ -182,9 +184,11 @@ private:
             use_gps_speed = false;
             gps_enabled = true;
             incline_gforce_enabled = true;
+            tuning_mode_dot = -1;
             speed = -999;
             duty_x10 = -999;
             duty_fill_w = -1;
+            duty_col = 0;
             throttle_pct = -1;
             throttle_fill_w = -1;
             battery_pct = -1;

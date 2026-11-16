@@ -240,8 +240,8 @@ void loop() {
             Buttons.setRacePopupOpen(false);
             Buttons.setRaceDynoOpen(false);
             Renderer.invalidateCache();
+            Renderer.markScreenDirty();
         }
-        Renderer.markScreenDirty();
     }
     if (telemetry.ride_mode != ModeManager::instance().getRideMode()) {
         telemetry.ride_mode = ModeManager::instance().getRideMode();
@@ -627,7 +627,6 @@ void loop() {
                 case NAV_RACE_START_LAUNCH:
                     if (isRaceThermalBlocked(telemetry)) {
                         Serial.println("[RACE] Launch blocked: Motor/ESC temperature > 65 C!");
-                        Renderer.markScreenDirty();
                         break;
                     }
                     telemetry.ride_mode = MODE_RACE;
@@ -642,7 +641,6 @@ void loop() {
                     telemetry.race_split_0_50 = 0.0f;
                     telemetry.race_split_0_70 = 0.0f;
                     Buttons.setRaceState(1);
-                    Renderer.markScreenDirty();
                     Serial.println("[RACE] 5-second launch countdown started!");
                     break;
 
@@ -653,7 +651,6 @@ void loop() {
                     telemetry.boost_active = false;
                     ModeManager::instance().setBoostActive(false);
                     Buttons.setRaceState(0);
-                    Renderer.markScreenDirty();
                     Serial.println("[RACE] Launch timer stopped/aborted (restored mode & boost off)");
                     break;
 
@@ -679,7 +676,6 @@ void loop() {
                     telemetry.stats.reset();
                     Battery.resetTrip();
                     Vesc.resetTripOdometer();
-                    Renderer.markScreenDirty();
                     Serial.println("[NAV] Reset Trip Odometer and Statistics to 0.0");
                     break;
 
@@ -705,7 +701,6 @@ void loop() {
                     Buttons.setTuningMode(true);
                     ModeManager::instance().setTuningMode(true);
                     telemetry.mode_badge_until = now + 2500;
-                    Renderer.markScreenDirty();
                     Serial.println("[NAV] Tuning Mode ACTIVATED via 4s hold on speed number!");
                     break;
 
@@ -727,8 +722,8 @@ void loop() {
                         Buttons.setRacePopupOpen(false);
                         Buttons.setRaceDynoOpen(false);
                         Renderer.invalidateCache();
+                        Renderer.markScreenDirty();
                     }
-                    Renderer.markScreenDirty();
                     Serial.println("[NAV] Tuning Mode DEACTIVATED via single tap on speed number!");
                     break;
 
