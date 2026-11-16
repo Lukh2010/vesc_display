@@ -29,6 +29,11 @@ struct DashSettings {
     bool    setup_completed;        // First-time setup wizard completed (default false)
     uint8_t color_theme;            // DashTheme: 0=Cyber Cyan, 1=Synthwave, 2=Toxic Green, 3=Racing Red, 4=Clean Ice
     bool    turbine_sound_enabled;  // FOC audio turbine whine while driving (default true)
+    bool    ble_keyless_enabled;    // Keyless-Go Auto-Unlock active (default true)
+    bool    ble_autolock_enabled;   // Walk-Away Auto-Lock active (default true)
+    bool    ble_paired;             // Phone paired (default false)
+    char    ble_paired_addr[24];    // Paired BLE MAC/UUID
+    char    ble_paired_name[32];    // Paired phone friendly name
 };
 
 class SettingsManager {

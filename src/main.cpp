@@ -10,6 +10,7 @@
 #include "mode_manager.h"
 #include "fault_manager.h"
 #include "gps_tracker.h"
+#include "ble_keyless_manager.h"
 
 // Active Telemetry State
 static DashTelemetry telemetry;
@@ -94,6 +95,15 @@ void setup() {
     telemetry.setup_completed     = Settings.get().setup_completed;
     telemetry.wizard_step         = 0;
     telemetry.wizard_pin_buf[0]   = '\0';
+    telemetry.ble_keyless_enabled = Settings.get().ble_keyless_enabled;
+    telemetry.ble_autolock_enabled = Settings.get().ble_autolock_enabled;
+    telemetry.ble_paired          = Settings.get().ble_paired;
+    telemetry.ble_connected       = false;
+    telemetry.ble_rssi            = 0;
+    telemetry.ble_signal_bars     = 0;
+    telemetry.ble_pairing_active  = false;
+    telemetry.ble_pair_success    = false;
+    telemetry.ble_device_name[0]  = '\0';
 
     // 5. Initialize Touch and Input Handling (GT911 I2C SDA=8, SCL=9)
     Buttons.begin();
@@ -148,6 +158,9 @@ void setup() {
 
     // 10. Initialize ATGM336H GPS+BDS Satellite Tracker on GPIO 6
     GpsTracker::instance().init();
+
+    // 11. Initialize Bluetooth Low Energy Keyless-Go Manager
+    BleKeylessManager::instance().begin();
 
     Serial.println("[OK] Setup complete. Entering main render loop.");
 }
@@ -209,6 +222,16 @@ void loop() {
             Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
             Settings.save();
             Serial.printf("[SIM] FOC Turbinensound: %s\n", Settings.get().turbine_sound_enabled ? "AN" : "AUS");
+        } else if (c == 'k' || c == 'K') {
+            if (BleKeylessManager::instance().isConnected()) {
+                BleKeylessManager::instance().onClientDisconnect();
+            } else {
+                static const uint8_t mock_bda[6] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+                BleKeylessManager::instance().onClientConnect(mock_bda);
+            }
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            Serial.printf("[SIM] Keyless-Go BLE Phone: %s\n", BleKeylessManager::instance().isConnected() ? "VERBUNDEN" : "GETRENNT");
         } else if (c == 'h' || c == 'H' || c == '?') {
             Serial.println("=== VESC Standalone Simulator Tasten ===");
             Serial.println("  w / + : Gas geben (+15%)");
@@ -218,6 +241,7 @@ void loop() {
             Serial.println("  p     : PIN Lockscreen sperren / entsperren");
             Serial.println("  t     : Farb-Theme weiterschalten");
             Serial.println("  u     : Turbinensound umschalten");
+            Serial.println("  k     : Keyless-Go Smartphone verbinden / trennen");
             Serial.println("========================================");
         }
     }
@@ -256,6 +280,9 @@ void loop() {
         Renderer.invalidateCache();
         Renderer.triggerNeedleSweep();
     }
+
+    // BLE Keyless-Go Proximity Auto-Unlock & Walk-Away Auto-Lock
+    BleKeylessManager::instance().update(telemetry, now);
 
     // 1. Process Touch & Button Navigation Inputs
     Buttons.setActiveScreen(telemetry.screen);
