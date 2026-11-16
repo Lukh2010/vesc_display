@@ -212,7 +212,8 @@ DashboardRenderer::DashboardRenderer()
       _last_race_elapsed_sec(-1.0f),
       _last_race_split_0_22(-999.0f),
       _last_race_split_0_50(-999.0f),
-      _last_race_split_0_70(-999.0f) {
+      _last_race_split_0_70(-999.0f),
+      _last_race_g_force_x10(-999) {
     _wizard_pin_buf[0] = '\0';
     _pin_modal_buf[0] = '\0';
     _last_needle.valid = false;
@@ -662,8 +663,8 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
     int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
     int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 13, pal.track);
 
     // Static label "km/h" under hero speed
     _canvas->setFont(&fonts::Font4);
@@ -768,41 +769,29 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (!_hyper_inited) {
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
-            _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
-            int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
-            int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
         } else {
-            _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
     } else if (target_angle <= 135.0f && _last_arc_angle > 135.0f) {
         // Full clean reset to 0 km/h: erase any residual active arc and restore clean track cap
         _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, _last_arc_angle + 1.0f, pal.track);
-        int old_tip_x = cx + (int)roundf(cosf(_last_arc_angle * deg2rad) * mid_r);
-        int old_tip_y = cy + (int)roundf(sinf(_last_arc_angle * deg2rad) * mid_r);
-        _canvas->fillCircle(old_tip_x, old_tip_y, 14, pal.track);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
         _last_arc_angle = 135.0f;
         _last_arc_col = arcCol;
     } else if (arcCol != _last_arc_col) {
         // Redraw active arc on color change
         if (target_angle < _last_arc_angle) {
-            // Speed decreasing across color boundary: erase obsolete arc & old tip
+            // Speed decreasing across color boundary: erase obsolete arc
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 1.0f, pal.track);
-            int old_tip_x = cx + (int)roundf(cosf(_last_arc_angle * deg2rad) * mid_r);
-            int old_tip_y = cy + (int)roundf(sinf(_last_arc_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(old_tip_x, old_tip_y, 14, pal.track);
         }
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
-            _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
-            int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
-            int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
         } else {
-            _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
@@ -810,25 +799,14 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         if (target_angle > _last_arc_angle) {
             // Speed INCREASING: Extend arc forward seamlessly (zero erase!)
             if (_last_arc_angle <= 135.0f) {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
+                _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
             }
             _canvas->fillArc(cx, cy, r_in, r_out, _last_arc_angle - 0.5f, target_angle, arcCol);
-            int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
-            int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
         } else {
             // Speed DECREASING: Retract arc cleanly
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 0.5f, pal.track);
-            int old_tip_x = cx + (int)roundf(cosf(_last_arc_angle * deg2rad) * mid_r);
-            int old_tip_y = cy + (int)roundf(sinf(_last_arc_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(old_tip_x, old_tip_y, 14, pal.track);
-
-            if (target_angle > 135.0f) {
-                int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
-                int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-                _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
-            } else {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
+            if (target_angle <= 135.0f) {
+                _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
             }
         }
         _last_arc_angle = target_angle;
@@ -3211,8 +3189,8 @@ void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
     int s_cap_y = cy + (int)roundf(sinf(130.0f * deg2rad) * mid_r);
     int e_cap_x = cx + (int)roundf(cosf(410.0f * deg2rad) * mid_r);
     int e_cap_y = cy + (int)roundf(sinf(410.0f * deg2rad) * mid_r);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 14, COLOR_SURFACE_LIGHT);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 14, COLOR_SURFACE_LIGHT);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_SURFACE_LIGHT);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 13, COLOR_SURFACE_LIGHT);
 
     // Static label "km/h" under hero speed
     _canvas->setFont(&fonts::Font4);
@@ -3240,6 +3218,10 @@ void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
     _canvas->drawFastHLine(548, 290, 214, COLOR_SURFACE_LIGHT);
 
     _canvas->drawString(label3, 548, 310);
+
+    // Initial G-Force Badge render
+    _last_race_g_force_x10 = (int)roundf(telemetry.g_force * 10.0f);
+    drawGForceBadge(_canvas, telemetry.g_force, 50, 416, 28);
 }
 
 void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
@@ -3335,33 +3317,20 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     if (target_angle <= 130.0f && _last_race_arc_angle > 130.0f) {
         // Reset to 0: retract active arc and restore clean track
         _canvas->fillArc(cx, cy, r_in, r_out, 130.0f, _last_race_arc_angle + 1.0f, COLOR_SURFACE_LIGHT);
-        int old_tip_x = cx + (int)roundf(cosf(_last_race_arc_angle * deg2rad) * mid_r);
-        int old_tip_y = cy + (int)roundf(sinf(_last_race_arc_angle * deg2rad) * mid_r);
-        _canvas->fillCircle(old_tip_x, old_tip_y, 14, COLOR_SURFACE_LIGHT);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 14, COLOR_SURFACE_LIGHT);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_SURFACE_LIGHT);
         _last_race_arc_angle = 130.0f;
     } else if (fabsf(target_angle - _last_race_arc_angle) >= 0.8f) {
         if (target_angle > _last_race_arc_angle) {
             // Extend forward seamlessly
             if (_last_race_arc_angle <= 130.0f) {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
+                _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
             }
             _canvas->fillArc(cx, cy, r_in, r_out, _last_race_arc_angle - 0.5f, target_angle, arcCol);
-            int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
-            int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
         } else {
             // Retract backward cleanly
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_race_arc_angle + 0.5f, COLOR_SURFACE_LIGHT);
-            int old_tip_x = cx + (int)roundf(cosf(_last_race_arc_angle * deg2rad) * mid_r);
-            int old_tip_y = cy + (int)roundf(sinf(_last_race_arc_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(old_tip_x, old_tip_y, 14, COLOR_SURFACE_LIGHT);
-            if (target_angle > 130.0f) {
-                int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
-                int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-                _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
-            } else {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 14, COLOR_SURFACE_LIGHT);
+            if (target_angle <= 130.0f) {
+                _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_SURFACE_LIGHT);
             }
         }
         _last_race_arc_angle = target_angle;
@@ -3478,8 +3447,12 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
         drawSplit(340, telemetry.race_split_0_70, active_0_70);
     }
 
-    // Bottom-Left G-Force Badge
-    drawGForceBadge(_canvas, telemetry.g_force, 50, 416, 28);
+    // Bottom-Left G-Force Badge (differential render: zero flash/flicker)
+    int cur_g10 = (int)roundf(telemetry.g_force * 10.0f);
+    if (cur_g10 != _last_race_g_force_x10) {
+        _last_race_g_force_x10 = cur_g10;
+        drawGForceBadge(_canvas, telemetry.g_force, 50, 416, 28);
+    }
 }
 
 void DashboardRenderer::drawRaceRecordsModal(const DashTelemetry &telemetry) {
@@ -4204,8 +4177,8 @@ void DashboardRenderer::initChargingScreen() {
 
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 12, pal.track);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 12, pal.track);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 11, pal.track);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 11, pal.track);
 
     // 5. Bottom Info Card Outline
     drawCard(120, 380, 560, 82, 0x0823, pal.border);
@@ -4237,17 +4210,14 @@ void DashboardRenderer::renderChargingScreen(const DashTelemetry &telemetry) {
 
         // Clear active arc track cleanly
         _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 12, pal.track);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 11, pal.track);
         int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
         int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
-        _canvas->fillCircle(e_cap_x, e_cap_y, 12, pal.track);
+        _canvas->fillCircle(e_cap_x, e_cap_y, 11, pal.track);
 
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
-            _canvas->fillCircle(s_cap_x, s_cap_y, 12, arcCol);
-            int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
-            int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(tip_x, tip_y, 12, arcCol);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 11, arcCol);
         }
 
         // 2. Center Battery Percentage & Unit (sized safely within r_in=114px)
