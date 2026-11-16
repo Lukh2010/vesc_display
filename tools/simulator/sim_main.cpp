@@ -626,10 +626,10 @@ void testTouchGestures() {
     simAdvanceMs(120);
     printf("[PASS] Long press on 'km/h' label (y=250) does NOT trigger trip reset.\n");
 
-    // 10l. Battery SoC at 42.0V for 14S pack (3.0V/cell) must be 0% (not 69%)
-    float soc_42v = Battery.getOcvSoc(42.0f);
-    assert(soc_42v <= 1.0f);
-    printf("[PASS] Discharged 14S pack at 42.0V correctly computes 0.0%% SoC (calculated: %.1f%%).\n", soc_42v);
+    // 10l. Battery SoC at 39.0V for 13S 48V pack (3.0V/cell) must be 0%
+    float soc_cutoff = Battery.getOcvSoc(39.0f);
+    assert(soc_cutoff <= 1.0f);
+    printf("[PASS] Discharged 13S 48V pack at 39.0V correctly computes 0.0%% SoC (calculated: %.1f%%).\n", soc_cutoff);
 
     // 10m. Backlight Touch & Drag Isolation on SCREEN_RT_GRAPHS
     Buttons.setActiveScreen(SCREEN_RT_GRAPHS);
@@ -1272,7 +1272,7 @@ void testRegenAndTripReset() {
     printf("[PASS] 2. Battery Coulomb Counter adds energy back during regen.\n");
 
     // 2b. Voltage Sag Resilient Filter & 12.75Ah Capacity Verification
-    assert(Battery.getProfile(0).nominal_wh == 663.0f);
+    assert(Battery.getProfile(0).nominal_wh == 612.0f);
     assert(Battery.getProfile(0).capacity_ah == 12.75f);
 
     // Initial state: 54.0V resting

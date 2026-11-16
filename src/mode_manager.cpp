@@ -68,9 +68,9 @@ void ModeManager::setFactoryDefaults() {
 
     // Global parameters
     _config.throttle_curve       = 0;     // 0 = Linear
-    _config.battery_cells        = 14;    // 14S Pack
-    _config.battery_cutoff_start = 46.2f; // 3.3V / cell
-    _config.battery_cutoff_end   = 42.0f; // 3.0V / cell
+    _config.battery_cells        = 13;    // 13S Pack (48V)
+    _config.battery_cutoff_start = 42.9f; // 3.3V / cell (13S)
+    _config.battery_cutoff_end   = 39.0f; // 3.0V / cell (13S)
 }
 
 void ModeManager::begin() {
@@ -81,11 +81,15 @@ void ModeManager::begin() {
     _limits_dirty = false;
 
     _prefs.begin("vesc_modes", false);
-    if (!_prefs.isKey("cfg_v3")) {
+    if (!_prefs.isKey("cfg_48v_v4")) {
         setFactoryDefaults();
+        _config.battery_cells        = 13;
+        _config.battery_cutoff_start = 42.9f;
+        _config.battery_cutoff_end   = 39.0f;
         saveToNvs();
+        _prefs.putBool("cfg_48v_v4", true);
         _prefs.putBool("cfg_v3", true);
-        Serial.println("[MODE_MGR] Initialized factory default vehicle & mode profiles (v3: 60A / 70A Boost) in NVS.");
+        Serial.println("[MODE_MGR] Initialized/Migrated 48V (13S) vehicle & mode profiles in NVS.");
     } else {
         loadFromNvs();
         Serial.println("[MODE_MGR] Loaded vehicle & mode configurations from NVS.");

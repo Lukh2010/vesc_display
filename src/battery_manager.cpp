@@ -27,20 +27,20 @@ BatteryManager::BatteryManager()
 }
 
 void BatteryManager::loadDefaults() {
-    // Profile 0: Primary 52V 12.75Ah Pack (14S, 663 Wh nominal)
-    strncpy(_profiles[0].name, "12.75Ah 52V", sizeof(_profiles[0].name));
+    // Profile 0: Primary 48V 12.75Ah Pack (13S, 612 Wh nominal)
+    strncpy(_profiles[0].name, "12.75Ah 48V", sizeof(_profiles[0].name));
     _profiles[0].capacity_ah         = 12.75f;
-    _profiles[0].nominal_wh          = 663.0f;
-    _profiles[0].learned_wh          = 663.0f; // 100% Health
+    _profiles[0].nominal_wh          = 612.0f;
+    _profiles[0].learned_wh          = 612.0f; // 100% Health
     _profiles[0].total_wh_discharged = 0.0f;
     _profiles[0].charge_cycles       = 1;
     _profiles[0].health_soh_pct      = 100.0f;
 
-    // Profile 1: Optional Large 52V 25Ah Pack (~1300 Wh nominal)
-    strncpy(_profiles[1].name, "25.0Ah 52V", sizeof(_profiles[1].name));
+    // Profile 1: Optional 48V 25Ah Pack (~1200 Wh nominal)
+    strncpy(_profiles[1].name, "25.0Ah 48V", sizeof(_profiles[1].name));
     _profiles[1].capacity_ah         = 25.0f;
-    _profiles[1].nominal_wh          = 1300.0f;
-    _profiles[1].learned_wh          = 1300.0f; // 100% Health
+    _profiles[1].nominal_wh          = 1200.0f;
+    _profiles[1].learned_wh          = 1200.0f; // 100% Health
     _profiles[1].total_wh_discharged = 0.0f;
     _profiles[1].charge_cycles       = 1;
     _profiles[1].health_soh_pct      = 100.0f;
@@ -49,13 +49,13 @@ void BatteryManager::loadDefaults() {
 void BatteryManager::begin() {
     _prefs.begin("ebike_bat", false);
 
-    // Auto-migration to 12.75Ah default profile
-    if (!_prefs.isKey("bat_1275ah_v2")) {
+    // Auto-migration to 48V 12.75Ah default profile
+    if (!_prefs.isKey("bat_48v_1275ah_v3")) {
         loadDefaults();
         saveProfiles();
-        _prefs.putBool("bat_1275ah_v2", true);
+        _prefs.putBool("bat_48v_1275ah_v3", true);
         _prefs.putBool("bat_init", true);
-        Serial.println("[BATTERY] Initialized/Migrated to 12.75Ah (663 Wh) battery profile.");
+        Serial.println("[BATTERY] Initialized/Migrated to 48V 12.75Ah (612 Wh) battery profile.");
     } else {
         _active_profile_id = _prefs.getUChar("active_p", 0);
         if (_active_profile_id > 1) _active_profile_id = 0;
@@ -63,7 +63,7 @@ void BatteryManager::begin() {
         for (int i = 0; i < 2; i++) {
             char k[16];
             snprintf(k, sizeof(k), "p%d_name", i);
-            const char* defName = (i == 0) ? "12.75Ah 52V" : "25.0Ah 52V";
+            const char* defName = (i == 0) ? "12.75Ah 48V" : "25.0Ah 48V";
             if (_prefs.getString(k, _profiles[i].name, sizeof(_profiles[i].name)) == 0 || _profiles[i].name[0] == '\0') {
                 strncpy(_profiles[i].name, defName, sizeof(_profiles[i].name));
             }
@@ -72,7 +72,7 @@ void BatteryManager::begin() {
             _profiles[i].capacity_ah = _prefs.getFloat(k, (i == 0) ? 12.75f : 25.0f);
 
             snprintf(k, sizeof(k), "p%d_nom", i);
-            _profiles[i].nominal_wh = _prefs.getFloat(k, (i == 0) ? 663.0f : 1300.0f);
+            _profiles[i].nominal_wh = _prefs.getFloat(k, (i == 0) ? 612.0f : 1200.0f);
 
             snprintf(k, sizeof(k), "p%d_lrn", i);
             _profiles[i].learned_wh = _prefs.getFloat(k, _profiles[i].nominal_wh);
