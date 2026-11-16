@@ -138,6 +138,26 @@ void ModeManager::loadFromNvs() {
     _config.battery_cells        = _prefs.getUChar("b_cells", _config.battery_cells);
     _config.battery_cutoff_start = _prefs.getFloat("b_cut_s", _config.battery_cutoff_start);
     _config.battery_cutoff_end   = _prefs.getFloat("b_cut_e", _config.battery_cutoff_end);
+
+    // Strictly guarantee and heal legal street limits (eKFV: max 20 km/h + 10% tol = 22 km/h)
+    // Ensures existing flashed devices with corrupted NVS recover legal limits immediately on boot!
+    if (_config.legal_modes[PROFILE_MODE_ECO].max_speed_kmh > 15.0f || _config.legal_modes[PROFILE_MODE_ECO].max_speed_kmh < 5.0f) {
+        _config.legal_modes[PROFILE_MODE_ECO].max_speed_kmh = 15.0f;
+    }
+    if (_config.legal_modes[PROFILE_MODE_SPORT].max_speed_kmh > 20.0f || _config.legal_modes[PROFILE_MODE_SPORT].max_speed_kmh < 5.0f) {
+        _config.legal_modes[PROFILE_MODE_SPORT].max_speed_kmh = 20.0f;
+    }
+    if (_config.legal_modes[PROFILE_MODE_RACE].max_speed_kmh > 22.0f || _config.legal_modes[PROFILE_MODE_RACE].max_speed_kmh < 5.0f) {
+        _config.legal_modes[PROFILE_MODE_RACE].max_speed_kmh = 22.0f;
+    }
+    for (int i = 0; i < PROFILE_MODE_COUNT; i++) {
+        if (_config.legal_modes[i].max_power_watts > 1000.0f) {
+            _config.legal_modes[i].max_power_watts = 500.0f;
+        }
+        if (_config.legal_modes[i].max_battery_amps > 25.0f) {
+            _config.legal_modes[i].max_battery_amps = 20.0f;
+        }
+    }
 }
 
 void ModeManager::saveToNvs() {

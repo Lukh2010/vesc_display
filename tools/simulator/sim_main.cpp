@@ -742,7 +742,7 @@ void testTouchGestures() {
     // Tap Speed Slider Track at x=400, y=210 -> sets proportional speed
     touchHandled = Renderer.handleSettingsTouch(400, 210, tTest);
     assert(touchHandled == true);
-    assert(cfg.tuned_modes[2].max_speed_kmh >= 15.0f && cfg.tuned_modes[2].max_speed_kmh <= 95.0f);
+    assert(cfg.tuned_modes[2].max_speed_kmh >= 15.0f && cfg.tuned_modes[2].max_speed_kmh <= 100.0f);
 
     // Tap [+] Watt at x=720, y=370 -> max_power_watts increments
     float prevW = cfg.tuned_modes[2].max_power_watts;

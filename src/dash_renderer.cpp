@@ -429,11 +429,9 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
 
         case SCREEN_SETUP_WIZARD:
             if (_screen_dirty) {
-                _canvas->fillScreen(COLOR_BG);
-                initSetupWizard(telemetry);
+                renderSetupWizard(telemetry);
                 _screen_dirty = false;
             }
-            renderSetupWizard(telemetry);
             break;
 
         case SCREEN_CHARGING_HUD:
@@ -483,12 +481,7 @@ static void drawHeroDigitText(LovyanGFX *canvas, const char *str, int x, int y, 
     canvas->setTextSize(1);
     canvas->setTextDatum(datum);
     canvas->setTextColor(color, bg_color);
-    // Draw solid high-DPI automotive weight with 1:1 single-pixel precision (no 2x block doubling)
     canvas->drawString(str, x, y);
-    canvas->drawString(str, x + 1, y);
-    canvas->drawString(str, x + 2, y);
-    canvas->drawString(str, x, y + 1);
-    canvas->drawString(str, x + 1, y + 1);
 }
 
 [[maybe_unused]] static void drawLightSwitchBadge(LovyanGFX *canvas, bool enabled, int cx, int cy, int r) {
@@ -631,6 +624,7 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     _hyper_inited = false;
     _cache.invalidate();
     _last_arc_frac = -1.0f;
+    _last_arc_angle = 135.0f;
     _last_arc_col = 0;
 
     int cx = 240, cy = 215;
@@ -658,8 +652,8 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
     int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
     int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 13, pal.track);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
 
     // Static label "km/h" under hero speed
     _canvas->setFont(&fonts::Font4);
@@ -765,17 +759,28 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     // 1. Speedometer Active Arc: Incremental differential update (Zero flicker / no tripping!)
     if (!_hyper_inited) {
         _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
-        _canvas->fillCircle(e_cap_x, e_cap_y, 13, pal.track);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
+        _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
-            _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(tip_x, tip_y, 13, arcCol);
-            _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
+            _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
+            if (target_angle >= 140.0f) {
+                _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
+            }
         }
         _last_arc_angle = target_angle;
+        _last_arc_col = arcCol;
+    } else if (target_angle <= 135.0f && _last_arc_angle > 135.0f) {
+        // Full clean reset to 0 km/h: erase any residual active arc and restore clean track cap
+        _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, _last_arc_angle + 1.0f, pal.track);
+        int old_tip_x = cx + (int)roundf(cosf(_last_arc_angle * deg2rad) * mid_r);
+        int old_tip_y = cy + (int)roundf(sinf(_last_arc_angle * deg2rad) * mid_r);
+        _canvas->fillCircle(old_tip_x, old_tip_y, 14, pal.track);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
+        _last_arc_angle = 135.0f;
         _last_arc_col = arcCol;
     } else if (arcCol != _last_arc_col) {
         // Redraw active arc on color change
@@ -784,17 +789,19 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 1.0f, pal.track);
             int old_tip_x = cx + (int)roundf(cosf(_last_arc_angle * deg2rad) * mid_r);
             int old_tip_y = cy + (int)roundf(sinf(_last_arc_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(old_tip_x, old_tip_y, 13, pal.track);
+            _canvas->fillCircle(old_tip_x, old_tip_y, 14, pal.track);
         }
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
-            _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(tip_x, tip_y, 13, arcCol);
-            _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
+            _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
+            if (target_angle >= 140.0f) {
+                _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
+            }
         } else {
-            _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
@@ -802,27 +809,31 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         if (target_angle > _last_arc_angle) {
             // Speed INCREASING: Extend arc forward seamlessly (zero erase!)
             if (_last_arc_angle <= 135.0f) {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
+                _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
             }
             _canvas->fillArc(cx, cy, r_in, r_out, _last_arc_angle - 0.5f, target_angle, arcCol);
             int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
             int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(tip_x, tip_y, 13, arcCol);
-            _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
+            _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
+            if (target_angle >= 140.0f) {
+                _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
+            }
         } else {
             // Speed DECREASING: Retract arc cleanly
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 0.5f, pal.track);
             int old_tip_x = cx + (int)roundf(cosf(_last_arc_angle * deg2rad) * mid_r);
             int old_tip_y = cy + (int)roundf(sinf(_last_arc_angle * deg2rad) * mid_r);
-            _canvas->fillCircle(old_tip_x, old_tip_y, 13, pal.track);
+            _canvas->fillCircle(old_tip_x, old_tip_y, 14, pal.track);
 
             if (target_angle > 135.0f) {
                 int tip_x = cx + (int)roundf(cosf(target_angle * deg2rad) * mid_r);
                 int tip_y = cy + (int)roundf(sinf(target_angle * deg2rad) * mid_r);
-                _canvas->fillCircle(tip_x, tip_y, 13, arcCol);
-                _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
+                _canvas->fillCircle(tip_x, tip_y, 14, arcCol);
+                if (target_angle >= 140.0f) {
+                    _canvas->fillCircle(tip_x, tip_y, 5, pal.needle);
+                }
             } else {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
+                _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
             }
         }
         _last_arc_angle = target_angle;
@@ -2077,7 +2088,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
 
     // Ensure bounds
     if (lim.max_speed_kmh < 15.0f) lim.max_speed_kmh = 15.0f;
-    if (lim.max_speed_kmh > 95.0f) lim.max_speed_kmh = 95.0f;
+    if (lim.max_speed_kmh > 100.0f) lim.max_speed_kmh = 100.0f;
     if (lim.max_power_watts < 250.0f) lim.max_power_watts = 250.0f;
     if (lim.max_power_watts > 25000.0f) lim.max_power_watts = 25000.0f;
 
@@ -2115,7 +2126,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     // Slider track
     _canvas->fillRoundRect(125, 196, 550, 26, 8, 0x1084);
     _canvas->drawRoundRect(125, 196, 550, 26, 8, 0x2965);
-    float fracSpd = (lim.max_speed_kmh - 15.0f) / (95.0f - 15.0f);
+    float fracSpd = (lim.max_speed_kmh - 15.0f) / (100.0f - 15.0f);
     if (fracSpd < 0.0f) fracSpd = 0.0f;
     if (fracSpd > 1.0f) fracSpd = 1.0f;
     int fillWSpd = (int)(fracSpd * 546.0f);
@@ -2131,7 +2142,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->drawString("15 km/h", 125, 230);
     _canvas->setTextDatum(textdatum_t::top_right);
-    _canvas->drawString("95 km/h", 675, 230);
+    _canvas->drawString("100 km/h", 675, 230);
 
     // 5. Card 2: Max Watt (y: 295..445)
     drawCard(20, 295, 760, 150, COLOR_SURFACE, COLOR_BORDER);
@@ -2299,13 +2310,6 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
             if (cfg.tuned_modes[i].max_pull_watts < cfg.tuned_modes[i].max_power_watts) {
                 cfg.tuned_modes[i].max_pull_watts = cfg.tuned_modes[i].max_power_watts * 1.25f;
             }
-            if (!ModeManager::instance().isTuningMode()) {
-                cfg.legal_modes[i].max_speed_kmh = cfg.tuned_modes[i].max_speed_kmh;
-                cfg.legal_modes[i].max_power_watts = cfg.tuned_modes[i].max_power_watts;
-                cfg.legal_modes[i].max_pull_watts = cfg.tuned_modes[i].max_pull_watts;
-                cfg.legal_modes[i].max_battery_amps = cfg.tuned_modes[i].max_battery_amps;
-                cfg.legal_modes[i].max_phase_amps = cfg.tuned_modes[i].max_phase_amps;
-            }
         }
 
         ModeManager::instance().saveToNvs();
@@ -2335,7 +2339,7 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
 
     if (action == NAV_EDIT_INC || action == NAV_BTN2_SHORT) {
         lim.max_speed_kmh += 1.0f;
-        if (lim.max_speed_kmh > 95.0f) lim.max_speed_kmh = 95.0f;
+        if (lim.max_speed_kmh > 100.0f) lim.max_speed_kmh = 100.0f;
         _menu_dirty = true;
         return;
     }
@@ -2639,7 +2643,7 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         // [+] Button
         if (tx >= 685 && tx <= 770) {
             lim.max_speed_kmh += 1.0f;
-            if (lim.max_speed_kmh > 95.0f) lim.max_speed_kmh = 95.0f;
+            if (lim.max_speed_kmh > 100.0f) lim.max_speed_kmh = 100.0f;
             _menu_dirty = true;
             return true;
         }
@@ -2648,7 +2652,7 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             float frac = (float)(tx - 125) / 550.0f;
             if (frac < 0.0f) frac = 0.0f;
             if (frac > 1.0f) frac = 1.0f;
-            lim.max_speed_kmh = roundf(15.0f + frac * (95.0f - 15.0f));
+            lim.max_speed_kmh = roundf(15.0f + frac * (100.0f - 15.0f));
             _menu_dirty = true;
             return true;
         }
@@ -2703,7 +2707,7 @@ bool DashboardRenderer::handleSettingsSliderDrag(int16_t cx, int16_t cy, DashTel
         float frac = (float)(cx - 125) / 550.0f;
         if (frac < 0.0f) frac = 0.0f;
         if (frac > 1.0f) frac = 1.0f;
-        float new_spd = roundf(15.0f + frac * (95.0f - 15.0f));
+        float new_spd = roundf(15.0f + frac * (100.0f - 15.0f));
         if (new_spd != lim.max_speed_kmh) {
             lim.max_speed_kmh = new_spd;
             _menu_dirty = true;
@@ -3234,6 +3238,15 @@ void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
 }
 
 void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
+    // If a modal popup is open, draw the modal cleanly and return immediately (prevents background tearing & flicker!)
+    if (telemetry.race_popup_open) {
+        drawRaceRecordsModal(telemetry);
+        return;
+    } else if (telemetry.race_dyno_open) {
+        drawRaceDynoModal(telemetry);
+        return;
+    }
+
     int cx = 310, cy = 255;
     int r_in = 130, r_out = 158;
     float mid_r = 144.0f;
@@ -3390,13 +3403,6 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
 
     // Bottom-Left G-Force Badge
     drawGForceBadge(_canvas, telemetry.g_force, 50, 416, 28);
-
-    // 5. Popups & Modals (if open)
-    if (telemetry.race_popup_open) {
-        drawRaceRecordsModal(telemetry);
-    } else if (telemetry.race_dyno_open) {
-        drawRaceDynoModal(telemetry);
-    }
 }
 
 void DashboardRenderer::drawRaceRecordsModal(const DashTelemetry &telemetry) {
