@@ -759,8 +759,6 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     uint16_t arcCol = pal.primary;
     if (_is_sweeping) {
         arcCol = pal.primary;
-    } else if (telemetry.boost_active) {
-        arcCol = pal.secondary;
     } else if (spd >= 85.0f) {
         arcCol = COLOR_RED;
     } else if (spd >= 60.0f) {
@@ -847,15 +845,15 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->drawString(telemetry.rider_tag, cx, 110);
     }
 
-    // 3. Hero Digital Speed Readout (Only redrawn when integer speed or boost status changes)
+    // 3. Hero Digital Speed Readout (Only redrawn when integer speed changes)
     int cur_spd_int = (int)(spd + 0.5f);
     bool gps_connected = telemetry.gps_enabled && (telemetry.gps.valid && telemetry.gps.satellites >= 4);
-    if (!_hyper_inited || cur_spd_int != _cache.speed || telemetry.boost_active != _cache.boost_active) {
+    if (!_hyper_inited || cur_spd_int != _cache.speed) {
         _cache.speed = cur_spd_int;
         _canvas->fillRect(cx - 70, 155, 140, 75, COLOR_BG);
         char spdBuf[16];
         snprintf(spdBuf, sizeof(spdBuf), "%d", cur_spd_int);
-        uint16_t spdCol = (_is_sweeping) ? COLOR_WHITE : (telemetry.boost_active ? COLOR_CYAN : ((spd >= 85.0f) ? COLOR_RED : COLOR_WHITE));
+        uint16_t spdCol = (_is_sweeping) ? COLOR_WHITE : ((spd >= 85.0f) ? COLOR_RED : COLOR_WHITE);
         drawHeroDigitText(_canvas, spdBuf, cx, 195, textdatum_t::middle_center, spdCol, COLOR_BG);
     }
 
@@ -883,13 +881,13 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (telemetry.speed_kmh < 0.5f && fabsf(_anim_power) < 8.0f) {
         cur_watts = 0;
     }
-    if (!_hyper_inited || cur_watts != _cache.watts || telemetry.boost_active != _cache.boost_active) {
+    if (!_hyper_inited || cur_watts != _cache.watts) {
         _cache.watts = cur_watts;
         if (telemetry.fault_code == 0) {
             _canvas->fillRect(460, 42, 310, 78, COLOR_BG);
             char pStr[16];
             snprintf(pStr, sizeof(pStr), "%d", cur_watts);
-            uint16_t pwrCol = (cur_watts < -10) ? COLOR_GREEN : (telemetry.boost_active ? pal.secondary : COLOR_WHITE);
+            uint16_t pwrCol = (cur_watts < -10) ? COLOR_GREEN : COLOR_WHITE;
             drawHeroDigitText(_canvas, pStr, 720, 50, textdatum_t::top_right, pwrCol, COLOR_BG);
 
             // Redraw "W" unit label so it never gets clipped or erased
@@ -1071,10 +1069,10 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _cache.boost_active = telemetry.boost_active;
         _canvas->setTextDatum(textdatum_t::top_left);
         if (telemetry.boost_active) {
-            _canvas->fillRoundRect(445, 380, 150, 72, 18, COLOR_CYAN);
+            _canvas->fillRoundRect(445, 380, 150, 72, 18, pal.primary);
             _canvas->drawRoundRect(445, 380, 150, 72, 18, COLOR_WHITE);
             _canvas->drawRoundRect(446, 381, 148, 70, 17, COLOR_WHITE);
-            _canvas->setTextColor(COLOR_BG, COLOR_CYAN);
+            _canvas->setTextColor(COLOR_BG, pal.primary);
         } else {
             _canvas->fillRoundRect(445, 380, 150, 72, 18, COLOR_BG);
             _canvas->drawRoundRect(445, 380, 150, 72, 18, COLOR_WHITE);

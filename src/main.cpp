@@ -246,7 +246,6 @@ void loop() {
     if (telemetry.ride_mode != ModeManager::instance().getRideMode()) {
         telemetry.ride_mode = ModeManager::instance().getRideMode();
         telemetry.mode_badge_until = now + 2500;
-        Renderer.markScreenDirty();
     }
 
     // Auto-unlock if PIN lock was disabled in Settings
@@ -696,7 +695,6 @@ void loop() {
                         telemetry.current_amps = 0.0f;
                         telemetry.phase_amps = 0.0f;
                     }
-                    Renderer.markScreenDirty();
                     Serial.printf("[NAV] Toggled Hyper Boost: %s (Battery Limit: %.1f A)\n",
                                   telemetry.boost_active ? "ACTIVE (70A)" : "OFF (60A)",
                                   ModeManager::instance().getActiveLimits().max_battery_amps);
@@ -744,7 +742,6 @@ void loop() {
                         telemetry.current_amps = 0.0f;
                         telemetry.phase_amps = 0.0f;
                     }
-                    Renderer.markScreenDirty();
                     Serial.printf("[NAV] Cycled Ride Mode: %d (%s, Tuning: %s)\n",
                                   (int)telemetry.ride_mode,
                                   ModeManager::instance().getActiveModeName(),
@@ -784,7 +781,6 @@ void loop() {
     if (telemetry.screen != SCREEN_RACE_TIMER && telemetry.boost_active && now > telemetry.boost_end_ms) {
         telemetry.boost_active = false;
         ModeManager::instance().setBoostActive(false);
-        Renderer.markScreenDirty();
         Serial.println("[TIMER] Hyper Boost timed out (10s limit reached, restored 60A battery limit)");
     }
 
