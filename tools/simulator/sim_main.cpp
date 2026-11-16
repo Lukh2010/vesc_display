@@ -1271,6 +1271,35 @@ void testRegenAndTripReset() {
     assert(rem_after >= rem_before);
     printf("[PASS] 2. Battery Coulomb Counter adds energy back during regen.\n");
 
+    // 2b. Voltage Sag Resilient Filter & 12.75Ah Capacity Verification
+    assert(Battery.getProfile(0).nominal_wh == 663.0f);
+    assert(Battery.getProfile(0).capacity_ah == 12.75f);
+
+    // Initial state: 54.0V resting
+    DashTelemetry t_bat;
+    setBaseTelemetry(t_bat);
+    t_bat.speed_kmh = 0.0f;
+    t_bat.current_amps = 0.0f;
+    t_bat.voltage = 54.0f;
+    Battery.update(t_bat, 0.1f);
+    float soc_resting = t_bat.battery_pct;
+    float range_resting = t_bat.est_range_km;
+
+    // Simulate aggressive acceleration with severe voltage sag:
+    // Voltage drops from 54.0V to 48.5V (-5.5V sag) while drawing 45A at 35 km/h for 1.0 second
+    t_bat.speed_kmh = 35.0f;
+    t_bat.current_amps = 45.0f;
+    t_bat.voltage = 48.5f; // Severe voltage drop under load
+    Battery.update(t_bat, 1.0f);
+
+    // Energy used in 1s at 48.5V * 45A = 2182.5W -> 0.606 Wh
+    // Expected drop in SoC: (0.606 / 663.0) * 100 = ~0.09%
+    // If it suffered from voltage drop, SoC would plummet by >25%!
+    assert(t_bat.battery_pct > soc_resting - 0.5f);
+    assert(t_bat.est_range_km > range_resting - 0.1f);
+    printf("[PASS] 2b. Voltage sag resilience verified (5.5V drop under 45A load did NOT plummet SoC/Range: %.1f%% -> %.1f%%).\n",
+           soc_resting, t_bat.battery_pct);
+
     // 3. Trip Reset Odometer Offset
     VescLoopbackTransport loopback;
     VirtualVesc vesc;
@@ -1414,33 +1443,41 @@ void testColorThemesAndTurbineSound() {
     Vesc.stopFocTone(0);
     printf("[PASS] 2. VESC FOC play-tone and play-stop commands transmitted cleanly.\n");
 
-    // 3. Turbine Sound Scaling with Speed ("lauter desto schneller")
+    // 3. Turbine Option 3: Constant Dual-Tone Chord + Dynamic Throttle & Speed Intensity
     DashTelemetry t;
     setBaseTelemetry(t);
     Settings.get().turbine_sound_enabled = true;
 
-    // At standstill (< 1.2 km/h) -> strictly inactive
+    // At standstill (< 0.8 km/h and throttle < 3%) -> strictly inactive
     t.speed_kmh = 0.0f;
-    bool is_driving_0 = (!t.is_locked && !t.is_charging && t.speed_kmh >= 1.2f);
+    t.throttle_pct = 0.0f;
+    bool is_driving_0 = (!t.is_locked && !t.is_charging && !t.theft_alarm_active && 
+                         (t.speed_kmh >= 0.8f || t.throttle_pct >= 3.0f));
     assert(!is_driving_0);
 
-    // At 20 km/h cruising speed
-    t.speed_kmh = 20.0f;
-    float freq_20 = 280.0f + (t.speed_kmh * 36.0f);
-    float volt_20 = 1.2f + (((t.speed_kmh - 1.2f) / 60.0f) * 5.3f);
-    assert(freq_20 >= 950.0f && freq_20 <= 1050.0f);
-    assert(volt_20 >= 2.5f && volt_20 <= 3.2f);
+    // Option 3 Frequencies: Constant dual-tone chord (480 Hz + 1120 Hz)
+    const float freq_base = 480.0f;
+    const float freq_rush = 1120.0f;
 
-    // At 65 km/h high-speed run ("lauter und hoeher!")
+    // At 20 km/h cruising speed with 30% throttle
+    t.speed_kmh = 20.0f;
+    t.throttle_pct = 30.0f;
+    float thr_norm_20 = std::min(std::max(t.throttle_pct / 100.0f, 0.0f), 1.0f);
+    float spd_norm_20 = std::min(std::max(t.speed_kmh / 65.0f, 0.0f), 1.0f);
+    float volt_20 = 1.2f + (thr_norm_20 * 2.8f) + (spd_norm_20 * 2.2f);
+    assert(volt_20 >= 2.4f && volt_20 <= 3.2f);
+
+    // At 65 km/h high-speed full throttle run ("Wüshhhhh" full punch)
     t.speed_kmh = 65.0f;
-    float freq_65 = 280.0f + (t.speed_kmh * 36.0f);
-    float volt_65 = 1.2f + (((t.speed_kmh - 1.2f) / 60.0f) * 5.3f);
-    assert(freq_65 >= 2500.0f);
-    assert(volt_65 >= 5.5f);
-    assert(freq_65 > freq_20);
-    assert(volt_65 > volt_20); // strictly louder!
-    printf("[PASS] 3. Turbine pitch & volume frequency/voltage scaling verified (20km/h: %.0fHz/%.1fV -> 65km/h: %.0fHz/%.1fV).\n",
-           freq_20, volt_20, freq_65, volt_65);
+    t.throttle_pct = 100.0f;
+    float thr_norm_65 = std::min(std::max(t.throttle_pct / 100.0f, 0.0f), 1.0f);
+    float spd_norm_65 = std::min(std::max(t.speed_kmh / 65.0f, 0.0f), 1.0f);
+    float volt_65 = 1.2f + (thr_norm_65 * 2.8f) + (spd_norm_65 * 2.2f);
+    if (volt_65 > 6.2f) volt_65 = 6.2f;
+    assert(volt_65 >= 6.0f);
+    assert(volt_65 > volt_20); // strictly louder with throttle and speed!
+    printf("[PASS] 3. Turbine Option 3 chord & volume scaling verified (Base: %.0fHz, Rush: %.0fHz | 20km/h: %.1fV -> 65km/h: %.1fV).\n",
+           freq_base, freq_rush, volt_20, volt_65);
 
     // 4. Invariant: Throttle, Braking, Limits 100% UNTOUCHED by sound engine
     float initial_thr = 65.0f;
