@@ -845,16 +845,21 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->drawString(telemetry.rider_tag, cx, 110);
     }
 
-    // 3. Hero Digital Speed Readout (Only redrawn when integer speed changes)
+    // 3. Hero Digital Speed Readout (Only redrawn when integer speed changes, zero-flash native padding)
     int cur_spd_int = (int)(spd + 0.5f);
     bool gps_connected = telemetry.gps_enabled && (telemetry.gps.valid && telemetry.gps.satellites >= 4);
     if (!_hyper_inited || cur_spd_int != _cache.speed) {
         _cache.speed = cur_spd_int;
-        _canvas->fillRect(cx - 70, 155, 140, 75, COLOR_BG);
         char spdBuf[16];
         snprintf(spdBuf, sizeof(spdBuf), "%d", cur_spd_int);
         uint16_t spdCol = (_is_sweeping) ? COLOR_WHITE : ((spd >= 85.0f) ? COLOR_RED : COLOR_WHITE);
-        drawHeroDigitText(_canvas, spdBuf, cx, 195, textdatum_t::middle_center, spdCol, COLOR_BG);
+        _canvas->setFont(&fonts::DejaVu72);
+        _canvas->setTextSize(1);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setTextColor(spdCol, COLOR_BG);
+        _canvas->setTextPadding(140);
+        _canvas->drawString(spdBuf, cx, 195);
+        _canvas->setTextPadding(0);
     }
 
     // Satellite icon: isolated update (zero erase/flicker of speed digits or km/h label)
@@ -876,7 +881,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         drawThermalsWithDegrees(_canvas, "", telemetry.temp_esc, telemetry.temp_motor, cx, 405, true);
     }
 
-    // 5. Right Column: Hero Power Readout (Only redrawn when watts change, without erasing "W" unit label)
+    // 5. Right Column: Hero Power Readout (Only redrawn when watts change, zero-flash native padding)
     int cur_watts = (int)roundf(_anim_power);
     if (telemetry.speed_kmh < 0.5f && fabsf(_anim_power) < 15.0f) {
         cur_watts = 0;
@@ -885,12 +890,17 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (watt_changed) {
         _cache.watts = cur_watts;
         if (telemetry.fault_code == 0) {
-            // Clear strictly the digits area (x: 460..725) so "W" label at x: 730 is NEVER erased/flashed
-            _canvas->fillRect(460, 42, 265, 78, COLOR_BG);
             char pStr[16];
             snprintf(pStr, sizeof(pStr), "%d", cur_watts);
             uint16_t pwrCol = (cur_watts < -10) ? COLOR_GREEN : COLOR_WHITE;
-            drawHeroDigitText(_canvas, pStr, 720, 50, textdatum_t::top_right, pwrCol, COLOR_BG);
+
+            _canvas->setFont(&fonts::DejaVu72);
+            _canvas->setTextSize(1);
+            _canvas->setTextDatum(textdatum_t::top_right);
+            _canvas->setTextColor(pwrCol, COLOR_BG);
+            _canvas->setTextPadding(265);
+            _canvas->drawString(pStr, 720, 50);
+            _canvas->setTextPadding(0);
 
             // Redraw "W" once on init or after fault
             if (!_hyper_inited) {
@@ -914,23 +924,39 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     float dFrac = (duty_anim > 100.0f) ? 1.0f : (duty_anim / 100.0f);
     int cur_d_fill = (int)(dFrac * 320.0f);
 
-    if (!_hyper_inited || cur_duty != _cache.duty_x10 || cur_d_fill != _cache.duty_fill_w) {
+    // 6a. Duty Percentage Digits: Only redrawn when integer % changes (zero erase / zero flash!)
+    if (!_hyper_inited || cur_duty != _cache.duty_x10) {
         _cache.duty_x10 = cur_duty;
-        _cache.duty_fill_w = cur_d_fill;
-        _canvas->fillRect(680, 122, 90, 26, COLOR_BG);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextSize(1);
         _canvas->setTextColor(dutyCol, COLOR_BG);
         _canvas->setTextDatum(textdatum_t::top_right);
+        _canvas->setTextPadding(90);
         char dBuf[16];
         snprintf(dBuf, sizeof(dBuf), "%d%%", cur_duty);
         _canvas->drawString(dBuf, 765, 124);
+        _canvas->setTextPadding(0);
+    }
 
-        _canvas->fillRoundRect(445, 150, 320, 10, 5, pal.track);
-        if (cur_d_fill > 0) {
+    // 6b. Duty Progress Bar: Decoupled from text, differential update
+    if (!_hyper_inited || cur_d_fill != _cache.duty_fill_w) {
+        int old_fill = _hyper_inited ? _cache.duty_fill_w : 0;
+        _cache.duty_fill_w = cur_d_fill;
+        if (!_hyper_inited) {
+            _canvas->fillRoundRect(445, 150, 320, 10, 5, pal.track);
+        }
+        if (cur_d_fill > old_fill) {
             _canvas->fillRoundRect(445, 150, cur_d_fill, 10, 5, dutyCol);
             if (cur_d_fill >= 6) {
                 _canvas->fillRoundRect(445 + cur_d_fill - 4, 150, 4, 10, 2, COLOR_WHITE);
+            }
+        } else if (cur_d_fill < old_fill) {
+            _canvas->fillRoundRect(445, 150, 320, 10, 5, pal.track);
+            if (cur_d_fill > 0) {
+                _canvas->fillRoundRect(445, 150, cur_d_fill, 10, 5, dutyCol);
+                if (cur_d_fill >= 6) {
+                    _canvas->fillRoundRect(445 + cur_d_fill - 4, 150, 4, 10, 2, COLOR_WHITE);
+                }
             }
         }
     }
@@ -1015,26 +1041,28 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
         if (!_hyper_inited || cur_pha != _cache.phase_x10) {
             _cache.phase_x10 = cur_pha;
-            _canvas->fillRect(440, 246, 160, 32, COLOR_BG);
             _canvas->setFont(&fonts::FreeSansBold9pt7b);
             _canvas->setTextSize(1);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
             _canvas->setTextDatum(textdatum_t::top_left);
+            _canvas->setTextPadding(160);
             char motBuf[32];
             snprintf(motBuf, sizeof(motBuf), "MOTOR %d A", cur_pha);
             _canvas->drawString(motBuf, 445, 252);
+            _canvas->setTextPadding(0);
         }
 
         if (!_hyper_inited || cur_a != _cache.current_x10) {
             _cache.current_x10 = cur_a;
-            _canvas->fillRect(600, 246, 170, 32, COLOR_BG);
             _canvas->setFont(&fonts::FreeSansBold9pt7b);
             _canvas->setTextSize(1);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
             _canvas->setTextDatum(textdatum_t::top_right);
+            _canvas->setTextPadding(170);
             char bBuf[32];
             snprintf(bBuf, sizeof(bBuf), "BATTERY %d A", cur_a);
             _canvas->drawString(bBuf, 765, 252);
+            _canvas->setTextPadding(0);
         }
     }
 
@@ -3350,14 +3378,19 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
         _last_race_arc_angle = target_angle;
     }
 
-    // Digital Speed in Center: Only redrawn when integer speed changes
+    // Digital Speed in Center: Only redrawn when integer speed changes (zero-flash native padding)
     int cur_spd_int = (int)(spd + 0.5f);
     if (cur_spd_int != _last_race_speed) {
         _last_race_speed = cur_spd_int;
-        _canvas->fillRect(cx - 95, cy - 80, 190, 75, COLOR_BG);
         char spdBuf[16];
         snprintf(spdBuf, sizeof(spdBuf), "%d", cur_spd_int);
-        drawHeroDigitText(_canvas, spdBuf, cx, cy - 40, textdatum_t::middle_center, COLOR_WHITE, COLOR_BG);
+        _canvas->setFont(&fonts::DejaVu72);
+        _canvas->setTextSize(1);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+        _canvas->setTextPadding(190);
+        _canvas->drawString(spdBuf, cx, cy - 40);
+        _canvas->setTextPadding(0);
     }
 
     // 3. Center State Action / Countdown / Status: Only redrawn on state / second change
