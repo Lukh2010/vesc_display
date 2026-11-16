@@ -25,7 +25,7 @@ public:
     const char* getPairedName() const { return Settings.get().ble_paired_name; }
 
     // BLE Stack callbacks
-    void onClientConnect(const uint8_t *bda);
+    bool onClientConnect(const uint8_t *bda, uint16_t connId = 0);
     void onClientDisconnect();
     void updateRssi(int8_t rssi);
 
@@ -40,5 +40,6 @@ private:
     uint32_t _connect_time_ms;
     uint32_t _disconnect_time_ms;
     uint32_t _last_rssi_poll_ms;
+    uint16_t _conn_id;
     uint8_t  _peer_bda[6];
 };

@@ -52,7 +52,7 @@ public:
     void resetSetupWizard();
     bool isInEditMode() const { return false; }
     uint8_t getSettingsTab() const { return _settings_tab_idx; }
-    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 6) ? tab : 0; _menu_dirty = true; }
+    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 6) ? tab : 0; _last_rendered_tab = 255; _menu_dirty = true; }
 
     // Race / Dragy Timer Logic
     void updateRaceTimer(DashTelemetry &telemetry, uint32_t now);
