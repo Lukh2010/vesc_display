@@ -321,8 +321,19 @@ struct DashTelemetry {
     bool     incline_gforce_enabled; // true = show bottom-left G-force & pitch dials
     bool     wifi_bridge_enabled;    // true = WiFi bridge softAP mode enabled
     bool     setup_completed;        // true = First-time wizard finished
-    uint8_t  wizard_step;            // 0=Welcome & Tuning guide, 1=PIN setup, 2=Hardware toggles
+    uint8_t  wizard_step;            // 0=Welcome & Tuning guide, 1=PIN setup, 2=Keyless-Go setup, 3=Hardware toggles
     char     wizard_pin_buf[8];      // Keypad input buffer in wizard
+
+    // Keyless-Go BLE Proximity & Walk-Away Auto-Lock State
+    bool     ble_keyless_enabled;    // Feature active in settings
+    bool     ble_autolock_enabled;   // Walk-away auto-lock active
+    bool     ble_paired;             // Phone is paired
+    bool     ble_connected;          // Phone is currently connected via BLE
+    int8_t   ble_rssi;               // Proximity signal strength (-40 to -95 dBm, 0 if not connected)
+    uint8_t  ble_signal_bars;        // 0 to 4 signal bars
+    bool     ble_pairing_active;     // Waiting for smartphone connection
+    bool     ble_pair_success;       // Just paired successfully
+    char     ble_device_name[32];    // Device name or MAC string
 
     // System Status
     DashboardScreen screen;    // Currently active screen

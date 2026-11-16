@@ -18,6 +18,7 @@
 #include "mode_manager.h"
 #include "fault_manager.h"
 #include "gps_tracker.h"
+#include "ble_keyless_manager.h"
 #include "virtual_vesc/virtual_vesc.h"
 #include "virtual_vesc/vesc_tcp_server.h"
 
@@ -66,6 +67,15 @@ void setBaseTelemetry(DashTelemetry &t) {
     t.wifi_bridge_enabled = Settings.get().wifi_bridge_enabled;
     t.setup_completed = true; // default true for base simulator telemetry
     t.wizard_step = 0;
+    t.ble_keyless_enabled = Settings.get().ble_keyless_enabled;
+    t.ble_autolock_enabled = Settings.get().ble_autolock_enabled;
+    t.ble_paired = Settings.get().ble_paired;
+    t.ble_connected = false;
+    t.ble_rssi = 0;
+    t.ble_signal_bars = 0;
+    t.ble_pairing_active = false;
+    t.ble_pair_success = false;
+    t.ble_device_name[0] = '\0';
 }
 
 void renderAndSave(const char *name, DashTelemetry &t) {
@@ -1489,6 +1499,91 @@ void testColorThemesAndTurbineSound() {
     printf("=== All Color Themes & FOC Turbine Sound Unit Tests PASSED! ===\n\n");
 }
 
+void testKeylessGoAndProximityAutoLock() {
+    printf("=== Running Keyless-Go BLE & Proximity Auto-Lock Unit Tests ===\n");
+
+    DashTelemetry t;
+    setBaseTelemetry(t);
+
+    // 1. Initial State: Unpaired, Disconnected
+    BleKeylessManager::instance().begin();
+    BleKeylessManager::instance().unpair();
+    assert(BleKeylessManager::instance().isPaired() == false);
+    assert(BleKeylessManager::instance().isConnected() == false);
+    printf("[PASS] 1. Initial unbonded BLE state verified.\n");
+
+    // 2. 1-Tap Pairing Simulation
+    BleKeylessManager::instance().startPairing();
+    assert(BleKeylessManager::instance().isPairingActive() == true);
+    static const uint8_t mock_phone_bda[6] = { 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC };
+    BleKeylessManager::instance().onClientConnect(mock_phone_bda);
+    assert(BleKeylessManager::instance().isConnected() == true);
+    assert(BleKeylessManager::instance().isPaired() == true);
+    assert(strcmp(Settings.get().ble_paired_addr, "12:34:56:78:9A:BC") == 0);
+    printf("[PASS] 2. 1-Tap Auto-Pairing with MAC '12:34:56:78:9A:BC' verified.\n");
+
+    // 3. Proximity Auto-Unlock Test
+    t.is_locked = true;
+    ModeManager::instance().setLocked(true);
+    Settings.get().ble_keyless_enabled = true;
+    uint32_t cur_ms = millis();
+    BleKeylessManager::instance().update(t, cur_ms + 500);
+    assert(t.is_locked == false);
+    assert(ModeManager::instance().isLocked() == false);
+    printf("[PASS] 3. Proximity Auto-Unlock verified (VESC unlocked upon connection).\n");
+
+    // 4. Walk-Away Auto-Lock Test (Parked: speed < 0.5 km/h)
+    Settings.get().ble_autolock_enabled = true;
+    t.speed_kmh = 0.0f;
+    uint32_t disc_ms = millis();
+    BleKeylessManager::instance().onClientDisconnect();
+    assert(BleKeylessManager::instance().isConnected() == false);
+
+    // Disconnected for 5s (threshold is 10s) -> should NOT lock yet
+    BleKeylessManager::instance().update(t, disc_ms + 5000);
+    assert(t.is_locked == false);
+
+    // Disconnected for 12s (> 10s threshold) -> triggers Walk-Away Auto-Lock!
+    BleKeylessManager::instance().update(t, disc_ms + 12000);
+    assert(t.is_locked == true);
+    assert(ModeManager::instance().isLocked() == true);
+    printf("[PASS] 4. Walk-Away Auto-Lock (>10s disconnected while parked) verified.\n");
+
+    // 5. Critical Safety Invariant: Auto-Lock NEVER locks while moving!
+    t.is_locked = false;
+    ModeManager::instance().setLocked(false);
+    t.speed_kmh = 28.0f; // Driving!
+    BleKeylessManager::instance().update(t, disc_ms + 25000); // 25s disconnected while driving
+    assert(t.is_locked == false);
+    assert(ModeManager::instance().isLocked() == false);
+    printf("[PASS] 5. Safety Invariant: Auto-Lock strictly prevented while moving (speed >= 0.5 km/h).\n");
+
+    // 6. Settings Menu Tab 5 Touch Controls
+    t.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(5);
+
+    // Toggle Auto-Unlock
+    bool prev_k = Settings.get().ble_keyless_enabled;
+    Renderer.handleSettingsTouch(350, 335, t);
+    assert(Settings.get().ble_keyless_enabled == !prev_k);
+    Settings.get().ble_keyless_enabled = prev_k;
+    Settings.save();
+
+    // Toggle Auto-Lock
+    bool prev_al = Settings.get().ble_autolock_enabled;
+    Renderer.handleSettingsTouch(600, 335, t);
+    assert(Settings.get().ble_autolock_enabled == !prev_al);
+    Settings.get().ble_autolock_enabled = prev_al;
+    Settings.save();
+
+    // Unpair device
+    Renderer.handleSettingsTouch(100, 335, t);
+    assert(Settings.get().ble_paired == false);
+    printf("[PASS] 6. Settings Tab 5 Keyless toggles and Unpair touch handling verified.\n");
+
+    printf("=== All Keyless-Go BLE & Proximity Auto-Lock Unit Tests PASSED! ===\n\n");
+}
+
 void testSpeedSweepAnimation() {
     printf("\n=== Running Startup Speedometer Sweep Animation Unit Tests ===\n");
     DashTelemetry t;
@@ -2219,6 +2314,7 @@ int main(int argc, char **argv) {
     testRegenAndTripReset();
     testChargingAndTheftProtection();
     testColorThemesAndTurbineSound();
+    testKeylessGoAndProximityAutoLock();
 
     DashTelemetry t;
     setBaseTelemetry(t);
@@ -2519,7 +2615,19 @@ int main(int argc, char **argv) {
     printf("[PASS] Wizard Step 2 PIN entry & storage ('5678') verified.\n");
 
     // ----------------------------------------------------
-    // Scenario 24: First-Time Setup Wizard (Step 3 - Feature Toggles)
+    // Scenario 23b: First-Time Setup Wizard (Step 3 - Keyless-Go BLE Setup)
+    // ----------------------------------------------------
+    t.ble_pairing_active = true;
+    Renderer.markScreenDirty();
+    renderAndSave("23b_setup_wizard_step3_keyless", t);
+
+    // Continue to Step 4 (Hardware Features)
+    Renderer.handleWizardTouch(400, 396, t); // Continue
+    assert(t.wizard_step == 3);
+    printf("[PASS] Wizard Step 3 Keyless-Go setup & transition to Step 4 verified.\n");
+
+    // ----------------------------------------------------
+    // Scenario 24: First-Time Setup Wizard (Step 4 - Feature Toggles)
     // ----------------------------------------------------
     Renderer.markScreenDirty();
     renderAndSave("24_setup_wizard_step3_features", t);
@@ -2528,7 +2636,7 @@ int main(int argc, char **argv) {
     Renderer.handleWizardTouch(400, 406, t); // [ SETUP ABSCHLIESSEN & STARTEN ]
     assert(t.setup_completed == true);
     assert(t.screen == SCREEN_RIDE_DASH);
-    printf("[PASS] Wizard Step 3 completion & switch to SCREEN_RIDE_DASH verified.\n");
+    printf("[PASS] Wizard Step 4 completion & switch to SCREEN_RIDE_DASH verified.\n");
 
     // ----------------------------------------------------
     // Scenario 25: Minimal Dashboard with GPS & G-Force Disabled
@@ -2646,6 +2754,43 @@ int main(int argc, char **argv) {
     Renderer.markScreenDirty();
     renderAndSave("32_settings_dash_themes_and_sound", t);
     printf("[PASS] Scenario 32: Settings Dash Themes & FOC Turbine Sound rendered and saved.\n");
+
+    // ----------------------------------------------------
+    // Scenario 33: PIN Lockscreen with Phone Proximity Badge
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    t.is_locked = true;
+    t.theft_alarm_active = false;
+    t.pin_error = false;
+    t.pin_entry[0] = '\0';
+    t.ble_keyless_enabled = true;
+    t.ble_paired = true;
+    t.ble_connected = true;
+    t.ble_signal_bars = 4;
+    t.ble_rssi = -54;
+    strncpy(t.ble_device_name, "Smartphone", sizeof(t.ble_device_name));
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("33_pin_lockscreen_ble_proximity", t);
+    printf("[PASS] Scenario 33: PIN Lockscreen with Phone Proximity rendered and saved.\n");
+
+    // ----------------------------------------------------
+    // Scenario 34: Settings Menu Tab 5 - PIN & Keyless-Go
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    t.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(5);
+    t.ble_keyless_enabled = true;
+    t.ble_autolock_enabled = true;
+    t.ble_paired = true;
+    t.ble_connected = true;
+    t.ble_signal_bars = 4;
+    t.ble_rssi = -54;
+    strncpy(t.ble_device_name, "iPhone 15 Pro", sizeof(t.ble_device_name));
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("34_settings_pin_and_keyless", t);
+    printf("[PASS] Scenario 34: Settings PIN & Keyless-Go rendered and saved.\n");
 
     // Reset default theme
     Settings.get().color_theme = THEME_CYBER_CYAN;

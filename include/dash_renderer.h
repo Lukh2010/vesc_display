@@ -34,6 +34,9 @@ public:
         _last_race_split_0_70 = -999.0f;
         _last_race_g_force_x10 = -999;
         _mode_banner_drawn_mode = -1;
+        _pin_screen_drawn = false;
+        _last_ble_conn = false;
+        _last_ble_bars = 255;
     }
 
     // Color Theme & Palettes
@@ -312,6 +315,8 @@ private:
     int      _last_pin_len;
     bool     _last_pin_err;
     bool     _last_theft_alarm;
+    bool     _last_ble_conn;
+    uint8_t  _last_ble_bars;
 
     // Charging HUD Screen State
     bool     _charging_inited;
