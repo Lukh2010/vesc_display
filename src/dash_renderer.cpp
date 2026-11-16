@@ -665,8 +665,8 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
     int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
     int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 13, pal.track);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
 
     // Static label "km/h" under hero speed
     _canvas->setFont(&fonts::Font4);
@@ -772,16 +772,16 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (!_hyper_inited) {
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
-            _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
         } else {
-            _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
     } else if (target_angle <= 135.0f && _last_arc_angle > 135.0f) {
         // Full clean reset to 0 km/h: erase any residual active arc and restore clean track cap
         _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, _last_arc_angle + 1.0f, pal.track);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         _last_arc_angle = 135.0f;
         _last_arc_col = arcCol;
     } else if (arcCol != _last_arc_col) {
@@ -792,9 +792,9 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         }
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
-            _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
         } else {
-            _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
+            _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
@@ -802,14 +802,14 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         if (target_angle > _last_arc_angle) {
             // Speed INCREASING: Extend arc forward seamlessly (zero erase!)
             if (_last_arc_angle <= 135.0f) {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
+                _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
             }
             _canvas->fillArc(cx, cy, r_in, r_out, _last_arc_angle - 0.5f, target_angle, arcCol);
         } else {
             // Speed DECREASING: Retract arc cleanly
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 0.5f, pal.track);
             if (target_angle <= 135.0f) {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 13, pal.track);
+                _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
             }
         }
         _last_arc_angle = target_angle;
@@ -876,26 +876,30 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         drawThermalsWithDegrees(_canvas, "", telemetry.temp_esc, telemetry.temp_motor, cx, 405, true);
     }
 
-    // 5. Right Column: Hero Power Readout (Only redrawn when watts change)
+    // 5. Right Column: Hero Power Readout (Only redrawn when watts change, without erasing "W" unit label)
     int cur_watts = (int)roundf(_anim_power);
-    if (telemetry.speed_kmh < 0.5f && fabsf(_anim_power) < 8.0f) {
+    if (telemetry.speed_kmh < 0.5f && fabsf(_anim_power) < 15.0f) {
         cur_watts = 0;
     }
-    if (!_hyper_inited || cur_watts != _cache.watts) {
+    bool watt_changed = !_hyper_inited || (cur_watts != _cache.watts && (abs(cur_watts - _cache.watts) >= 2 || cur_watts == 0));
+    if (watt_changed) {
         _cache.watts = cur_watts;
         if (telemetry.fault_code == 0) {
-            _canvas->fillRect(460, 42, 310, 78, COLOR_BG);
+            // Clear strictly the digits area (x: 460..725) so "W" label at x: 730 is NEVER erased/flashed
+            _canvas->fillRect(460, 42, 265, 78, COLOR_BG);
             char pStr[16];
             snprintf(pStr, sizeof(pStr), "%d", cur_watts);
             uint16_t pwrCol = (cur_watts < -10) ? COLOR_GREEN : COLOR_WHITE;
             drawHeroDigitText(_canvas, pStr, 720, 50, textdatum_t::top_right, pwrCol, COLOR_BG);
 
-            // Redraw "W" unit label so it never gets clipped or erased
-            _canvas->setFont(&fonts::Font4);
-            _canvas->setTextSize(1);
-            _canvas->setTextDatum(textdatum_t::top_left);
-            _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-            _canvas->drawString("W", 730, 86);
+            // Redraw "W" once on init or after fault
+            if (!_hyper_inited) {
+                _canvas->setFont(&fonts::Font4);
+                _canvas->setTextSize(1);
+                _canvas->setTextDatum(textdatum_t::top_left);
+                _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
+                _canvas->drawString("W", 730, 86);
+            }
         }
     }
 
@@ -1011,7 +1015,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
         if (!_hyper_inited || cur_pha != _cache.phase_x10) {
             _cache.phase_x10 = cur_pha;
-            _canvas->fillRect(440, 246, 160, 32, COLOR_BG);
+            _canvas->fillRect(440, 246, 165, 32, COLOR_BG);
             _canvas->setFont(&fonts::Font4);
             _canvas->setTextSize(1);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
@@ -1023,13 +1027,13 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
         if (!_hyper_inited || cur_a != _cache.current_x10) {
             _cache.current_x10 = cur_a;
-            _canvas->fillRect(610, 246, 160, 32, COLOR_BG);
+            _canvas->fillRect(605, 246, 165, 32, COLOR_BG);
             _canvas->setFont(&fonts::Font4);
             _canvas->setTextSize(1);
             _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
             _canvas->setTextDatum(textdatum_t::top_right);
             char bBuf[32];
-            snprintf(bBuf, sizeof(bBuf), "BATTERY %d A", cur_a);
+            snprintf(bBuf, sizeof(bBuf), "BAT %d A", cur_a);
             _canvas->drawString(bBuf, 765, 250);
         }
     }
@@ -3199,8 +3203,8 @@ void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
     int s_cap_y = cy + (int)roundf(sinf(130.0f * deg2rad) * mid_r);
     int e_cap_x = cx + (int)roundf(cosf(410.0f * deg2rad) * mid_r);
     int e_cap_y = cy + (int)roundf(sinf(410.0f * deg2rad) * mid_r);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_SURFACE_LIGHT);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 13, COLOR_SURFACE_LIGHT);
+    _canvas->fillCircle(s_cap_x, s_cap_y, 15, COLOR_SURFACE_LIGHT);
+    _canvas->fillCircle(e_cap_x, e_cap_y, 15, COLOR_SURFACE_LIGHT);
 
     // Static label "km/h" under hero speed
     _canvas->setFont(&fonts::Font4);
@@ -3327,20 +3331,20 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     if (target_angle <= 130.0f && _last_race_arc_angle > 130.0f) {
         // Reset to 0: retract active arc and restore clean track
         _canvas->fillArc(cx, cy, r_in, r_out, 130.0f, _last_race_arc_angle + 1.0f, COLOR_SURFACE_LIGHT);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_SURFACE_LIGHT);
+        _canvas->fillCircle(s_cap_x, s_cap_y, 15, COLOR_SURFACE_LIGHT);
         _last_race_arc_angle = 130.0f;
     } else if (fabsf(target_angle - _last_race_arc_angle) >= 0.8f) {
         if (target_angle > _last_race_arc_angle) {
             // Extend forward seamlessly
             if (_last_race_arc_angle <= 130.0f) {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 13, arcCol);
+                _canvas->fillCircle(s_cap_x, s_cap_y, 15, arcCol);
             }
             _canvas->fillArc(cx, cy, r_in, r_out, _last_race_arc_angle - 0.5f, target_angle, arcCol);
         } else {
             // Retract backward cleanly
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_race_arc_angle + 0.5f, COLOR_SURFACE_LIGHT);
             if (target_angle <= 130.0f) {
-                _canvas->fillCircle(s_cap_x, s_cap_y, 13, COLOR_SURFACE_LIGHT);
+                _canvas->fillCircle(s_cap_x, s_cap_y, 15, COLOR_SURFACE_LIGHT);
             }
         }
         _last_race_arc_angle = target_angle;
