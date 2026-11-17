@@ -4,6 +4,7 @@
 #include "fault_manager.h"
 #include "mode_manager.h"
 #include "ota_manager.h"
+#include "boot_logo.h"
 #include <math.h>
 #include <lgfx/Fonts/GFXFF/FreeSansBold24pt7b.h>
 #include <lgfx/Fonts/GFXFF/FreeSansBold18pt7b.h>
@@ -13,6 +14,7 @@ DashboardRenderer Renderer;
 
 // Modern High-Contrast Color Palette (Exact Match to Video 800x480)
 static const uint16_t COLOR_BG            = 0x0000; // Pure Obsidian Black (as in video)
+static const uint16_t COLOR_BLACK         = 0x0000; // Pure Black
 static const uint16_t COLOR_SURFACE       = 0x18E4; // Dark Card Surface Slate Charcoal
 static const uint16_t COLOR_SURFACE_LIGHT = 0x2124; // Track background
 static const uint16_t COLOR_BORDER        = 0x2965; // Crisp Border
@@ -220,7 +222,11 @@ DashboardRenderer::DashboardRenderer()
       _last_race_split_0_22(-999.0f),
       _last_race_split_0_50(-999.0f),
       _last_race_split_0_70(-999.0f),
-      _last_race_g_force_x10(-999) {
+      _last_race_g_force_x10(-999),
+      _boot_anim_active(false),
+      _boot_anim_phase(0),
+      _boot_anim_start_ms(0),
+      _boot_log_lines_drawn(0) {
     _wizard_pin_buf[0] = '\0';
     _pin_modal_buf[0] = '\0';
     _last_needle.valid = false;
@@ -234,6 +240,85 @@ void DashboardRenderer::begin(DisplayDriver *display) {
     _cache.invalidate();
     _screen_dirty = true;
     _active_style = (DashboardStyle)Settings.get().dash_style;
+}
+
+void DashboardRenderer::triggerBootAnimation() {
+    _boot_anim_active = true;
+    _boot_anim_phase = 0;
+    _boot_anim_start_ms = millis();
+    _boot_log_lines_drawn = 0;
+    _screen_dirty = true;
+}
+
+void DashboardRenderer::skipBootAnimation() {
+    if (_boot_anim_active) {
+        _boot_anim_active = false;
+        _boot_anim_phase = 3;
+        _pin_screen_drawn = false;
+        _screen_dirty = true;
+        _cache.invalidate();
+    }
+}
+
+void DashboardRenderer::setBootAnimElapsed(uint32_t elapsed_ms) {
+    _boot_anim_active = true;
+    _boot_anim_start_ms = millis() - elapsed_ms;
+}
+
+void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms) {
+    if (elapsed_ms < 1500) {
+        // Phase 1 (0.0s..1.5s): Display the logo centered on pure black background
+        if (_boot_anim_phase != 1) {
+            _boot_anim_phase = 1;
+            _boot_log_lines_drawn = 0;
+            _canvas->fillScreen(COLOR_BLACK);
+            int lx = (800 - BOOT_LOGO_WIDTH) / 2;
+            int ly = (480 - BOOT_LOGO_HEIGHT) / 2;
+            _canvas->pushImage(lx, ly, BOOT_LOGO_WIDTH, BOOT_LOGO_HEIGHT, boot_logo_rgb565);
+        }
+    } else {
+        // Phase 2 (1.5s..2.5s): Clear screen to pure black, render Option 1 console log from top-left (x=24, y=32)
+        uint32_t p2_ms = elapsed_ms - 1500;
+        if (_boot_anim_phase != 2) {
+            _boot_anim_phase = 2;
+            _boot_log_lines_drawn = 0;
+            _canvas->fillScreen(COLOR_BLACK);
+        }
+
+        static const struct {
+            uint32_t delay_ms;
+            const char *text;
+        } kBootLogs[6] = {
+            {  50, "[ 0.05s ] psram 8MB ok" },
+            { 180, "[ 0.18s ] touch gt911 ready" },
+            { 350, "[ 0.35s ] can bus 500k started" },
+            { 520, "[ 0.52s ] vesc link ok" },
+            { 700, "[ 0.70s ] throttle / brake idle" },
+            { 880, "[ 0.88s ] motor locked (0A)" }
+        };
+
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(COLOR_WHITE, COLOR_BLACK);
+        _canvas->setTextDatum(textdatum_t::top_left);
+
+        const int start_x = 24;
+        const int start_y = 32;
+        const int line_spacing = 26;
+
+        for (int i = 0; i < 6; i++) {
+            if (p2_ms >= kBootLogs[i].delay_ms) {
+                if (i >= _boot_log_lines_drawn) {
+                    _canvas->drawString(kBootLogs[i].text, start_x, start_y + (i * line_spacing));
+                }
+            }
+        }
+        for (int i = 5; i >= 0; i--) {
+            if (p2_ms >= kBootLogs[i].delay_ms) {
+                _boot_log_lines_drawn = i + 1;
+                break;
+            }
+        }
+    }
 }
 
 void DashboardRenderer::drawCard(int x, int y, int w, int h, uint16_t bg, uint16_t border) {
@@ -321,7 +406,23 @@ void DashboardRenderer::triggerNeedleSweep() {
 
 // Top-Level Screen Dispatcher
 void DashboardRenderer::render(const DashTelemetry &telemetry) {
-    // 0. First-Time Setup Wizard takes precedence on first boot (bypasses PIN lockscreen)
+    // 0. Boot Animation Sequence (Phase 1: 0.0s..1.5s Logo, Phase 2: 1.5s..2.5s Console, Phase 3: >=2.5s PIN Lock)
+    if (_boot_anim_active) {
+        uint32_t now = millis();
+        uint32_t elapsed_ms = now - _boot_anim_start_ms;
+        if (elapsed_ms >= 2500) {
+            _boot_anim_active = false;
+            _boot_anim_phase = 3;
+            _pin_screen_drawn = false;
+            _screen_dirty = true;
+            _cache.invalidate();
+        } else {
+            renderBootAnimation(elapsed_ms);
+            return;
+        }
+    }
+
+    // 0b. First-Time Setup Wizard takes precedence on first boot (bypasses PIN lockscreen)
     if (!telemetry.setup_completed && telemetry.screen == SCREEN_SETUP_WIZARD) {
         // Fall through to screen dispatch
     } else if (OtaManager::instance().isUpdating()) {

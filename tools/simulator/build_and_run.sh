@@ -87,6 +87,18 @@ g++ -std=c++17 -O2 -fPIC -shared -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   "$LGFX_SRC_DIR/lgfx/utility/lgfx_tjpgd.c" \
   -o tools/simulator/libdash_sim.so
 
+BUILD_ONLY=0
+for arg in "$@"; do
+    if [ "$arg" == "--build-only" ]; then
+        BUILD_ONLY=1
+    fi
+done
+
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    echo "=== Build only complete. Skipping scenario execution. ==="
+    exit 0
+fi
+
 echo "=== Running Scenarios ==="
 mkdir -p tools/simulator/screenshots
 ./tools/simulator/simulator

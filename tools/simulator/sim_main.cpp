@@ -1611,6 +1611,64 @@ void testSpeedSweepAnimation() {
     printf("=== Speedometer Sweep Tests PASSED! ===\n\n");
 }
 
+void testBootAnimation() {
+    printf("\n=== Running Boot Animation (Logo -> Console -> Lockscreen) Unit Tests ===\n");
+    DashTelemetry t;
+    setBaseTelemetry(t);
+    t.is_locked = true;
+
+    // 1. Initial State & Trigger
+    Renderer.triggerBootAnimation();
+    assert(Renderer.isBootAnimActive() == true);
+    assert(Renderer.getBootAnimPhase() == 0);
+
+    // 2. Phase 1 (0.0s..1.5s): Logo on pure black background
+    Renderer.setBootAnimElapsed(500);
+    Renderer.render(t);
+    assert(Renderer.isBootAnimActive() == true);
+    assert(Renderer.getBootAnimPhase() == 1);
+    printf("[PASS] 1. Boot Animation Phase 1 (Logo on black background at 0.5s) verified.\n");
+
+    // 3. Phase 2 (1.5s..2.5s): Console diagnostic log
+    Renderer.setBootAnimElapsed(1600); // 1.6s -> p2_ms = 100ms
+    Renderer.render(t);
+    assert(Renderer.isBootAnimActive() == true);
+    assert(Renderer.getBootAnimPhase() == 2);
+
+    Renderer.setBootAnimElapsed(2400); // 2.4s -> p2_ms = 900ms (all 6 logs)
+    Renderer.render(t);
+    assert(Renderer.isBootAnimActive() == true);
+    assert(Renderer.getBootAnimPhase() == 2);
+    printf("[PASS] 2. Boot Animation Phase 2 (Diagnostic console logs at 1.6s and 2.4s) verified.\n");
+
+    // 4. Phase 3 (>=2.5s): Completion -> Transition to PIN Lockscreen
+    Renderer.setBootAnimElapsed(2500);
+    Renderer.render(t);
+    assert(Renderer.isBootAnimActive() == false);
+    assert(Renderer.getBootAnimPhase() == 3);
+    printf("[PASS] 3. Boot Animation completion (elapsed >= 2.5s -> transition to PIN lockscreen) verified.\n");
+
+    // 5. Screen Tap Instant Skip during Phase 1
+    Renderer.triggerBootAnimation();
+    Renderer.setBootAnimElapsed(300);
+    assert(Renderer.isBootAnimActive() == true);
+    Renderer.skipBootAnimation();
+    assert(Renderer.isBootAnimActive() == false);
+    assert(Renderer.getBootAnimPhase() == 3);
+    printf("[PASS] 4. Boot Animation instant skip on tap (Phase 1) verified.\n");
+
+    // 6. Screen Tap Instant Skip during Phase 2
+    Renderer.triggerBootAnimation();
+    Renderer.setBootAnimElapsed(1800);
+    assert(Renderer.isBootAnimActive() == true);
+    Renderer.skipBootAnimation();
+    assert(Renderer.isBootAnimActive() == false);
+    assert(Renderer.getBootAnimPhase() == 3);
+    printf("[PASS] 5. Boot Animation instant skip on tap (Phase 2) verified.\n");
+
+    printf("=== Boot Animation Unit Tests PASSED! ===\n\n");
+}
+
 void testVirtualVescEmulator() {
     printf("=== Running Virtual VESC Protocol & Emulator Unit Tests ===\n");
 
@@ -2304,6 +2362,7 @@ int main(int argc, char **argv) {
     Renderer.begin(&Display);
 
     testSpeedSweepAnimation();
+    testBootAnimation();
     testAntiGhostingTransitions();
     testStatsCalculationAndLiveUpdates();
     testModeManagerAndLegalProfiles();
@@ -2790,6 +2849,40 @@ int main(int argc, char **argv) {
     assert(OtaManager::instance().getProgressPct() == 68);
     OtaManager::instance().setSimProgress(false, 0);
     printf("[PASS] Scenario 35: Wireless OTA Firmware Update Progress HUD rendered and saved.\n");
+
+    // ----------------------------------------------------
+    // Scenario 36: Boot Animation - Phase 1 Boot Logo (0.5s)
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    Renderer.triggerBootAnimation();
+    Renderer.setBootAnimElapsed(500);
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("36_boot_animation_phase1_logo", t);
+    printf("[PASS] Scenario 36: Boot Animation Phase 1 Logo rendered and saved.\n");
+
+    // ----------------------------------------------------
+    // Scenario 37: Boot Animation - Phase 2 Diagnostic Console Log (2.4s)
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    Renderer.triggerBootAnimation();
+    Renderer.setBootAnimElapsed(2400);
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("37_boot_animation_phase2_console", t);
+    printf("[PASS] Scenario 37: Boot Animation Phase 2 Console rendered and saved.\n");
+
+    // ----------------------------------------------------
+    // Scenario 38: Boot Animation - Phase 3 Transition to PIN Lockscreen (2.5s)
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    t.is_locked = true;
+    Renderer.triggerBootAnimation();
+    Renderer.setBootAnimElapsed(2500);
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("38_boot_animation_phase3_pin_lockscreen", t);
+    printf("[PASS] Scenario 38: Boot Animation Phase 3 PIN Lockscreen rendered and saved.\n");
 
     // Reset default theme
     Settings.get().color_theme = THEME_CYBER_CYAN;
