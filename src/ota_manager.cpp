@@ -10,7 +10,7 @@ OtaManager::OtaManager()
       _is_updating(false),
       _bytes_written(0),
       _total_bytes(0)
-#if !defined(NATIVE_SIMULATOR) && !defined(SIMULATION_MODE)
+#if !defined(NATIVE_SIMULATOR)
       , _server(80)
 #endif
 {
@@ -38,7 +38,7 @@ void OtaManager::setSimProgress(bool updating, int pct) {
     }
 }
 
-#if !defined(NATIVE_SIMULATOR) && !defined(SIMULATION_MODE)
+#if !defined(NATIVE_SIMULATOR)
 
 static const char OTA_HTML_PAGE[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -278,7 +278,7 @@ void OtaManager::setupRoutes() {
 void OtaManager::begin() {
     if (_running) return;
 
-#if !defined(NATIVE_SIMULATOR) && !defined(SIMULATION_MODE)
+#if !defined(NATIVE_SIMULATOR)
     setupRoutes();
     _server.begin();
 
@@ -325,7 +325,7 @@ void OtaManager::begin() {
 void OtaManager::update() {
     if (!_running) return;
 
-#if !defined(NATIVE_SIMULATOR) && !defined(SIMULATION_MODE)
+#if !defined(NATIVE_SIMULATOR)
     _server.handleClient();
     ArduinoOTA.handle();
 #endif
@@ -334,7 +334,7 @@ void OtaManager::update() {
 void OtaManager::stop() {
     if (!_running) return;
 
-#if !defined(NATIVE_SIMULATOR) && !defined(SIMULATION_MODE)
+#if !defined(NATIVE_SIMULATOR)
     _server.stop();
     ArduinoOTA.end();
 #endif

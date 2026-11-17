@@ -757,6 +757,7 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     _mode_banner_active = (millis() < telemetry.mode_badge_until);
     _mode_banner_drawn_mode = -1;
     _hyper_inited = false;
+    _anim_inited = false;
     _cache.invalidate();
     _last_arc_frac = -1.0f;
     _last_arc_angle = 135.0f;
@@ -1041,12 +1042,10 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     float duty = telemetry.duty_cycle_pct;
     if (duty < 0.0f) duty = 0.0f;
     if (duty > 100.0f) duty = 100.0f;
-    float duty_anim = (_anim_duty > 0.0f) ? _anim_duty : duty;
-    if (duty_anim < 0.0f) duty_anim = 0.0f;
     uint16_t dutyCol = COLOR_WHITE;
     int cur_duty = (int)(duty + 0.5f);
     if (cur_duty > 100) cur_duty = 100;
-    float dFrac = (duty_anim > 100.0f) ? 1.0f : (duty_anim / 100.0f);
+    float dFrac = duty / 100.0f;
     int cur_d_fill = (int)(dFrac * 320.0f);
 
     // 6a. Duty Percentage Digits: Only redrawn when integer % changes (zero erase / zero flash!)
