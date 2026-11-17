@@ -920,6 +920,11 @@ void loop() {
     GpsTracker::instance().update(telemetry);
 
     // 2c. Smart Charging Detection & Drive Lockout
+    // TEMPORARILY DISABLED (Obsidian TODO): Regen braking to standstill or high SoC (>=99%)
+    // erroneously triggered charging HUD and locked out drive with 0A.
+    // Manual serial toggle ('c') remains available for testing.
+    bool charge_detected = false;
+#if 0
     static uint32_t s_stationary_since_ms = 0;
     static float s_stationary_baseline_v = 0.0f;
     static uint32_t s_charge_unplug_timer_ms = 0;
@@ -949,7 +954,7 @@ void loop() {
                            telemetry.voltage >= s_stationary_baseline_v + 0.12f &&
                            telemetry.voltage >= 35.0f);
 
-    bool charge_detected = is_stationary && (incoming_current || rising_voltage || (telemetry.is_charging && telemetry.battery_pct >= 99.0f));
+    charge_detected = is_stationary && (incoming_current || rising_voltage || (telemetry.is_charging && telemetry.battery_pct >= 99.0f));
 
     if (charge_detected) {
         s_charge_unplug_timer_ms = 0;
@@ -1002,6 +1007,7 @@ void loop() {
             Serial.println("[CHARGING] Charger disconnected. Drive lockout released.");
         }
     }
+#endif
 
     telemetry.uptime_sec = (now - boot_ms) / 1000;
     telemetry.dynamic_wh_km = Battery.getDynamicWhKm();
