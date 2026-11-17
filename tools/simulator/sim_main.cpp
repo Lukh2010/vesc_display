@@ -993,6 +993,13 @@ void testAntiGhostingTransitions() {
     assert(Display.getSprite().readPixel(173, 408) != 0x0000); // 'F' top stroke left edge
     assert(Display.getSprite().readPixel(307, 408) != 0x0000); // 110° degree circle right arc
 
+    // Frame 1 Duty cycle cap & styling check (108% capped at 100%, pure white 0xFFFF, no red):
+    printf("DEBUG: Pixel at (500, 154) is 0x%04X, at (700, 154) is 0x%04X\n",
+           Display.getSprite().readPixel(500, 154), Display.getSprite().readPixel(700, 154));
+    assert(Display.getSprite().readPixel(500, 154) == 0xFFFF);
+    assert(Display.getSprite().readPixel(700, 154) == 0xFFFF);
+    assert(Display.getSprite().readPixel(700, 154) != 0xF800);
+
     // Frame 2: Decelerate to 0 km/h, 0 W, 0 A, 38% battery, 72.1 V without markScreenDirty
     t.speed_kmh = 0.0f;
     t.power_watts = 0.0f;
@@ -1030,9 +1037,12 @@ void testAntiGhostingTransitions() {
     assert(Display.getSprite().readPixel(307, 408) == 0x0000);
 
     // 6. Duty cycle progress bar anti-ghosting:
-    // Frame 1 (108%) drew red fill all the way to x=765.
-    // Frame 2 (20%) draws cyan fill only up to x=509.
-    // At x=700, y=154, pixel must NOT be red (0xF800).
+    // Frame 1 (108% -> 100%) drew pure white fill all the way to x=765.
+    // Frame 2 (20%) draws pure white fill only up to x=509.
+    // At x=480, y=154, pixel is within 20% fill and must be pure white (0xFFFF).
+    // At x=700, y=154, pixel must be cleared to track color (not white 0xFFFF and not red 0xF800).
+    assert(Display.getSprite().readPixel(480, 154) == 0xFFFF);
+    assert(Display.getSprite().readPixel(700, 154) != 0xFFFF);
     assert(Display.getSprite().readPixel(700, 154) != 0xF800);
 
     // Frame 3: Trigger Dynamic Mode Banner

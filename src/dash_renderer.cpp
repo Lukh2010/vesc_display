@@ -452,7 +452,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
                 _sweep_phase = 1;
             }
             float ease = _sweep_progress * _sweep_progress * (3.0f - 2.0f * _sweep_progress);
-            _sweep_duty = ease * 120.0f;
+            _sweep_duty = ease * 100.0f;
             _sweep_speed = ease * 100.0f;
         } else if (_sweep_phase == 1) { // Sweep down: 100 -> 0 km/h in 0.55s
             _sweep_progress -= dt / 0.55f;
@@ -465,7 +465,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
                 _anim_speed = 0.0f;
             } else {
                 float ease = _sweep_progress * _sweep_progress * (3.0f - 2.0f * _sweep_progress);
-                _sweep_duty = ease * 120.0f;
+                _sweep_duty = ease * 100.0f;
                 _sweep_speed = ease * 100.0f;
             }
         }
@@ -809,7 +809,7 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     // Static label "DUTY"
     _canvas->setFont(&fonts::Font4);
     _canvas->setTextSize(1);
-    _canvas->setTextColor(pal.primary, COLOR_BG);
+    _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
     _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->drawString("DUTY", 445, 124);
 
@@ -1040,11 +1040,12 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     // 6. Right Column: Duty Cycle Section
     float duty = telemetry.duty_cycle_pct;
     if (duty < 0.0f) duty = 0.0f;
+    if (duty > 100.0f) duty = 100.0f;
     float duty_anim = (_anim_duty > 0.0f) ? _anim_duty : duty;
     if (duty_anim < 0.0f) duty_anim = 0.0f;
-    bool is_fw = (duty > 100.0f);
-    uint16_t dutyCol = is_fw ? COLOR_RED : pal.primary;
+    uint16_t dutyCol = COLOR_WHITE;
     int cur_duty = (int)(duty + 0.5f);
+    if (cur_duty > 100) cur_duty = 100;
     float dFrac = (duty_anim > 100.0f) ? 1.0f : (duty_anim / 100.0f);
     int cur_d_fill = (int)(dFrac * 320.0f);
 

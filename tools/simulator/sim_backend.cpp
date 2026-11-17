@@ -393,17 +393,19 @@ static void runSimulationStep(float dt) {
     }
 
     if (sim_t > 85.0f && s_sim_speed_kmh > 78.0f) {
-        // Field Weakening engaged at high speed near physical motor limit: duty pushes beyond 100% (up to 114%)
-        float fw_extra = ((s_sim_speed_kmh - 78.0f) / 12.0f) * 18.0f;
-        target_duty = 96.0f + fw_extra;
+        // High speed near physical motor limit: realistic duty scaling capped at 98%
+        float fw_extra = ((s_sim_speed_kmh - 78.0f) / 12.0f) * 4.0f;
+        target_duty = 94.0f + fw_extra;
     }
     if (sim_t == 0.0f && sim_b <= 1.0f) {
         // Coasting: duty cycle follows back-EMF of spinning rotor
         target_duty = (s_sim_speed_kmh / physical_motor_top_speed) * 90.0f;
     }
-    if (target_duty > 118.0f) target_duty = 118.0f;
+    if (target_duty > 98.0f) target_duty = 98.0f;
     if (target_duty < 0.0f) target_duty = 0.0f;
     s_sim_duty_cycle_pct += (target_duty - s_sim_duty_cycle_pct) * (dt * 8.0f);
+    if (s_sim_duty_cycle_pct > 100.0f) s_sim_duty_cycle_pct = 100.0f;
+    if (s_sim_duty_cycle_pct < 0.0f) s_sim_duty_cycle_pct = 0.0f;
 
     float wheel_rpm = (s_sim_speed_kmh * 1000.0f / 60.0f) / wheel_circ_m;
     s_sim_rpm = wheel_rpm * gear_ratio;
