@@ -11,6 +11,7 @@
 #include "fault_manager.h"
 #include "gps_tracker.h"
 #include "ble_keyless_manager.h"
+#include "ota_manager.h"
 
 // Active Telemetry State
 static DashTelemetry telemetry;
@@ -276,6 +277,14 @@ void loop() {
         }
     }
 #endif
+
+    // 0. High-Priority Wireless OTA Firmware Update in Progress
+    if (OtaManager::instance().isUpdating()) {
+        OtaManager::instance().update();
+        Renderer.render(telemetry);
+        delay(15);
+        return;
+    }
 
     // Sync external tuning mode or ride mode changes from Captive Portal web UI (Core 0 -> Core 1)
     if (telemetry.tuning_mode != ModeManager::instance().isTuningMode()) {

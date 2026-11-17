@@ -106,6 +106,9 @@ private:
     void initChargingScreen();
     void renderChargingScreen(const DashTelemetry &telemetry);
 
+    // Screen 9: Wireless OTA Firmware Update Progress HUD
+    void renderOtaScreen(int pct, const char *status);
+
     // PIN-Lockscreen & VESC Alarm Banner (Requirements 1 & 7)
     void renderPinLockScreen(const DashTelemetry &telemetry);
     void drawFaultBanner(uint8_t fault_code);

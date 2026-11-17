@@ -28,6 +28,7 @@ g++ -std=c++17 -O2 -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   src/gps_tracker.cpp \
   src/ble_keyless_manager.cpp \
   src/vesc_uart.cpp \
+  src/ota_manager.cpp \
   tools/simulator/virtual_vesc/vesc_packet.cpp \
   tools/simulator/virtual_vesc/virtual_vesc.cpp \
   tools/simulator/virtual_vesc/vesc_tcp_server.cpp \
@@ -64,6 +65,7 @@ g++ -std=c++17 -O2 -fPIC -shared -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   src/gps_tracker.cpp \
   src/ble_keyless_manager.cpp \
   src/vesc_uart.cpp \
+  src/ota_manager.cpp \
   tools/simulator/virtual_vesc/vesc_packet.cpp \
   tools/simulator/virtual_vesc/virtual_vesc.cpp \
   tools/simulator/virtual_vesc/vesc_tcp_server.cpp \

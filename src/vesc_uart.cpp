@@ -3,6 +3,7 @@
 #include "battery_manager.h"
 #include "fault_manager.h"
 #include "mode_manager.h"
+#include "ota_manager.h"
 #include <math.h>
 
 #if !defined(NATIVE_SIMULATOR)
@@ -1059,6 +1060,7 @@ void VescHandler::enterWifiBridgeMode() {
     WiFi.softAP("VESC-DASH-AP");
     _wifi_server.begin(6510);
     _wifi_server.setNoDelay(true);
+    OtaManager::instance().begin();
     Serial.println("[WIFI_BRIDGE] SoftAP started: SSID='VESC-DASH-AP', IP=192.168.4.1, Port=6510");
 #endif
 }
@@ -1070,6 +1072,7 @@ void VescHandler::exitWifiBridgeMode() {
     _last_poll_ms = millis();
 
 #if !defined(LGFX_LINUX_FB) && !defined(SIMULATOR)
+    OtaManager::instance().stop();
     if (_wifi_client) {
         _wifi_client.stop();
     }
@@ -1083,6 +1086,9 @@ void VescHandler::exitWifiBridgeMode() {
 void VescHandler::updateWifiBridge() {
 #if !defined(LGFX_LINUX_FB) && !defined(SIMULATOR)
     if (!_wifi_bridge_active) return;
+
+    // Handle OTA Web Server & ArduinoOTA
+    OtaManager::instance().update();
 
     if (_wifi_server.hasClient()) {
         if (_wifi_client && _wifi_client.connected()) {
