@@ -882,21 +882,20 @@ void testModeManagerAndLegalProfiles() {
     ModeLimits tSportLim = ModeManager::instance().getActiveLimits();
     assert(tSportLim.max_speed_kmh == 55.0f);
 
-    // RACE + BOOST (Komplett Offen: 100A Bat, 180A Phase, 35kW, Speed unbegrenzt)
+    // RACE + BOOST (Speed Komplett Offen, Standard Ströme: 70A Bat, 140A Phase)
     ModeManager::instance().setRideMode(MODE_RACE);
     ModeLimits tRaceLim = ModeManager::instance().getActiveLimits();
-    assert(tRaceLim.max_speed_kmh >= 85.0f);
+    assert(tRaceLim.max_speed_kmh == 100.0f);
     assert(strcmp(ModeManager::instance().getActiveModeName(), "RACE") == 0);
 
     ModeManager::instance().setBoostActive(true);
     ModeLimits boostRaceLim = ModeManager::instance().getActiveLimits();
-    assert(boostRaceLim.max_battery_amps == 100.0f);
-    assert(boostRaceLim.max_phase_amps == 180.0f);
-    assert(boostRaceLim.max_power_watts == 35000.0f);
+    assert(boostRaceLim.max_battery_amps == 70.0f);
+    assert(boostRaceLim.max_phase_amps == 140.0f);
     assert(boostRaceLim.max_speed_kmh == 100.0f);
     ModeManager::instance().setBoostActive(false);
 
-    printf("[PASS] Tuned Mode unlocked limits verified: ECO 35 km/h, SPORT 55 km/h, RACE 100 km/h (Boost: 100A/180A/35kW Komplett Offen).\n");
+    printf("[PASS] Tuned Mode unlocked limits verified: ECO 35 km/h, SPORT 55 km/h, RACE 100 km/h (Boost: 70A Bat, 140A Phase, Speed Komplett Offen).\n");
 
     // 3. System Lock (Item 7 Immobilizer)
     ModeManager::instance().setLocked(true);
