@@ -114,6 +114,8 @@ sim_lib.sim_set_manual_brake.argtypes = [ctypes.c_float]
 sim_lib.sim_set_manual_brake.restype = None
 
 sim_lib.sim_reset_setup_wizard.restype = None
+sim_lib.sim_bypass_setup_wizard.restype = None
+sim_lib.sim_toggle_setup_wizard.restype = None
 sim_lib.sim_toggle_charging.restype = None
 sim_lib.sim_trigger_theft_movement.restype = None
 
@@ -154,11 +156,14 @@ NAV_SCREEN_DASH = 14
 NAV_MENU_BACK = 15
 NAV_SCREEN_RACE = 16
 NAV_RACE_TOGGLE_POPUP = 17
-NAV_RACE_CLOSE_POPUP = 18
-NAV_RACE_RESET_RECORDS = 19
-NAV_RACE_START_LAUNCH = 20
-NAV_RACE_ABORT = 21
-NAV_LIGHT_TOGGLE = 22
+NAV_RACE_TOGGLE_DYNO = 18
+NAV_RACE_CLOSE_POPUP = 19
+NAV_RACE_RESET_RECORDS = 20
+NAV_RACE_START_LAUNCH = 21
+NAV_RACE_ABORT = 22
+NAV_LIGHT_TOGGLE = 23
+NAV_PIN_EMERGENCY_RESET = 24
+NAV_CHARGING_EXIT = 25
 
 SCREEN_RIDE_DASH = 0
 SCREEN_LIGHTS = 1
@@ -167,6 +172,8 @@ SCREEN_SETTINGS_MENU = 3
 SCREEN_VESC_BRIDGE = 4
 SCREEN_WIFI_BRIDGE = 5
 SCREEN_RACE_TIMER = 6
+SCREEN_SETUP_WIZARD = 7
+SCREEN_CHARGING_HUD = 8
 
 # Initialize backend
 sim_lib.sim_init()
@@ -294,12 +301,13 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><kbd>M</kbd> Mode</span>
   <span><kbd>Space / B</kbd> Boost</span>
   <span><kbd>L</kbd> Licht (Hauptschalter)</span>
-  <span><kbd>X</kbd> Tuning / Legal</span>
+  <span><button onclick="fetch('/api/tuning?toggle=1').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#34d399; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">👮 Tuning Mode (X)</button></span>
   <span><button onclick="fetch('/api/theme').catch(()=>{})" style="background:#0f172a; border:1px solid #ec4899; color:#f472b6; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🎨 Theme (T)</button></span>
   <span><button onclick="fetch('/api/turbine_sound').catch(()=>{})" style="background:#0f172a; border:1px solid #38bdf8; color:#38bdf8; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚀 Turbinensound (U)</button></span>
   <span><kbd>C</kbd> <button onclick="fetch('/api/charging').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#10b981; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Laden (HUD)</button></span>
   <span><kbd>A</kbd> <button onclick="fetch('/api/theft_alarm').catch(()=>{})" style="background:#0f172a; border:1px solid #ef4444; color:#ef4444; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚨 Diebstahl-Alarm</button></span>
-  <span><button onclick="fetch('/api/reset_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔄 Setup Wizard Reset</button></span>
+  <span><button onclick="fetch('/api/toggle_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Setup Wizard (W/S)</button></span>
+  <span><button onclick="fetch('/api/emergency_unlock').catch(()=>{})" style="background:#0f172a; border:1px solid #eab308; color:#fde047; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔓 Emergency Unlock</button></span>
   <span><button onclick="fetch('/api/boot_animation').catch(()=>{})" style="background:#0f172a; border:1px solid #a855f7; color:#c084fc; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🎬 Boot Animation (Replay)</button></span>
   <span><a href="/portal" target="_blank" style="color:#00e5ff; text-decoration:underline; font-weight:bold;">⚙️ Captive Portal</a> (<a href="http://localhost:8081" target="_blank" style="color:#00e5ff;">Port 8081</a>)</span>
 </div>
@@ -359,9 +367,24 @@ HTML_PAGE = """<!DOCTYPE html>
   // Realistic Spring-Return Throttle & Controls
   let throttleHeld = false;
   let brakeHeld = false;
+  let currentScreen = 0;
+
+  setInterval(() => {
+    fetch('/api/status').then(r => r.json()).then(d => {
+      if (d && typeof d.screen !== 'undefined') currentScreen = d.screen;
+    }).catch(() => {});
+  }, 500);
 
   window.addEventListener('keydown', (e) => {
     if (e.repeat) return;
+    if ((e.shiftKey || e.ctrlKey) && (e.key === 'w' || e.key === 'W' || e.key === 's' || e.key === 'S')) {
+      fetch('/api/toggle_wizard');
+      return;
+    }
+    if ((e.key === 'w' || e.key === 'W' || e.key === 's' || e.key === 'S') && currentScreen === 7) {
+      fetch('/api/bypass_wizard');
+      return;
+    }
     if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
       throttleHeld = true;
       fetch('/api/throttle?val=100');
@@ -527,6 +550,24 @@ class WebDemoHandler(BaseHTTPRequestHandler):
         elif path == "/api/reset_wizard":
             with sim_lock:
                 sim_lib.sim_reset_setup_wizard()
+            self.send_response(200)
+            self.end_headers()
+
+        elif path == "/api/toggle_wizard":
+            with sim_lock:
+                sim_lib.sim_toggle_setup_wizard()
+            self.send_response(200)
+            self.end_headers()
+
+        elif path == "/api/bypass_wizard":
+            with sim_lock:
+                sim_lib.sim_bypass_setup_wizard()
+            self.send_response(200)
+            self.end_headers()
+
+        elif path == "/api/emergency_unlock":
+            with sim_lock:
+                sim_lib.sim_trigger_nav(NAV_PIN_EMERGENCY_RESET)
             self.send_response(200)
             self.end_headers()
 
@@ -858,6 +899,15 @@ class DesktopDemoApp:
         self.root.bind("<R>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
         self.root.bind("<Control-r>", lambda e: self.reset_wizard())
         self.root.bind("<F5>", lambda e: self.reset_wizard())
+        self.root.bind("<Shift-KeyPress-w>", lambda e: self.toggle_wizard())
+        self.root.bind("<Shift-KeyPress-W>", lambda e: self.toggle_wizard())
+        self.root.bind("<Shift-KeyPress-s>", lambda e: self.toggle_wizard())
+        self.root.bind("<Shift-KeyPress-S>", lambda e: self.toggle_wizard())
+        self.root.bind("<Control-w>", lambda e: self.toggle_wizard())
+        self.root.bind("<Control-s>", lambda e: self.toggle_wizard())
+        self.root.bind("<F7>", lambda e: self.toggle_wizard())
+        self.root.bind("<Control-u>", lambda e: self.emergency_unlock())
+        self.root.bind("<F8>", lambda e: self.emergency_unlock())
         self.root.bind("<Control-b>", lambda e: self.trigger_boot_anim())
         self.root.bind("<F6>", lambda e: self.trigger_boot_anim())
         self.root.bind("<Escape>", lambda e: self.on_esc_press())
@@ -870,7 +920,9 @@ class DesktopDemoApp:
         if self._up_release_timer:
             self.root.after_cancel(self._up_release_timer)
             self._up_release_timer = None
-        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+        if current_telemetry.screen == SCREEN_SETUP_WIZARD:
+            self.bypass_wizard()
+        elif current_telemetry.screen == SCREEN_SETTINGS_MENU:
             self.trigger_nav(NAV_BTN1_SHORT)
         else:
             self.set_throttle(100.0)
@@ -883,14 +935,16 @@ class DesktopDemoApp:
 
     def _do_up_release(self):
         self._up_release_timer = None
-        if current_telemetry.screen != SCREEN_SETTINGS_MENU:
+        if current_telemetry.screen != SCREEN_SETTINGS_MENU and current_telemetry.screen != SCREEN_SETUP_WIZARD:
             self.set_throttle(0.0)
 
     def on_down_press(self):
         if self._down_release_timer:
             self.root.after_cancel(self._down_release_timer)
             self._down_release_timer = None
-        if current_telemetry.screen == SCREEN_SETTINGS_MENU:
+        if current_telemetry.screen == SCREEN_SETUP_WIZARD:
+            self.bypass_wizard()
+        elif current_telemetry.screen == SCREEN_SETTINGS_MENU:
             self.trigger_nav(NAV_BTN2_SHORT)
         else:
             self.set_throttle(0.0)
@@ -903,7 +957,7 @@ class DesktopDemoApp:
 
     def _do_down_release(self):
         self._down_release_timer = None
-        if current_telemetry.screen != SCREEN_SETTINGS_MENU:
+        if current_telemetry.screen != SCREEN_SETTINGS_MENU and current_telemetry.screen != SCREEN_SETUP_WIZARD:
             self.set_brake(0.0)
 
     def on_digit_press(self, pct):
@@ -970,6 +1024,18 @@ class DesktopDemoApp:
     def reset_wizard(self):
         with sim_lock:
             sim_lib.sim_reset_setup_wizard()
+
+    def bypass_wizard(self):
+        with sim_lock:
+            sim_lib.sim_bypass_setup_wizard()
+
+    def toggle_wizard(self):
+        with sim_lock:
+            sim_lib.sim_toggle_setup_wizard()
+
+    def emergency_unlock(self):
+        with sim_lock:
+            sim_lib.sim_trigger_nav(NAV_PIN_EMERGENCY_RESET)
 
     def trigger_boot_anim(self):
         with sim_lock:

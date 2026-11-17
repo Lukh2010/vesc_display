@@ -448,9 +448,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 float v_spd = (wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f;
                 if (v_spd < 0.8f) v_spd = 0.0f;
                 telemetry.vesc_motor_speed = v_spd;
-                if (!telemetry.use_gps_speed) {
-                    telemetry.speed_kmh = v_spd;
-                }
+                telemetry.speed_kmh = v_spd;
                 telemetry.phase_amps = mot_i;
                 telemetry.duty_cycle_pct = duty;
 
@@ -812,9 +810,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         float v_spd_setup = fabsf((speed_m_s / 1000.0f) * 3.6f);
         if (v_spd_setup < 0.8f) v_spd_setup = 0.0f;
         telemetry.vesc_motor_speed = v_spd_setup;
-        if (!telemetry.use_gps_speed) {
-            telemetry.speed_kmh = v_spd_setup;
-        }
+        telemetry.speed_kmh = v_spd_setup;
 
         int32_t rel_dist         = dist_m - _dist_trip_offset;
         telemetry.trip_km        = fabsf(((float)rel_dist / 1000.0f) / 1000.0f);
@@ -886,9 +882,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         float v_spd_std = fabsf((wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f);
         if (v_spd_std < 0.8f) v_spd_std = 0.0f;
         telemetry.vesc_motor_speed = v_spd_std;
-        if (!telemetry.use_gps_speed) {
-            telemetry.speed_kmh = v_spd_std;
-        }
+        telemetry.speed_kmh = v_spd_std;
 
         // Odometer & Trip from tachometer step counts
         static bool s_uart_tacho_init = false;
@@ -1198,7 +1192,7 @@ static void sendVescCanBuffer(uint8_t controller_id, const uint8_t *data, size_t
 #endif
 
 void VescHandler::sendTerminalCommand(const char *str) {
-#if !SIMULATION_MODE
+#if !SIMULATION_MODE || defined(NATIVE_SIMULATOR)
     size_t slen = strlen(str);
     if (slen > 68) slen = 68;
     uint8_t t_payload[70];
@@ -1360,7 +1354,7 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     Serial.printf("[VESC_CMD] Dynamic Limits -> Spd: %.1f km/h (ERPM: %.0f) | Pwr: %.0f W | Bat: %.1f A | Phase: %.1f A\n",
                   max_speed_kmh, max_erpm, max_power_watts, max_battery_amps, max_phase_amps);
 
-#if !SIMULATION_MODE
+#if !SIMULATION_MODE || defined(NATIVE_SIMULATOR)
     auto append_f32_auto = [](uint8_t *b, float number, int32_t *idx) {
         if (fabsf(number) < 1.5e-38f) {
             number = 0.0f;

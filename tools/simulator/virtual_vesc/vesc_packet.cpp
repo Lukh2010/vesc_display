@@ -1,4 +1,5 @@
 #include "vesc_packet.h"
+#include <cstdio>
 #include <string.h>
 #include <math.h>
 

@@ -28,7 +28,7 @@ void SettingsManager::loadDefaults() {
     _settings.gps_enabled            = true;
     _settings.incline_gforce_enabled = true;
     _settings.wifi_bridge_enabled    = false;
-    _settings.setup_completed        = true;
+    _settings.setup_completed        = false;
     _settings.color_theme            = THEME_CYBER_CYAN;
     _settings.turbine_sound_enabled  = true;
     _settings.ble_keyless_enabled    = true;
@@ -79,7 +79,7 @@ void SettingsManager::begin() {
         _settings.gps_enabled            = _prefs.getBool("gps_en", true);
         _settings.incline_gforce_enabled = _prefs.getBool("inc_en", true);
         _settings.wifi_bridge_enabled    = _prefs.getBool("wifi_en", false);
-        _settings.setup_completed        = _prefs.getBool("setup_done", true);
+        _settings.setup_completed        = _prefs.getBool("setup_done", false);
         _settings.color_theme            = _prefs.getUChar("theme", THEME_CYBER_CYAN);
         if (_settings.color_theme >= THEME_COUNT) _settings.color_theme = THEME_CYBER_CYAN;
         _settings.turbine_sound_enabled  = _prefs.getBool("turb_en", true);

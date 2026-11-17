@@ -527,6 +527,17 @@ static void runSimulationStep(float dt) {
     vt.brake_pct = sim_b;
     g_virtual_vesc.setPhysicsTelemetry(vt);
     g_telemetry.incline_deg = s_sim_incline_deg;
+    g_telemetry.speed_kmh = s_sim_speed_kmh;
+    g_telemetry.throttle_pct = sim_t;
+    g_telemetry.duty_cycle_pct = s_sim_duty_cycle_pct;
+    g_telemetry.rpm = s_sim_rpm;
+    g_telemetry.current_amps = s_sim_current_amps;
+    g_telemetry.phase_amps = s_sim_phase_amps;
+    g_telemetry.power_watts = s_sim_power_watts;
+    g_telemetry.voltage = s_sim_voltage;
+    g_telemetry.battery_pct = vt.battery_pct;
+    g_telemetry.trip_km = s_sim_trip_km;
+    g_telemetry.odo_km = s_sim_odo_km;
 }
 
 // -------------------------------------------------------------
@@ -672,6 +683,12 @@ void sim_step(uint32_t step_ms) {
 
     if (ModeManager::instance().getRideMode() != g_telemetry.ride_mode) {
         ModeManager::instance().setRideMode(g_telemetry.ride_mode);
+    }
+
+    if (ModeManager::instance().isTuningMode() != (bool)g_telemetry.tuning_mode) {
+        g_telemetry.tuning_mode = ModeManager::instance().isTuningMode();
+        Buttons.setTuningMode(g_telemetry.tuning_mode);
+        Renderer.markScreenDirty();
     }
 
     if (step_ms == 0) {
@@ -1704,6 +1721,7 @@ void sim_set_light_hue(int hue) {
 
 void sim_set_tuning_mode(int enable) {
     g_telemetry.tuning_mode = (enable != 0);
+    g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
     Buttons.setTuningMode(g_telemetry.tuning_mode);
     ModeManager::instance().setTuningMode(g_telemetry.tuning_mode);
     if (!g_telemetry.tuning_mode && g_telemetry.screen == SCREEN_RACE_TIMER) {
@@ -1725,6 +1743,7 @@ void sim_set_tuning_mode(int enable) {
 
 void sim_toggle_tuning_mode() {
     g_telemetry.tuning_mode = !g_telemetry.tuning_mode;
+    g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
     Buttons.setTuningMode(g_telemetry.tuning_mode);
     ModeManager::instance().setTuningMode(g_telemetry.tuning_mode);
     if (!g_telemetry.tuning_mode && g_telemetry.screen == SCREEN_RACE_TIMER) {
@@ -2085,6 +2104,34 @@ void sim_reset_setup_wizard() {
     Renderer.markScreenDirty();
     Renderer.invalidateCache();
     printf("[SIM_BACKEND] First-Time Setup Wizard RESET triggered.\n");
+}
+
+void sim_bypass_setup_wizard() {
+    Settings.get().setup_completed = true;
+    Settings.save();
+    g_telemetry.setup_completed = true;
+    g_telemetry.screen = SCREEN_RIDE_DASH;
+    g_telemetry.is_locked = Settings.get().pin_lock_enabled;
+    if (g_telemetry.is_locked) {
+        g_telemetry.pin_entry[0] = '\0';
+        g_telemetry.pin_error = false;
+        ModeManager::instance().setLocked(true);
+    } else {
+        ModeManager::instance().setLocked(false);
+        Renderer.triggerNeedleSweep();
+    }
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    printf("[SIM_BACKEND] Setup Wizard BYPASS triggered -> Screen: RIDE_DASH, Locked: %s\n",
+           g_telemetry.is_locked ? "YES" : "NO");
+}
+
+void sim_toggle_setup_wizard() {
+    if (!g_telemetry.setup_completed || g_telemetry.screen == SCREEN_SETUP_WIZARD) {
+        sim_bypass_setup_wizard();
+    } else {
+        sim_reset_setup_wizard();
+    }
 }
 
 void sim_toggle_charging() {

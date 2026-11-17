@@ -255,6 +255,8 @@ void DashboardRenderer::skipBootAnimation() {
         _boot_anim_active = false;
         _boot_anim_phase = 3;
         _pin_screen_drawn = false;
+        _wizard_inited = false;
+        _last_wizard_step = -1;
         _screen_dirty = true;
         _cache.invalidate();
     }
@@ -266,8 +268,8 @@ void DashboardRenderer::setBootAnimElapsed(uint32_t elapsed_ms) {
 }
 
 void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms) {
-    if (elapsed_ms < 1500) {
-        // Phase 1 (0.0s..1.5s): Display the logo centered on pure black background
+    if (elapsed_ms < 2250) {
+        // Phase 1 (0.0s..2.25s): Display the logo centered on pure black background
         if (_boot_anim_phase != 1) {
             _boot_anim_phase = 1;
             _boot_log_lines_drawn = 0;
@@ -277,8 +279,8 @@ void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms) {
             _canvas->pushImage(lx, ly, BOOT_LOGO_WIDTH, BOOT_LOGO_HEIGHT, boot_logo_rgb565);
         }
     } else {
-        // Phase 2 (1.5s..2.5s): Clear screen to pure black, render Option 1 console log from top-left (x=24, y=32)
-        uint32_t p2_ms = elapsed_ms - 1500;
+        // Phase 2 (2.25s..3.25s): Clear screen to pure black, render Option 1 console log from top-left (x=24, y=32)
+        uint32_t p2_ms = elapsed_ms - 2250;
         if (_boot_anim_phase != 2) {
             _boot_anim_phase = 2;
             _boot_log_lines_drawn = 0;
@@ -406,14 +408,16 @@ void DashboardRenderer::triggerNeedleSweep() {
 
 // Top-Level Screen Dispatcher
 void DashboardRenderer::render(const DashTelemetry &telemetry) {
-    // 0. Boot Animation Sequence (Phase 1: 0.0s..1.5s Logo, Phase 2: 1.5s..2.5s Console, Phase 3: >=2.5s PIN Lock)
+    // 0. Boot Animation Sequence (Phase 1: 0.0s..2.25s Logo, Phase 2: 2.25s..3.25s Console, Phase 3: >=3.25s PIN Lock / Setup Wizard)
     if (_boot_anim_active) {
         uint32_t now = millis();
         uint32_t elapsed_ms = now - _boot_anim_start_ms;
-        if (elapsed_ms >= 2500) {
+        if (elapsed_ms >= 3250) {
             _boot_anim_active = false;
             _boot_anim_phase = 3;
             _pin_screen_drawn = false;
+            _wizard_inited = false;
+            _last_wizard_step = -1;
             _screen_dirty = true;
             _cache.invalidate();
         } else {
@@ -493,7 +497,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
     // 4. Dispatch Screen Rendering
     switch (_active_screen) {
         case SCREEN_RIDE_DASH:
-            if (_screen_dirty) {
+            if (_screen_dirty || !_hyper_inited) {
                 _canvas->fillScreen(COLOR_BG);
                 initRideDashboard(telemetry);
                 _screen_dirty = false;
@@ -596,6 +600,9 @@ void DashboardRenderer::initRideDashboard(const DashTelemetry &telemetry) {
 }
 
 void DashboardRenderer::renderRideDashboard(const DashTelemetry &telemetry) {
+    if (!_hyper_inited) {
+        initHyper35kwStyle(telemetry);
+    }
     renderHyper35kwStyle(telemetry);
     if (telemetry.fault_code != 0) {
         drawFaultBanner(telemetry.fault_code);
@@ -974,7 +981,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->setTextSize(1);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setTextColor(spdCol, COLOR_BG);
-        _canvas->setTextPadding(140);
+        _canvas->setTextPadding(160);
         _canvas->drawString(spdBuf, cx, 195);
         _canvas->setTextPadding(0);
     }

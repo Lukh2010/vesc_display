@@ -224,25 +224,19 @@ void GpsTracker::update(DashTelemetry &telemetry) {
 
     // --------------------------------------------------------------------------
     // SPEED PRIORITY SELECTOR:
-    // If GPS has a valid 3D fix and received data in the last 2.5 seconds:
-    // -> GPS Ground Speed has 100% PRIORITY!
-    // If satellite reception is lost (tunnel, indoors, searching):
-    // -> Smoothly fallback to VESC motor-calculated speed!
+    // Decoupled from GPS! telemetry.speed_kmh is ALWAYS driven directly by
+    // VESC motor ERPM / wheel speed (0ms latency).
+    // GPS speed remains in telemetry.gps.speed_kmh for Dragy/Race Timer logs
+    // and is only used as a fallback if VESC is disconnected (!telemetry.vesc_connected).
     // --------------------------------------------------------------------------
     bool has_gps_fix = (telemetry.gps.valid && telemetry.gps.satellites >= 4 &&
                         (now - telemetry.gps.last_fix_ms < 2500));
 
-    if (has_gps_fix) {
+    if (!telemetry.vesc_connected && has_gps_fix) {
         telemetry.use_gps_speed = true;
         telemetry.speed_kmh = telemetry.gps.speed_kmh;
     } else {
         telemetry.use_gps_speed = false;
-#if !SIMULATION_MODE
-        // Fallback to VESC motor speed if available, or keep existing speed
-        if (telemetry.vesc_motor_speed > 0.0f) {
-            telemetry.speed_kmh = telemetry.vesc_motor_speed;
-        }
-#endif
     }
 
     // --------------------------------------------------------------------------
