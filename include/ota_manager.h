@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-#if !defined(NATIVE_SIMULATOR) && !defined(SIMULATION_MODE)
+#if !defined(NATIVE_SIMULATOR)
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Update.h>
@@ -37,7 +37,7 @@ private:
     size_t _total_bytes;
     char _status_text[64];
 
-#if !defined(NATIVE_SIMULATOR) && !defined(SIMULATION_MODE)
+#if !defined(NATIVE_SIMULATOR)
     WebServer _server;
     void setupRoutes();
 #endif

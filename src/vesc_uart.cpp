@@ -424,8 +424,27 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
 
         static uint8_t s_primary_vesc_id = VESC_CAN_ID_DEFAULT;
-        bool is_primary = (controller_id == 76 || (controller_id == s_primary_vesc_id && s_primary_vesc_id != 0));
-        bool is_secondary = (!is_primary && (controller_id == 1 || controller_id == 77));
+        static bool s_has_primary = false;
+        static bool s_has_76 = false;
+        static bool s_first_frame_logged = false;
+
+        if (!s_first_frame_logged) {
+            s_first_frame_logged = true;
+            Serial.printf("[VESC_CAN] First frame RX -> ID: %u, Cmd: %u, DLC: %u\n", controller_id, cmd_id, msg.data_length_code);
+        }
+
+        if (controller_id == 76) {
+            s_has_76 = true;
+            s_primary_vesc_id = 76;
+            s_has_primary = true;
+        } else if (!s_has_76 && !s_has_primary && controller_id != 77) {
+            s_primary_vesc_id = controller_id;
+            s_has_primary = true;
+            Serial.printf("[VESC_CAN] Auto-detected primary VESC ID: %u\n", s_primary_vesc_id);
+        }
+
+        bool is_primary = (controller_id == s_primary_vesc_id);
+        bool is_secondary = (!is_primary && (controller_id == 77 || (s_primary_vesc_id == 76 && controller_id == 1) || (s_primary_vesc_id == 1 && controller_id == 2)));
 
         if (cmd_id == 9 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS
             int32_t erpm = (int32_t)(((uint32_t)msg.data[0] << 24) |
