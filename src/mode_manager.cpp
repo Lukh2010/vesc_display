@@ -59,12 +59,12 @@ void ModeManager::setFactoryDefaults() {
     _config.tuned_modes[PROFILE_MODE_SPORT].max_battery_amps = 60.0f;
     _config.tuned_modes[PROFILE_MODE_SPORT].max_phase_amps   = 120.0f;
 
-    // 2: Tuned RACE (Full Performance 85+ km/h Output)
-    _config.tuned_modes[PROFILE_MODE_RACE].max_speed_kmh    = 85.0f;
-    _config.tuned_modes[PROFILE_MODE_RACE].max_power_watts  = 15000.0f;
-    _config.tuned_modes[PROFILE_MODE_RACE].max_pull_watts   = 25000.0f;
-    _config.tuned_modes[PROFILE_MODE_RACE].max_battery_amps = 60.0f;
-    _config.tuned_modes[PROFILE_MODE_RACE].max_phase_amps   = 140.0f;
+    // 2: Tuned RACE (Full Performance 100+ km/h Output - Komplett Offen)
+    _config.tuned_modes[PROFILE_MODE_RACE].max_speed_kmh    = 100.0f;
+    _config.tuned_modes[PROFILE_MODE_RACE].max_power_watts  = 25000.0f;
+    _config.tuned_modes[PROFILE_MODE_RACE].max_pull_watts   = 35000.0f;
+    _config.tuned_modes[PROFILE_MODE_RACE].max_battery_amps = 80.0f;
+    _config.tuned_modes[PROFILE_MODE_RACE].max_phase_amps   = 150.0f;
 
     // Global parameters
     _config.throttle_curve       = 0;     // 0 = Linear
@@ -229,9 +229,12 @@ void ModeManager::setBoostActive(bool enable) {
     if (_boost_active != enable) {
         _boost_active = enable;
         _limits_dirty = true;
-        Serial.printf("[MODE_MGR] Hyper Boost switched to: %s -> Battery Limit: %.1f A\n",
-                      enable ? "ON (70A)" : "OFF (60A)",
-                      enable ? 70.0f : 60.0f);
+        ModeLimits lim = getActiveLimits();
+        Serial.printf("[MODE_MGR] Hyper Boost switched to: %s -> Battery: %.1f A, Phase: %.1f A, Speed: %s\n",
+                      enable ? "ON" : "OFF",
+                      lim.max_battery_amps,
+                      lim.max_phase_amps,
+                      lim.max_speed_kmh >= 100.0f ? "UNLIMITED (KOMPLETT OFFEN)" : "LIMITED");
         applyLimitsToVesc();
     }
 }
@@ -279,19 +282,37 @@ ModeLimits ModeManager::getActiveLimits() const {
     }
 
     if (_boost_active) {
-        // Boost requested by user: exactly 70A battery current (statt 60A)
-        lim.max_battery_amps = 70.0f;
-        if (lim.max_phase_amps < 140.0f) {
-            lim.max_phase_amps = 140.0f;
-        }
-        if (lim.max_power_watts < 4000.0f) {
-            lim.max_power_watts = 4000.0f;
+        if (_ride_mode == MODE_RACE) {
+            // RACE + BOOST: KOMPLETT OFFEN!
+            // Volle Ubox 100100 Hardware-Kapazität, ERPM unbegrenzt, keine Leistungsdrossel
+            lim.max_speed_kmh = 100.0f;     // Unbegrenzt (VESC ERPM 100k)
+            lim.max_battery_amps = 100.0f;  // Volle 100A Ubox 100100 Dauer-/Peak-Strom
+            lim.max_phase_amps = 180.0f;    // Maximales Drehmoment
+            lim.max_power_watts = 35000.0f; // Volle 35 kW Spitzenleistung freigegeben
+            lim.max_pull_watts = 35000.0f;
+        } else {
+            // Normal Boost in SPORT / ECO: 70A Batterie, 140A Phase, 4000W
+            lim.max_battery_amps = 70.0f;
+            if (lim.max_phase_amps < 140.0f) {
+                lim.max_phase_amps = 140.0f;
+            }
+            if (lim.max_power_watts < 4000.0f) {
+                lim.max_power_watts = 4000.0f;
+            }
         }
     } else if (_tuning_mode) {
-        // Normal tuned mode: 60A battery current (statt 60A -> 70A)
-        lim.max_battery_amps = 60.0f;
-        if (lim.max_phase_amps < 120.0f) {
-            lim.max_phase_amps = 120.0f;
+        if (_ride_mode == MODE_RACE) {
+            // Normal RACE Modus (ohne Boost): bereits aggressiv und offen
+            lim.max_speed_kmh = 100.0f;
+            if (lim.max_battery_amps < 80.0f) lim.max_battery_amps = 80.0f;
+            if (lim.max_phase_amps < 150.0f) lim.max_phase_amps = 150.0f;
+            if (lim.max_power_watts < 25000.0f) lim.max_power_watts = 25000.0f;
+        } else {
+            // Normal tuned mode SPORT: 60A Batterie, 120A Phase
+            lim.max_battery_amps = 60.0f;
+            if (lim.max_phase_amps < 120.0f) {
+                lim.max_phase_amps = 120.0f;
+            }
         }
     }
 

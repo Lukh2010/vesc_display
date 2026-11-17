@@ -882,13 +882,21 @@ void testModeManagerAndLegalProfiles() {
     ModeLimits tSportLim = ModeManager::instance().getActiveLimits();
     assert(tSportLim.max_speed_kmh == 55.0f);
 
-    // RACE
+    // RACE + BOOST (Komplett Offen: 100A Bat, 180A Phase, 35kW, Speed unbegrenzt)
     ModeManager::instance().setRideMode(MODE_RACE);
     ModeLimits tRaceLim = ModeManager::instance().getActiveLimits();
     assert(tRaceLim.max_speed_kmh >= 85.0f);
     assert(strcmp(ModeManager::instance().getActiveModeName(), "RACE") == 0);
 
-    printf("[PASS] Tuned Mode unlocked limits verified: ECO 35 km/h, SPORT 55 km/h, RACE 85+ km/h.\n");
+    ModeManager::instance().setBoostActive(true);
+    ModeLimits boostRaceLim = ModeManager::instance().getActiveLimits();
+    assert(boostRaceLim.max_battery_amps == 100.0f);
+    assert(boostRaceLim.max_phase_amps == 180.0f);
+    assert(boostRaceLim.max_power_watts == 35000.0f);
+    assert(boostRaceLim.max_speed_kmh == 100.0f);
+    ModeManager::instance().setBoostActive(false);
+
+    printf("[PASS] Tuned Mode unlocked limits verified: ECO 35 km/h, SPORT 55 km/h, RACE 100 km/h (Boost: 100A/180A/35kW Komplett Offen).\n");
 
     // 3. System Lock (Item 7 Immobilizer)
     ModeManager::instance().setLocked(true);
@@ -1558,21 +1566,18 @@ void testKeylessGoAndProximityAutoLock() {
     assert(ModeManager::instance().isLocked() == false);
     printf("[PASS] 5. Safety Invariant: Auto-Lock strictly prevented while moving (speed >= 0.5 km/h).\n");
 
-    // 6. Settings Menu Tab 5 Touch Controls (Clean 2-button layout: Button 1 Unpair/Pair, Button 2 Auto-Lock)
+    // 6. Settings Menu Tab 5 Touch Controls (Clean PIN-Wegfahrsperre Toggle)
     t.screen = SCREEN_SETTINGS_MENU;
     Renderer.setSettingsTab(5);
 
-    // Toggle Auto-Lock (Button 2 at 600, 335)
-    bool prev_al = Settings.get().ble_autolock_enabled;
-    Renderer.handleSettingsTouch(600, 335, t);
-    assert(Settings.get().ble_autolock_enabled == !prev_al);
-    Settings.get().ble_autolock_enabled = prev_al;
+    // Toggle PIN-Sperre (Button at 600, 160)
+    bool prev_pin_en = Settings.get().pin_lock_enabled;
+    Renderer.handleSettingsTouch(600, 160, t);
+    assert(Settings.get().pin_lock_enabled == !prev_pin_en);
+    Settings.get().pin_lock_enabled = prev_pin_en;
     Settings.save();
 
-    // Unpair device (Button 1 at 100, 335)
-    Renderer.handleSettingsTouch(100, 335, t);
-    assert(Settings.get().ble_paired == false);
-    printf("[PASS] 6. Settings Tab 5 Keyless toggles and Unpair touch handling verified.\n");
+    printf("[PASS] 6. Settings Tab 5 PIN-Wegfahrsperre toggle touch handling verified.\n");
 
     printf("=== All Keyless-Go BLE & Proximity Auto-Lock Unit Tests PASSED! ===\n\n");
 }
@@ -2608,19 +2613,7 @@ int main(int argc, char **argv) {
     printf("[PASS] Wizard Step 2 PIN entry & storage ('5678') verified.\n");
 
     // ----------------------------------------------------
-    // Scenario 23b: First-Time Setup Wizard (Step 3 - Keyless-Go BLE Setup)
-    // ----------------------------------------------------
-    t.ble_pairing_active = true;
-    Renderer.markScreenDirty();
-    renderAndSave("23b_setup_wizard_step3_keyless", t);
-
-    // Continue to Step 4 (Hardware Features)
-    Renderer.handleWizardTouch(400, 396, t); // Continue
-    assert(t.wizard_step == 3);
-    printf("[PASS] Wizard Step 3 Keyless-Go setup & transition to Step 4 verified.\n");
-
-    // ----------------------------------------------------
-    // Scenario 24: First-Time Setup Wizard (Step 4 - Feature Toggles)
+    // Scenario 24: First-Time Setup Wizard (Step 3 - Feature Toggles)
     // ----------------------------------------------------
     Renderer.markScreenDirty();
     renderAndSave("24_setup_wizard_step3_features", t);
@@ -2629,7 +2622,7 @@ int main(int argc, char **argv) {
     Renderer.handleWizardTouch(400, 406, t); // [ SETUP ABSCHLIESSEN & STARTEN ]
     assert(t.setup_completed == true);
     assert(t.screen == SCREEN_RIDE_DASH);
-    printf("[PASS] Wizard Step 4 completion & switch to SCREEN_RIDE_DASH verified.\n");
+    printf("[PASS] Wizard Step 3 completion & switch to SCREEN_RIDE_DASH verified.\n");
 
     // ----------------------------------------------------
     // Scenario 25: Minimal Dashboard with GPS & G-Force Disabled
