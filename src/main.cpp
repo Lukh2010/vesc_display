@@ -123,6 +123,7 @@ void setup() {
 
     // 7. Initialize Renderer
     Renderer.begin(&Display);
+    Renderer.triggerBootAnimation();
     if (!Settings.get().pin_lock_enabled) {
         Renderer.triggerNeedleSweep();
     }
@@ -349,8 +350,25 @@ void loop() {
     Buttons.update();
     Renderer.updateRaceTimer(telemetry, now);
 
-    // PIN Lockscreen Input Processing (when locked)
-    if (telemetry.is_locked) {
+    // Boot Animation Screen Tap Handling: Instantly skips Phase 1 or 2 to PIN lockscreen
+    static uint32_t s_boot_skip_ms = 0;
+    if (Renderer.isBootAnimActive()) {
+        int16_t tx = -1, ty = -1;
+        if (Buttons.getLastTap(&tx, &ty) || Buttons.isTouching()) {
+            Renderer.skipBootAnimation();
+            Buttons.clearNavAction();
+            s_boot_skip_ms = now;
+            Serial.println("[BOOT] Screen tapped during boot animation -> Transitioned to PIN lockscreen.");
+        }
+    } else if (s_boot_skip_ms != 0 && now - s_boot_skip_ms < 300) {
+        // Discard any residual tap from the boot skip touch so it doesn't trigger a PIN keypad button
+        int16_t dummy_x, dummy_y;
+        Buttons.getLastTap(&dummy_x, &dummy_y);
+        Buttons.clearNavAction();
+    }
+
+    // PIN Lockscreen Input Processing (when locked and boot animation finished)
+    if (telemetry.is_locked && !Renderer.isBootAnimActive()) {
         if (telemetry.pin_error) {
             if (millis() >= telemetry.pin_error_end_ms) {
                 telemetry.pin_error = false;
@@ -552,7 +570,7 @@ void loop() {
     }
 
     NavAction nav = Buttons.getNavAction();
-    if (telemetry.is_locked && nav != NAV_PIN_EMERGENCY_RESET) {
+    if ((telemetry.is_locked || Renderer.isBootAnimActive()) && nav != NAV_PIN_EMERGENCY_RESET) {
         nav = NAV_NONE;
     }
 

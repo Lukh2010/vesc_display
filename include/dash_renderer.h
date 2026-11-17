@@ -13,6 +13,15 @@ public:
     void render(const DashTelemetry &telemetry);
     void triggerNeedleSweep();
     bool isSweeping() const { return _is_sweeping; }
+
+    // Boot Animation Logic
+    void triggerBootAnimation();
+    bool isBootAnimActive() const { return _boot_anim_active; }
+    void skipBootAnimation();
+    uint8_t getBootAnimPhase() const { return _boot_anim_phase; }
+    void setBootAnimElapsed(uint32_t elapsed_ms);
+    void renderBootAnimation(uint32_t elapsed_ms);
+
     void markScreenDirty() { _screen_dirty = true; }
     void markMenuDirty() { _menu_dirty = true; }
     void invalidateCache() {
@@ -356,6 +365,12 @@ private:
     float    _last_race_split_0_50;
     float    _last_race_split_0_70;
     int      _last_race_g_force_x10;
+
+    // Boot Animation State
+    bool     _boot_anim_active;
+    uint8_t  _boot_anim_phase; // 0=idle/done, 1=Phase 1 (Logo), 2=Phase 2 (Console), 3=Complete (transitioning to PIN)
+    uint32_t _boot_anim_start_ms;
+    uint8_t  _boot_log_lines_drawn;
 };
 
 extern DashboardRenderer Renderer;
