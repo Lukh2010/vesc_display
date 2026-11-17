@@ -1327,11 +1327,14 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         max_phase_amps = 0.0f;
         max_speed_kmh = 0.0f;
     } else {
-        if (max_speed_kmh > 0.0f && max_speed_kmh < 150.0f) {
+        // Speeds >= 100 km/h represent "Komplett Offen" (unlimited ERPM 100.000)
+        if (max_speed_kmh > 0.0f && max_speed_kmh < 100.0f) {
             float wheel_rpm = (max_speed_kmh * 1000.0f / 60.0f) / wheel_circ_m;
             float mech_rpm = wheel_rpm * gear_ratio;
             max_erpm = mech_rpm * (float)pole_pairs;
             if (max_erpm < 500.0f) max_erpm = 500.0f;
+        } else {
+            max_erpm = 100000.0f; // Vollständig unbegrenzt (keine ERPM Drossel)
         }
 
         // Sanity clamp power and currents for active driving
