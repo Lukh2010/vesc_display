@@ -19,6 +19,7 @@
 #include "fault_manager.h"
 #include "gps_tracker.h"
 #include "ble_keyless_manager.h"
+#include "ota_manager.h"
 #include "virtual_vesc/virtual_vesc.h"
 #include "virtual_vesc/vesc_tcp_server.h"
 
@@ -2776,6 +2777,19 @@ int main(int argc, char **argv) {
     Renderer.markScreenDirty();
     renderAndSave("34_settings_pin_and_keyless", t);
     printf("[PASS] Scenario 34: Settings PIN & Keyless-Go rendered and saved.\n");
+
+    // ----------------------------------------------------
+    // Scenario 35: Wireless OTA Firmware Update Progress HUD
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    OtaManager::instance().setSimProgress(true, 68);
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("35_wireless_ota_progress", t);
+    assert(OtaManager::instance().isUpdating() == true);
+    assert(OtaManager::instance().getProgressPct() == 68);
+    OtaManager::instance().setSimProgress(false, 0);
+    printf("[PASS] Scenario 35: Wireless OTA Firmware Update Progress HUD rendered and saved.\n");
 
     // Reset default theme
     Settings.get().color_theme = THEME_CYBER_CYAN;

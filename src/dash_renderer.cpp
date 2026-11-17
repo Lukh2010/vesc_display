@@ -3,6 +3,7 @@
 #include "vesc_uart.h"
 #include "fault_manager.h"
 #include "mode_manager.h"
+#include "ota_manager.h"
 #include <math.h>
 #include <lgfx/Fonts/GFXFF/FreeSansBold24pt7b.h>
 #include <lgfx/Fonts/GFXFF/FreeSansBold18pt7b.h>
@@ -323,6 +324,9 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
     // 0. First-Time Setup Wizard takes precedence on first boot (bypasses PIN lockscreen)
     if (!telemetry.setup_completed && telemetry.screen == SCREEN_SETUP_WIZARD) {
         // Fall through to screen dispatch
+    } else if (OtaManager::instance().isUpdating()) {
+        renderOtaScreen(OtaManager::instance().getProgressPct(), OtaManager::instance().getStatusText());
+        return;
     } else if (telemetry.is_locked || ModeManager::instance().isLocked()) {
         renderPinLockScreen(telemetry);
         return;
@@ -2911,16 +2915,17 @@ void DashboardRenderer::initWifiBridgeScreen(const DashTelemetry &telemetry) {
     drawRow("Verschluesselung:", "Offen (Kein PIN)", COLOR_GREEN);
     drawRow("WLAN-Frequenz:", "2.4 GHz SoftAP", COLOR_WHITE);
 
-    // Small info box inside left card
+    // Small info box inside left card: Wireless VESC-Tool & OTA Flasher
     _canvas->fillRoundRect(34, 304, 342, 65, 8, 0x0821);
     _canvas->drawRoundRect(34, 304, 342, 65, 8, 0x18E3);
     _canvas->setFont(&fonts::Font0);
     _canvas->setTextDatum(textdatum_t::top_left);
     _canvas->setTextColor(COLOR_CYAN, 0x0821);
-    _canvas->drawString("DRAHTLOS-PROGRAMMIERUNG:", 44, 312);
+    _canvas->drawString("KABELLOSES FLASHEN & PROGRAMMIEREN:", 44, 312);
+    _canvas->setTextColor(COLOR_WHITE, 0x0821);
+    _canvas->drawString("Web: http://192.168.4.1/update", 44, 328);
     _canvas->setTextColor(COLOR_MUTED_GRAY, 0x0821);
-    _canvas->drawString("Ermoeglicht kabellose VESC-Tool Verbindung", 44, 330);
-    _canvas->drawString("fuer Mobile App & PC ohne USB-Kabel.", 44, 348);
+    _canvas->drawString("VESC-Tool TCP: 6510 | OTA CLI: 3232", 44, 346);
 
     // 3. Right Card: VESC Tool Client Connection & Traffic Throughput (w=370, h=315)
     drawCard(410, 68, 370, 315, COLOR_SURFACE, COLOR_BORDER);
@@ -4356,4 +4361,59 @@ void DashboardRenderer::renderChargingScreen(const DashTelemetry &telemetry) {
         _canvas->setTextColor(COLOR_MUTED_GRAY, 0x0823);
         _canvas->drawString(capBuf, 400, 436);
     }
+}
+
+// ==============================================================================
+// SCREEN 9: WIRELESS OTA FIRMWARE UPDATE PROGRESS HUD (800x480 Optimized)
+// ==============================================================================
+void DashboardRenderer::renderOtaScreen(int pct, const char *status) {
+    _canvas->fillScreen(COLOR_BG);
+
+    // Glowing Header Banner
+    _canvas->fillRoundRect(40, 24, 720, 56, 14, 0x0188); // Dark Cyan
+    _canvas->drawRoundRect(40, 24, 720, 56, 14, COLOR_CYAN);
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_WHITE, 0x0188);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->drawString("FIRMWARE UPDATE VIA WLAN (OTA)", 400, 52);
+
+    // Main Card (w=720, h=330)
+    drawCard(40, 96, 720, 330, COLOR_SURFACE, COLOR_BORDER);
+
+    // Warning Badge (Red Glowing outline)
+    _canvas->fillRoundRect(160, 118, 480, 40, 10, 0x3800); // Deep Dark Red
+    _canvas->drawRoundRect(160, 118, 480, 40, 10, COLOR_RED);
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_WHITE, 0x3800);
+    _canvas->setTextDatum(textdatum_t::middle_center);
+    _canvas->drawString("! BITTE FAHRZEUG NICHT AUSSCHALTEN !", 400, 138);
+
+    // Large Percentage
+    _canvas->setFont(&fonts::Font7);
+    _canvas->setTextColor((pct >= 100) ? COLOR_GREEN : COLOR_CYAN, COLOR_SURFACE);
+    char pctStr[16];
+    snprintf(pctStr, sizeof(pctStr), "%d %%", pct);
+    _canvas->drawString(pctStr, 400, 215);
+
+    // Large Progress Bar (600px wide, 26px high)
+    int barX = 100, barY = 270, barW = 600, barH = 26;
+    _canvas->fillRoundRect(barX, barY, barW, barH, 8, 0x0821);
+    _canvas->drawRoundRect(barX, barY, barW, barH, 8, COLOR_CYAN);
+    int fillW = (pct * (barW - 6)) / 100;
+    if (fillW > 0) {
+        _canvas->fillRoundRect(barX + 3, barY + 3, fillW, barH - 6, 6, (pct >= 100) ? COLOR_GREEN : COLOR_CYAN);
+    }
+
+    // Status Message
+    _canvas->setFont(&fonts::Font4);
+    _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
+    _canvas->drawString(status ? status : "Uebertrage Firmware...", 400, 330);
+
+    // Info Subtitle
+    _canvas->setFont(&fonts::Font2);
+    _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    _canvas->drawString("Dual-Bank Safe Flash: Altes System bleibt bei Abbruch unberuehrt", 400, 385);
+
+    // Flush to display
+    Display.pushCanvas();
 }
