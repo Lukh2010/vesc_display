@@ -661,6 +661,8 @@ void sim_init() {
         Renderer.triggerNeedleSweep();
     }
 
+    Renderer.triggerBootAnimation();
+
     g_initialized = true;
     printf("[SIM_BACKEND] Initialized Hyper-VESC 35kW+ (800x480) Cluster Simulator Engine.\n");
 }
@@ -700,8 +702,25 @@ void sim_step(uint32_t step_ms) {
     Buttons.update();
     Renderer.updateRaceTimer(g_telemetry, g_sim_uptime_ms);
 
-    // PIN Lockscreen Input Processing (when locked)
-    if (g_telemetry.is_locked) {
+    // Boot Animation Screen Tap Handling: Instantly skips Phase 1 or 2 to PIN lockscreen
+    static uint32_t s_sim_boot_skip_ms = 0;
+    if (Renderer.isBootAnimActive()) {
+        int16_t tx = -1, ty = -1;
+        if (Buttons.getLastTap(&tx, &ty) || Buttons.isTouching()) {
+            Renderer.skipBootAnimation();
+            Buttons.clearNavAction();
+            s_sim_boot_skip_ms = g_sim_uptime_ms;
+            printf("[SIM_BACKEND] Screen tapped during boot animation -> Transitioned to PIN lockscreen.\n");
+        }
+    } else if (s_sim_boot_skip_ms != 0 && g_sim_uptime_ms - s_sim_boot_skip_ms < 300) {
+        // Discard residual tap from the boot skip touch so it doesn't trigger a PIN keypad button
+        int16_t dummy_x, dummy_y;
+        Buttons.getLastTap(&dummy_x, &dummy_y);
+        Buttons.clearNavAction();
+    }
+
+    // PIN Lockscreen Input Processing (when locked and boot animation finished)
+    if (g_telemetry.is_locked && !Renderer.isBootAnimActive()) {
         if (g_telemetry.pin_error) {
             if (g_sim_uptime_ms >= g_telemetry.pin_error_end_ms) {
                 g_telemetry.pin_error = false;
@@ -1234,6 +1253,15 @@ void sim_touch_event(int is_down, int x, int y) {
 
     bool is_new_down = (is_down && !g_last_sim_touch_down);
     g_last_sim_touch_down = (is_down != 0);
+
+    // 00. Boot Animation Touch Handling: Tapping anywhere aborts animation directly to PIN lockscreen
+    if (Renderer.isBootAnimActive()) {
+        if (is_new_down) {
+            Renderer.skipBootAnimation();
+            printf("[SIM_BACKEND] Touch tap detected -> Boot animation skipped to PIN lockscreen.\n");
+        }
+        return;
+    }
 
     // 0a. Setup Wizard Touch Handling (when in SCREEN_SETUP_WIZARD)
     if (g_telemetry.screen == SCREEN_SETUP_WIZARD) {
@@ -2132,6 +2160,18 @@ void sim_toggle_turbine_sound() {
     Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
     Settings.save();
     printf("[SIM_BACKEND] Turbine Sound toggled: %s\n", Settings.get().turbine_sound_enabled ? "ENABLED" : "DISABLED");
+}
+
+void sim_trigger_boot_animation() {
+    Renderer.triggerBootAnimation();
+    if (Settings.get().pin_lock_enabled) {
+        g_telemetry.is_locked = true;
+        g_telemetry.pin_entry[0] = '\0';
+        g_telemetry.pin_error = false;
+        g_telemetry.pin_error_end_ms = 0;
+        ModeManager::instance().setLocked(true);
+    }
+    printf("[SIM_BACKEND] Boot animation triggered (Logo -> Diagnostics -> Lockscreen).\n");
 }
 
 } // extern "C"

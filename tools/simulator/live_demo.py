@@ -121,6 +121,7 @@ sim_lib.sim_set_theme.argtypes = [ctypes.c_int]
 sim_lib.sim_set_theme.restype = None
 sim_lib.sim_cycle_theme.restype = None
 sim_lib.sim_toggle_turbine_sound.restype = None
+sim_lib.sim_trigger_boot_animation.restype = None
 
 sim_lib.sim_get_frame_rgb24.argtypes = [ctypes.c_char_p]
 sim_lib.sim_get_frame_rgb24.restype = None
@@ -299,6 +300,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><kbd>C</kbd> <button onclick="fetch('/api/charging').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#10b981; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Laden (HUD)</button></span>
   <span><kbd>A</kbd> <button onclick="fetch('/api/theft_alarm').catch(()=>{})" style="background:#0f172a; border:1px solid #ef4444; color:#ef4444; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚨 Diebstahl-Alarm</button></span>
   <span><button onclick="fetch('/api/reset_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔄 Setup Wizard Reset</button></span>
+  <span><button onclick="fetch('/api/boot_animation').catch(()=>{})" style="background:#0f172a; border:1px solid #a855f7; color:#c084fc; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🎬 Boot Animation (Replay)</button></span>
   <span><a href="/portal" target="_blank" style="color:#00e5ff; text-decoration:underline; font-weight:bold;">⚙️ Captive Portal</a> (<a href="http://localhost:8081" target="_blank" style="color:#00e5ff;">Port 8081</a>)</span>
 </div>
 
@@ -403,6 +405,11 @@ HTML_PAGE = """<!DOCTYPE html>
         fetch('/api/brake?val=0');
       }
     }
+  });
+
+  window.addEventListener('load', () => {
+    // Automatically trigger boot animation when web UI opens
+    fetch('/api/boot_animation').catch(() => {});
   });
 </script>
 </body>
@@ -559,6 +566,14 @@ class WebDemoHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
 
+        elif path == "/api/boot_animation":
+            with sim_lock:
+                sim_lib.sim_trigger_boot_animation()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
         elif path == "/api/auto_mode":
             with sim_lock:
                 sim_lib.sim_toggle_auto_mode()
@@ -649,6 +664,15 @@ class WebDemoHandler(BaseHTTPRequestHandler):
             resp = {"status": "ok", "tuning_mode": bool(enable)}
             self.wfile.write(json.dumps(resp).encode("utf-8"))
 
+        elif path == "/api/boot_animation":
+            with sim_lock:
+                sim_lib.sim_trigger_boot_animation()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
         elif path == "/update":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -733,6 +757,15 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
             self.end_headers()
             resp = {"status": "ok", "tuning_mode": bool(enable)}
             self.wfile.write(json.dumps(resp).encode("utf-8"))
+        elif path == "/api/boot_animation":
+            with sim_lock:
+                sim_lib.sim_trigger_boot_animation()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
         elif path == "/update":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -825,6 +858,8 @@ class DesktopDemoApp:
         self.root.bind("<R>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
         self.root.bind("<Control-r>", lambda e: self.reset_wizard())
         self.root.bind("<F5>", lambda e: self.reset_wizard())
+        self.root.bind("<Control-b>", lambda e: self.trigger_boot_anim())
+        self.root.bind("<F6>", lambda e: self.trigger_boot_anim())
         self.root.bind("<Escape>", lambda e: self.on_esc_press())
 
         self.tk_img = ImageTk.PhotoImage(initial_image)
@@ -935,6 +970,10 @@ class DesktopDemoApp:
     def reset_wizard(self):
         with sim_lock:
             sim_lib.sim_reset_setup_wizard()
+
+    def trigger_boot_anim(self):
+        with sim_lock:
+            sim_lib.sim_trigger_boot_animation()
 
     def on_touch_down(self, event):
         self.touch_active = True
