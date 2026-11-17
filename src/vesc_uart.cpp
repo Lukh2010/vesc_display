@@ -269,7 +269,7 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     } else {
         telemetry.duty_cycle_pct = base_duty;
     }
-    if (telemetry.duty_cycle_pct > 118.0f) telemetry.duty_cycle_pct = 118.0f;
+    if (telemetry.duty_cycle_pct > 100.0f) telemetry.duty_cycle_pct = 100.0f;
     if (telemetry.duty_cycle_pct < 0.0f) telemetry.duty_cycle_pct = 0.0f;
 
     // RPM equivalent
@@ -450,7 +450,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 telemetry.vesc_motor_speed = v_spd;
                 telemetry.speed_kmh = v_spd;
                 telemetry.phase_amps = mot_i;
-                telemetry.duty_cycle_pct = duty;
+                telemetry.duty_cycle_pct = (duty > 100.0f) ? 100.0f : duty;
 
                 telemetry.vesc_connected = true;
                 s_last_can_rx_ms = now;
@@ -798,6 +798,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         telemetry.phase_amps     = fabsf(current_mot / 100.0f);
         telemetry.current_amps   = (float)current_in / 100.0f;
         telemetry.duty_cycle_pct = fabsf((float)duty_now / 10.0f);
+        if (telemetry.duty_cycle_pct > 100.0f) telemetry.duty_cycle_pct = 100.0f;
         int pole_pairs = Settings.get().motor_pole_pairs;
         if (pole_pairs < 2) pole_pairs = 15;
         telemetry.rpm            = fabsf((float)erpm / (float)pole_pairs);
@@ -864,6 +865,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         telemetry.phase_amps     = fabsf(current_mot / 100.0f);
         telemetry.current_amps   = (float)current_in / 100.0f;
         telemetry.duty_cycle_pct = fabsf((float)duty_now / 10.0f);
+        if (telemetry.duty_cycle_pct > 100.0f) telemetry.duty_cycle_pct = 100.0f;
         telemetry.voltage        = (v_in / 10.0f) + Settings.get().voltage_trim_v;
         if (telemetry.voltage < 0.0f) telemetry.voltage = 0.0f;
         telemetry.power_watts    = telemetry.voltage * telemetry.current_amps;
