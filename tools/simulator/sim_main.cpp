@@ -1622,12 +1622,12 @@ void testBootAnimation() {
     assert(Renderer.getBootAnimPhase() == 2);
     printf("[PASS] 2. Boot Animation Phase 2 (Diagnostic console logs at 2.35s and 3.15s) verified.\n");
 
-    // 4. Phase 3 (>=3.25s): Completion -> Transition to PIN Lockscreen / Setup Wizard
-    Renderer.setBootAnimElapsed(3250);
+    // 4. Phase 2 Waiting (>=3.25s): Remains waiting on screen until user tap (no auto-advancing!)
+    Renderer.setBootAnimElapsed(4000);
     Renderer.render(t);
-    assert(Renderer.isBootAnimActive() == false);
-    assert(Renderer.getBootAnimPhase() == 3);
-    printf("[PASS] 3. Boot Animation completion (elapsed >= 3.25s -> transition) verified.\n");
+    assert(Renderer.isBootAnimActive() == true);
+    assert(Renderer.getBootAnimPhase() == 2);
+    printf("[PASS] 3. Boot Animation waiting in Phase 2 (no auto-advance without click) verified.\n");
 
     // 5. Screen Tap Instant Skip during Phase 1
     Renderer.triggerBootAnimation();
@@ -1638,14 +1638,14 @@ void testBootAnimation() {
     assert(Renderer.getBootAnimPhase() == 3);
     printf("[PASS] 4. Boot Animation instant skip on tap (Phase 1) verified.\n");
 
-    // 6. Screen Tap Instant Skip during Phase 2
+    // 6. Screen Tap Instant Skip / Unlock during Phase 2
     Renderer.triggerBootAnimation();
     Renderer.setBootAnimElapsed(2600);
     assert(Renderer.isBootAnimActive() == true);
     Renderer.skipBootAnimation();
     assert(Renderer.isBootAnimActive() == false);
     assert(Renderer.getBootAnimPhase() == 3);
-    printf("[PASS] 5. Boot Animation instant skip on tap (Phase 2) verified.\n");
+    printf("[PASS] 5. Boot Animation transition on tap (Phase 2 -> Phase 3 PIN) verified.\n");
 
     printf("=== Boot Animation Unit Tests PASSED! ===\n\n");
 }
@@ -2832,6 +2832,8 @@ int main(int argc, char **argv) {
     // Scenario 37: Boot Animation - Phase 2 Diagnostic Console Log (3.0s)
     // ----------------------------------------------------
     setBaseTelemetry(t);
+    t.vesc_connected = true;
+    t.voltage = 53.4f;
     Renderer.triggerBootAnimation();
     Renderer.setBootAnimElapsed(3000);
     Renderer.invalidateCache();
@@ -2840,7 +2842,19 @@ int main(int argc, char **argv) {
     printf("[PASS] Scenario 37: Boot Animation Phase 2 Console rendered and saved.\n");
 
     // ----------------------------------------------------
-    // Scenario 38: Boot Animation - Phase 3 Transition to PIN Lockscreen (3.3s)
+    // Scenario 37b: Boot Animation - Phase 2 Waiting on VESC Link (Searching)
+    // ----------------------------------------------------
+    setBaseTelemetry(t);
+    t.vesc_connected = false;
+    Renderer.triggerBootAnimation();
+    Renderer.setBootAnimElapsed(2800);
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("37b_boot_animation_searching", t);
+    printf("[PASS] Scenario 37b: Boot Animation Phase 2 VESC Searching rendered and saved.\n");
+
+    // ----------------------------------------------------
+    // Scenario 38: Boot Animation - Phase 3 Transition to PIN Lockscreen on Tap
     // ----------------------------------------------------
     setBaseTelemetry(t);
     Settings.get().setup_completed = true;
@@ -2848,7 +2862,7 @@ int main(int argc, char **argv) {
     t.is_locked = true;
     t.screen = SCREEN_RIDE_DASH;
     Renderer.triggerBootAnimation();
-    Renderer.setBootAnimElapsed(3300);
+    Renderer.skipBootAnimation(); // Tap transitions from console to PIN lockscreen!
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("38_boot_animation_phase3_pin_lockscreen", t);
