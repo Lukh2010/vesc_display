@@ -82,11 +82,16 @@ class SimTelemetry(ctypes.Structure):
         ("turbine_freq", ctypes.c_float),
         ("turbine_volts", ctypes.c_float),
         ("brake_mode", ctypes.c_int32),
+        ("horn_active", ctypes.c_int32),
     ]
 
 sim_lib.sim_init.restype = None
 sim_lib.sim_step.argtypes = [ctypes.c_uint32]
 sim_lib.sim_step.restype = None
+
+sim_lib.sim_action_button_press.restype = None
+sim_lib.sim_action_button_release.restype = None
+sim_lib.sim_is_horn_active.restype = ctypes.c_int
 
 sim_lib.sim_touch_event.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
 sim_lib.sim_touch_event.restype = None
@@ -315,7 +320,8 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><button onclick="fetch('/api/turbine_sound').catch(()=>{})" style="background:#0f172a; border:1px solid #38bdf8; color:#38bdf8; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚀 Turbinensound (U)</button></span>
   <span><button onclick="fetch('/api/brake_mode').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#34d399; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🛑 Motorbremse / Freilauf (F)</button></span>
   <span><kbd>C</kbd> <button onclick="fetch('/api/charging').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#10b981; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Laden (HUD)</button></span>
-  <span><kbd>A</kbd> <button onclick="fetch('/api/theft_alarm').catch(()=>{})" style="background:#0f172a; border:1px solid #ef4444; color:#ef4444; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚨 Diebstahl-Alarm</button></span>
+  <span><kbd>A</kbd> <button id="btn-action" onmousedown="actionPress()" onmouseup="actionRelease()" onmouseleave="actionRelease()" ontouchstart="actionPress()" ontouchend="actionRelease()" style="background:#0f172a; border:1px solid #f59e0b; color:#fbbf24; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">📯 Action Button (Hold: Hupe / Tap: Police Mode)</button></span>
+  <span><button onclick="fetch('/api/theft_alarm').catch(()=>{})" style="background:#0f172a; border:1px solid #ef4444; color:#ef4444; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚨 Diebstahl-Alarm</button></span>
   <span><button onclick="fetch('/api/toggle_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Setup Wizard (W/S)</button></span>
   <span><button onclick="fetch('/api/emergency_unlock').catch(()=>{})" style="background:#0f172a; border:1px solid #eab308; color:#fde047; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔓 Emergency Unlock</button></span>
   <span><button onclick="fetch('/api/boot_animation').catch(()=>{})" style="background:#0f172a; border:1px solid #a855f7; color:#c084fc; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🎬 Boot Animation (Replay)</button></span>
@@ -378,7 +384,30 @@ HTML_PAGE = """<!DOCTYPE html>
   // Realistic Spring-Return Throttle & Controls
   let throttleHeld = false;
   let brakeHeld = false;
+  let actionHeld = false;
   let currentScreen = 0;
+
+  function actionPress() {
+    if (!actionHeld) {
+      actionHeld = true;
+      const b = document.getElementById('btn-action');
+      if (b) { b.style.background = '#f59e0b'; b.style.color = '#000'; }
+      fetch('/api/action_button_press').catch(()=>{});
+    }
+  }
+
+  function actionRelease() {
+    if (actionHeld) {
+      actionHeld = false;
+      const b = document.getElementById('btn-action');
+      if (b) { b.style.background = '#0f172a'; b.style.color = '#fbbf24'; }
+      fetch('/api/action_button_release').catch(()=>{});
+    }
+  }
+
+  window.addEventListener('mouseup', () => {
+    if (actionHeld) actionRelease();
+  });
 
   setInterval(() => {
     fetch('/api/status').then(r => r.json()).then(d => {
@@ -427,7 +456,7 @@ HTML_PAGE = """<!DOCTYPE html>
     } else if (e.key === 'v' || e.key === 'V') {
       fetch('/api/vesc_link?toggle=1');
     } else if (e.key === 'a' || e.key === 'A') {
-      fetch('/api/theft_alarm');
+      actionPress();
     }
   });
 
@@ -442,6 +471,8 @@ HTML_PAGE = """<!DOCTYPE html>
         brakeHeld = false;
         fetch('/api/brake?val=0');
       }
+    } else if (e.key === 'a' || e.key === 'A') {
+      actionRelease();
     }
   });
 
@@ -602,6 +633,22 @@ class WebDemoHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
 
+        elif path == "/api/action_button_press":
+            with sim_lock:
+                sim_lib.sim_action_button_press()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok","action":"press"}')
+
+        elif path == "/api/action_button_release":
+            with sim_lock:
+                sim_lib.sim_action_button_release()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok","action":"release"}')
+
         elif path == "/api/theme":
             id_val = params.get("id", [None])[0]
             with sim_lock:
@@ -703,9 +750,24 @@ class WebDemoHandler(BaseHTTPRequestHandler):
                     "avg_speed_kmh": current_telemetry.avg_speed_kmh,
                     "ride_time_sec": current_telemetry.ride_time_sec,
                     "tuning_mode": bool(current_telemetry.tuning_mode),
+                    "horn_active": bool(current_telemetry.horn_active),
                     "g_force": current_telemetry.g_force,
                     "brake_mode": current_telemetry.brake_mode,
                     "brake_mode_str": ["AUS / Freilauf", "MILD", "MAXIMAL"][current_telemetry.brake_mode if 0 <= current_telemetry.brake_mode <= 2 else 2],
+                }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(t).encode("utf-8"))
+
+        elif path == "/api/status":
+            with sim_lock:
+                t = {
+                    "screen": current_telemetry.screen,
+                    "tuning_mode": bool(current_telemetry.tuning_mode),
+                    "horn_active": bool(current_telemetry.horn_active),
+                    "speed": current_telemetry.speed_kmh,
                 }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

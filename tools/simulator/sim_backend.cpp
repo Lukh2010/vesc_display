@@ -109,6 +109,7 @@ struct SimTelemetryExport {
     float turbine_freq;
     float turbine_volts;
     int32_t brake_mode;
+    int32_t horn_active;
 };
 #pragma pack(pop)
 
@@ -1172,20 +1173,22 @@ void sim_step(uint32_t step_ms) {
                     g_telemetry.tuning_mode = false;
                     Buttons.setTuningMode(false);
                     ModeManager::instance().setTuningMode(false);
+                    g_telemetry.boost_active = false;
+                    ModeManager::instance().setBoostActive(false);
                     g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
                     if (g_telemetry.screen == SCREEN_RACE_TIMER) {
                         g_telemetry.screen = SCREEN_RIDE_DASH;
                         g_telemetry.race_state = 0;
                         g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
                         ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
-                        g_telemetry.boost_active = false;
                         g_telemetry.race_popup_open = false;
                         g_telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
                         Buttons.setRacePopupOpen(false);
                         Buttons.setRaceDynoOpen(false);
-                        Renderer.invalidateCache();
                     }
+                    ModeManager::instance().saveToNvs();
+                    Renderer.invalidateCache();
                     ensureZeroSpeedIfIdle();
                     Renderer.markScreenDirty();
                     break;
@@ -1537,7 +1540,9 @@ void sim_trigger_nav(int nav_action) {
                     Buttons.setRaceDynoOpen(false);
                 }
                 g_telemetry.screen = SCREEN_RT_GRAPHS;
+                Buttons.setActiveScreen(SCREEN_RT_GRAPHS);
                 Renderer.markScreenDirty();
+                Renderer.invalidateCache();
                 break;
             case NAV_SCREEN_RACE:
                 if (!g_telemetry.tuning_mode) {
@@ -1622,6 +1627,7 @@ void sim_trigger_nav(int nav_action) {
                     Buttons.setRaceDynoOpen(false);
                 }
                 g_telemetry.screen = SCREEN_RIDE_DASH;
+                Buttons.setActiveScreen(SCREEN_RIDE_DASH);
                 Renderer.markScreenDirty();
                 Renderer.invalidateCache();
                 break;
@@ -1638,6 +1644,9 @@ void sim_trigger_nav(int nav_action) {
                     Buttons.setRaceDynoOpen(false);
                 }
                 g_telemetry.screen = SCREEN_SETTINGS_MENU;
+                Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
+                Renderer.markScreenDirty();
+                Renderer.invalidateCache();
                 break;
             case NAV_BTN2_LONG:
                 s_sim_trip_km = 0.0f;
@@ -1669,21 +1678,24 @@ void sim_trigger_nav(int nav_action) {
                 g_telemetry.tuning_mode = false;
                 Buttons.setTuningMode(false);
                 ModeManager::instance().setTuningMode(false);
+                g_telemetry.boost_active = false;
+                ModeManager::instance().setBoostActive(false);
                 g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
                 if (g_telemetry.screen == SCREEN_RACE_TIMER) {
                     g_telemetry.screen = SCREEN_RIDE_DASH;
                     g_telemetry.race_state = 0;
                     g_telemetry.ride_mode = g_telemetry.saved_ride_mode;
                     ModeManager::instance().setRideMode(g_telemetry.saved_ride_mode);
-                    g_telemetry.boost_active = false;
                     g_telemetry.race_popup_open = false;
                     g_telemetry.race_dyno_open = false;
                     Buttons.setRaceState(0);
                     Buttons.setRacePopupOpen(false);
                     Buttons.setRaceDynoOpen(false);
-                    Renderer.invalidateCache();
                 }
+                ModeManager::instance().saveToNvs();
+                Renderer.invalidateCache();
                 ensureZeroSpeedIfIdle();
+                Renderer.markScreenDirty();
                 break;
             case NAV_MODE_CYCLE:
                 g_telemetry.ride_mode = (RideMode)(((int)g_telemetry.ride_mode + 1) % MODE_COUNT);
@@ -1925,6 +1937,7 @@ void sim_get_telemetry(SimTelemetryExport *out) {
     out->turbine_freq = g_telemetry.turbine_freq;
     out->turbine_volts = g_telemetry.turbine_volts;
     out->brake_mode = (int32_t)Settings.get().brake_mode;
+    out->horn_active = Buttons.isHornActive() ? 1 : 0;
 }
 
 void sim_get_config_json(char *out_buf, int max_len) {
@@ -2263,6 +2276,26 @@ void sim_trigger_boot_animation() {
         ModeManager::instance().setLocked(true);
     }
     printf("[SIM_BACKEND] Boot animation triggered (Logo -> Diagnostics -> Lockscreen).\n");
+}
+
+void sim_action_button_press() {
+    Buttons.actionButtonPress();
+    Buttons.update();
+    Renderer.markScreenDirty();
+}
+
+void sim_action_button_release() {
+    Buttons.actionButtonRelease();
+    Buttons.update();
+    NavAction nav = g_telemetry.is_locked ? NAV_NONE : Buttons.getNavAction();
+    if (nav != NAV_NONE) {
+        sim_trigger_nav((int)nav);
+    }
+    Renderer.markScreenDirty();
+}
+
+int sim_is_horn_active() {
+    return Buttons.isHornActive() ? 1 : 0;
 }
 
 } // extern "C"

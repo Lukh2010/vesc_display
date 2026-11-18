@@ -258,7 +258,7 @@ struct DashSettings {
           incline_gforce_enabled(true),
           wifi_bridge_enabled(false),
           setup_completed(false),
-          color_theme(0),
+          color_theme(THEME_CLEAN_ICE),
           turbine_sound_enabled(true),
           ble_keyless_enabled(true),
           ble_autolock_enabled(true),

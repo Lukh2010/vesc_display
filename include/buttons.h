@@ -58,6 +58,13 @@ public:
     void setRaceState(uint8_t state) { _race_state = state; }
     uint8_t getRaceState() const { return _race_state; }
 
+    // Action Button / FOC Horn & Police Mode Panic Lock
+    void setActionButton(bool is_down);
+    void actionButtonPress() { setActionButton(true); }
+    void actionButtonRelease() { setActionButton(false); }
+    bool isActionButtonDown() const { return _action_btn_down; }
+    bool isHornActive() const { return _horn_active; }
+
 private:
     DashboardScreen _active_screen;
     struct ButtonState {
@@ -105,8 +112,20 @@ private:
     bool        _race_dyno_open;
     uint8_t     _race_state;
 
+    // Action Button / Horn State
+    bool        _action_btn_down;
+    bool        _action_btn_sim_down;
+    bool        _action_btn_boot_raw;
+    bool        _action_btn_boot_down;
+    uint32_t    _action_btn_press_ms;
+    uint32_t    _action_btn_change_ms;
+    bool        _action_btn_held_fired;
+    bool        _horn_active;
+    uint32_t    _last_horn_ms;
+
     void processDebounce(ButtonState &btn, bool raw, uint32_t now);
     void processTouch(uint32_t now);
+    void checkActionButtonState(uint32_t now);
 };
 
 extern ButtonHandler Buttons;
