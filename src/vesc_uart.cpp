@@ -178,41 +178,11 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     if (dt <= 0.001f) return;
     _sim_last_update_ms = now;
 
-    static bool s_auto_drive = true;
-    static uint32_t s_cycle_start = 0;
-    if (s_cycle_start == 0) s_cycle_start = now;
-
     float sim_t = 0.0f;
     float sim_b = 0.0f;
 
     if (_sim_throttle > 0.01f) {
         sim_t = _sim_throttle;
-        s_auto_drive = false; // Manual serial or touch override
-    } else if (s_auto_drive && !ModeManager::instance().isLocked() && !telemetry.is_locked && telemetry.screen != SCREEN_SETUP_WIZARD) {
-        // Dynamic 38-second realistic demonstration drive cycle:
-        // 0..4s: Standstill / Idle at traffic light
-        // 4..16s: Smooth launch and acceleration up to ~65% throttle
-        // 16..26s: Fast cruising at ~50 km/h
-        // 26..31s: Rolling rollout / coasting
-        // 31..38s: Smooth regenerative braking (-750W green power arc!) down to 0 km/h
-        uint32_t t_mod = (now - s_cycle_start) % 38000;
-        if (t_mod < 4000) {
-            sim_t = 0.0f;
-            sim_b = 0.0f;
-        } else if (t_mod < 16000) {
-            float p = (float)(t_mod - 4000) / 12000.0f;
-            sim_t = 22.0f + (p * 50.0f); // 22% -> 72%
-            sim_b = 0.0f;
-        } else if (t_mod < 26000) {
-            sim_t = 52.0f; // Cruising
-            sim_b = 0.0f;
-        } else if (t_mod < 31000) {
-            sim_t = 0.0f;  // Coasting
-            sim_b = 0.0f;
-        } else {
-            sim_t = 0.0f;
-            sim_b = 38.0f; // Regen braking
-        }
     }
 
     // Check if vehicle is locked by boot PIN
@@ -246,14 +216,22 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
         // Regenerative braking deceleration
         float decel_k = 1.6f + (sim_b / 100.0f) * 4.2f;
         telemetry.speed_kmh -= decel_k * 9.81f * 3.6f * dt * 0.22f;
-        if (telemetry.speed_kmh < 0.2f) telemetry.speed_kmh = 0.0f;
+        if (telemetry.speed_kmh < 0.5f) telemetry.speed_kmh = 0.0f;
     } else if (sim_t > 0.01f) {
         // Accelerating
         telemetry.speed_kmh += (_target_speed - telemetry.speed_kmh) * (dt * 1.5f);
     } else {
         // Natural rolling resistance coasting
-        telemetry.speed_kmh -= 2.2f * dt;
-        if (telemetry.speed_kmh < 0.2f) telemetry.speed_kmh = 0.0f;
+        telemetry.speed_kmh -= 3.5f * dt;
+        if (telemetry.speed_kmh < 0.5f) telemetry.speed_kmh = 0.0f;
+    }
+    if (telemetry.speed_kmh <= 0.5f && sim_t <= 0.01f) {
+        telemetry.speed_kmh = 0.0f;
+        telemetry.current_amps = 0.0f;
+        telemetry.phase_amps = 0.0f;
+        telemetry.power_watts = 0.0f;
+        telemetry.duty_cycle_pct = 0.0f;
+        telemetry.rpm = 0.0f;
     }
     telemetry.vesc_motor_speed = telemetry.speed_kmh;
 
@@ -604,6 +582,13 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
 
     if (now - s_last_can_rx_ms > 1500) {
         telemetry.vesc_connected = false;
+        telemetry.speed_kmh = 0.0f;
+        telemetry.vesc_motor_speed = 0.0f;
+        telemetry.current_amps = 0.0f;
+        telemetry.phase_amps = 0.0f;
+        telemetry.power_watts = 0.0f;
+        telemetry.duty_cycle_pct = 0.0f;
+        telemetry.rpm = 0.0f;
     }
 
     if (now - s_last_can_diag_ms >= 2000) {
@@ -765,6 +750,16 @@ void VescHandler::pollRealVesc(DashTelemetry &telemetry) {
     if (rx_index > 0 && (now - last_rx_byte_ms > 150)) {
         rx_index = 0;
         telemetry.vesc_connected = false;
+    }
+    if (last_rx_byte_ms > 0 && (now - last_rx_byte_ms > 1500)) {
+        telemetry.vesc_connected = false;
+        telemetry.speed_kmh = 0.0f;
+        telemetry.vesc_motor_speed = 0.0f;
+        telemetry.current_amps = 0.0f;
+        telemetry.phase_amps = 0.0f;
+        telemetry.power_watts = 0.0f;
+        telemetry.duty_cycle_pct = 0.0f;
+        telemetry.rpm = 0.0f;
     }
 
     // Check on-demand MCCONF pull timeout

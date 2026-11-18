@@ -203,14 +203,17 @@ void GpsTracker::update(DashTelemetry &telemetry) {
         telemetry.gps.longitude = 13.4050;
         telemetry.gps.last_fix_ms = now;
 
-        // In simulator, GPS speed matches active test speed
-        telemetry.gps.speed_kmh = telemetry.speed_kmh;
-
         // Clock advances naturally
         uint32_t total_sec = (now / 1000) + (14 * 3600) + (35 * 60);
         telemetry.gps.hour = (total_sec / 3600) % 24;
         telemetry.gps.minute = (total_sec / 60) % 60;
         telemetry.gps.second = total_sec % 60;
+    }
+
+    // In simulator, GPS speed matches active motor/ground speed directly
+    telemetry.gps.speed_kmh = telemetry.vesc_motor_speed;
+    if (telemetry.vesc_motor_speed < 0.8f || !telemetry.vesc_connected) {
+        telemetry.gps.speed_kmh = 0.0f;
     }
 #endif
 
@@ -228,6 +231,7 @@ void GpsTracker::update(DashTelemetry &telemetry) {
 
     // --------------------------------------------------------------------------
     // SPEED PRIORITY SELECTOR (Smart Fusion):
+    // 0. VESC Offline: Wenn VESC getrennt ist, steht das Fahrzeug strikt auf 0 km/h
     // 1. Stillstand / Ampel: Steht das Rad (< 0.8 km/h), felsenfest 0 km/h (kein GPS-Drift).
     // 2. Rollenprüfstand / Dyno: Rad dreht sich (> 0.8 km/h), aber GPS steht (GPS < 1.0 km/h):
     //    Tacho zeigt 100% VESC-Wellengeschwindigkeit (11" kalibriert, strikt <= 22 km/h legal).
@@ -235,10 +239,19 @@ void GpsTracker::update(DashTelemetry &telemetry) {
     //    GPS Ground Speed hat absolute Priorität!
     // 4. Signalverlust / Tunnel: Nahtloser Fallback auf VESC-Wellengeschwindigkeit.
     // --------------------------------------------------------------------------
+    static bool s_using_gps = false;
+    if (!telemetry.vesc_connected) {
+        telemetry.speed_kmh = 0.0f;
+        telemetry.gps.speed_kmh = 0.0f;
+        telemetry.vesc_motor_speed = 0.0f;
+        s_using_gps = false;
+        telemetry.use_gps_speed = false;
+        return;
+    }
+
     bool has_gps_fix = (telemetry.gps.valid && telemetry.gps.satellites >= 4 &&
                         (now - telemetry.gps.last_fix_ms < 2500));
 
-    static bool s_using_gps = false;
     if (telemetry.vesc_motor_speed < 0.8f && (!has_gps_fix || telemetry.gps.speed_kmh < 1.2f)) {
         telemetry.speed_kmh = 0.0f;
         s_using_gps = false;

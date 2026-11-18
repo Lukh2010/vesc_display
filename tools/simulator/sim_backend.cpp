@@ -43,6 +43,7 @@ static float g_manual_throttle = 0.0f;
 static float g_manual_brake = 0.0f;
 static uint32_t g_sim_uptime_ms = 0;
 static auto g_last_frame_clock = std::chrono::steady_clock::now();
+static bool g_sim_vesc_link_enabled = true;
 
 static float s_sim_speed_kmh = 0.0f;
 static float s_sim_current_amps = 0.0f;
@@ -117,7 +118,7 @@ static float s_sim_incline_deg = 0.0f;
 
 static void ensureZeroSpeedIfIdle() {
     bool has_ext = g_virtual_vesc.hasExternalControl() && g_virtual_vesc.getExternalThrottle() > 0.01f;
-    if (s_sim_speed_kmh <= 0.5f && g_manual_throttle <= 0.01f && !has_ext) {
+    if ((s_sim_speed_kmh <= 0.8f && g_manual_throttle <= 0.01f && !has_ext) || !g_sim_vesc_link_enabled || !g_telemetry.vesc_connected) {
         s_sim_speed_kmh = 0.0f;
         s_sim_current_amps = 0.0f;
         s_sim_phase_amps = 0.0f;
@@ -125,6 +126,8 @@ static void ensureZeroSpeedIfIdle() {
         s_sim_duty_cycle_pct = 0.0f;
         s_sim_rpm = 0.0f;
         g_telemetry.speed_kmh = 0.0f;
+        g_telemetry.vesc_motor_speed = 0.0f;
+        g_telemetry.gps.speed_kmh = 0.0f;
         g_telemetry.power_watts = 0.0f;
         g_telemetry.current_amps = 0.0f;
         g_telemetry.phase_amps = 0.0f;
@@ -164,7 +167,7 @@ static void runSimulationStep(float dt) {
         }
     }
 
-    if (g_telemetry.is_locked) {
+    if (g_telemetry.is_locked || !g_sim_vesc_link_enabled || !g_telemetry.vesc_connected) {
         sim_t = 0.0f;
         s_sim_speed_kmh = 0.0f;
         s_sim_current_amps = 0.0f;
@@ -172,6 +175,15 @@ static void runSimulationStep(float dt) {
         s_sim_power_watts = 0.0f;
         s_sim_duty_cycle_pct = 0.0f;
         s_sim_rpm = 0.0f;
+        g_telemetry.speed_kmh = 0.0f;
+        g_telemetry.vesc_motor_speed = 0.0f;
+        g_telemetry.gps.speed_kmh = 0.0f;
+        g_telemetry.power_watts = 0.0f;
+        g_telemetry.current_amps = 0.0f;
+        g_telemetry.phase_amps = 0.0f;
+        g_telemetry.duty_cycle_pct = 0.0f;
+        g_telemetry.rpm = 0.0f;
+        g_telemetry.g_force = 0.0f;
 
         VirtualVescTelemetry vt;
         vt.temp_mos = s_sim_temp_fet_rear;
@@ -308,7 +320,7 @@ static void runSimulationStep(float dt) {
 
     } else {
         // Coasting / Ausrollen: Throttle released (sim_t == 0.0f)
-        if (s_sim_speed_kmh <= 0.2f) {
+        if (s_sim_speed_kmh <= 0.8f) {
             s_sim_speed_kmh = 0.0f;
             s_sim_current_amps = 0.0f;
             s_sim_phase_amps = 0.0f;
@@ -316,6 +328,8 @@ static void runSimulationStep(float dt) {
             s_sim_duty_cycle_pct = 0.0f;
             s_sim_rpm = 0.0f;
             g_telemetry.speed_kmh = 0.0f;
+            g_telemetry.vesc_motor_speed = 0.0f;
+            g_telemetry.gps.speed_kmh = 0.0f;
             g_telemetry.power_watts = 0.0f;
             g_telemetry.current_amps = 0.0f;
             g_telemetry.phase_amps = 0.0f;
@@ -324,15 +338,31 @@ static void runSimulationStep(float dt) {
             g_telemetry.g_force = 0.0f;
         } else {
             float v = s_sim_speed_kmh;
-            float drag_decel = (0.75f + (v / 100.0f) * (v / 100.0f) * 4.5f + v * 0.028f) * dt;
+            float drag_decel = (1.6f + (v / 100.0f) * (v / 100.0f) * 4.5f + v * 0.05f) * dt;
             s_sim_speed_kmh -= drag_decel;
-            if (s_sim_speed_kmh < 0.2f) s_sim_speed_kmh = 0.0f;
-
-            // Passive drag regen (mild back-EMF recuperation)
-            float coast_target_a = - (1.2f + (v / 100.0f) * 3.2f);
-            s_sim_current_amps += (coast_target_a - s_sim_current_amps) * (dt * 3.8f);
-            float coast_phase = fabsf(s_sim_current_amps) * 1.25f;
-            s_sim_phase_amps += (coast_phase - s_sim_phase_amps) * (dt * 3.8f);
+            if (s_sim_speed_kmh <= 0.8f) {
+                s_sim_speed_kmh = 0.0f;
+                s_sim_current_amps = 0.0f;
+                s_sim_phase_amps = 0.0f;
+                s_sim_power_watts = 0.0f;
+                s_sim_duty_cycle_pct = 0.0f;
+                s_sim_rpm = 0.0f;
+                g_telemetry.speed_kmh = 0.0f;
+                g_telemetry.vesc_motor_speed = 0.0f;
+                g_telemetry.gps.speed_kmh = 0.0f;
+                g_telemetry.power_watts = 0.0f;
+                g_telemetry.current_amps = 0.0f;
+                g_telemetry.phase_amps = 0.0f;
+                g_telemetry.duty_cycle_pct = 0.0f;
+                g_telemetry.rpm = 0.0f;
+                g_telemetry.g_force = 0.0f;
+            } else {
+                // Passive drag regen (mild back-EMF recuperation)
+                float coast_target_a = - (1.2f + (v / 100.0f) * 3.2f);
+                s_sim_current_amps += (coast_target_a - s_sim_current_amps) * (dt * 3.8f);
+                float coast_phase = fabsf(s_sim_current_amps) * 1.25f;
+                s_sim_phase_amps += (coast_phase - s_sim_phase_amps) * (dt * 3.8f);
+            }
         }
     }
 
@@ -496,6 +526,7 @@ static void runSimulationStep(float dt) {
     g_telemetry.battery_pct = vt.battery_pct;
     g_telemetry.trip_km = s_sim_trip_km;
     g_telemetry.odo_km = s_sim_odo_km;
+    ensureZeroSpeedIfIdle();
 }
 
 // -------------------------------------------------------------
@@ -1155,8 +1186,13 @@ void sim_step(uint32_t step_ms) {
     g_tcp_server.update(g_virtual_vesc);
 
     // Dashboard polls Virtual VESC, receives response packets, validates CRC, parses telemetry
-    Vesc.update(g_telemetry);
+    if (g_sim_vesc_link_enabled) {
+        Vesc.update(g_telemetry);
+    } else {
+        g_telemetry.vesc_connected = false;
+    }
     GpsTracker::instance().update(g_telemetry);
+    ensureZeroSpeedIfIdle();
     g_virtual_vesc.process();
     g_tcp_server.update(g_virtual_vesc);
 
@@ -1732,8 +1768,27 @@ void sim_set_auto_mode(int enable) {
 void sim_toggle_auto_mode() {
 }
 
+void sim_set_vesc_connected(int connected) {
+    g_sim_vesc_link_enabled = (connected != 0);
+    g_telemetry.vesc_connected = g_sim_vesc_link_enabled;
+    if (g_sim_vesc_link_enabled) {
+        Vesc.setTransport(&g_sim_transport.getSideA());
+    } else {
+        Vesc.setTransport(nullptr);
+        g_manual_throttle = 0.0f;
+        g_manual_brake = 0.0f;
+        s_sim_speed_kmh = 0.0f;
+        ensureZeroSpeedIfIdle();
+    }
+    Renderer.markScreenDirty();
+}
+
+void sim_toggle_vesc_connected() {
+    sim_set_vesc_connected(!g_sim_vesc_link_enabled);
+}
+
 void sim_set_manual_throttle(float throttle_pct) {
-    if (g_telemetry.is_locked) {
+    if (g_telemetry.is_locked || !g_sim_vesc_link_enabled || !g_telemetry.vesc_connected) {
         g_manual_throttle = 0.0f;
         return;
     }
