@@ -108,6 +108,7 @@ struct SimTelemetryExport {
     int32_t turbine_active;
     float turbine_freq;
     float turbine_volts;
+    int32_t brake_mode;
 };
 #pragma pack(pop)
 
@@ -258,28 +259,57 @@ static void runSimulationStep(float dt) {
     }
 
     // 2. Realistic Speed & Dynamic Powertrain Physics
+    uint8_t brake_mode = Settings.get().brake_mode;
     if (sim_b > 1.0f) {
-        // Active Braking: strong regenerative decelerating force
+        // Active Braking
         g_manual_throttle = 0.0f; // Safety throttle cutoff upon braking
-        float brake_norm = sim_b / 100.0f;
-        float decel = (6.0f + 28.0f * brake_norm) * dt;
-        s_sim_speed_kmh -= decel;
-        if (s_sim_speed_kmh < 0.2f) s_sim_speed_kmh = 0.0f;
+        if (brake_mode == 0) {
+            // brake_mode == 0 (AUS / FREILAUF): Pure mechanical/free coasting without back-EMF drag, NO electronic regen braking
+            float decel = 3.5f * dt;
+            s_sim_speed_kmh -= decel;
+            if (s_sim_speed_kmh < 0.2f) s_sim_speed_kmh = 0.0f;
+            s_sim_phase_amps = 0.0f;
+            s_sim_current_amps = 0.0f;
+        } else if (brake_mode == 1) {
+            // brake_mode == 1 (MILD): Reduced regen braking current (max 12A phase / 8A battery) for gentle, smooth deceleration
+            float brake_norm = sim_b / 100.0f;
+            float decel = (3.5f + 12.0f * brake_norm) * dt;
+            s_sim_speed_kmh -= decel;
+            if (s_sim_speed_kmh < 0.2f) s_sim_speed_kmh = 0.0f;
 
-        // Regen braking: motor generates phase current
-        float target_regen_phase = (s_sim_speed_kmh > 2.0f) ? (max_pha_a * 0.75f * brake_norm) : 0.0f;
-        s_sim_phase_amps += (target_regen_phase - s_sim_phase_amps) * (dt * 6.5f);
-        if (s_sim_speed_kmh < 0.2f) s_sim_phase_amps = 0.0f;
+            float target_regen_phase = (s_sim_speed_kmh > 1.5f) ? (12.0f * brake_norm) : 0.0f;
+            s_sim_phase_amps += (target_regen_phase - s_sim_phase_amps) * (dt * 6.5f);
+            if (s_sim_speed_kmh < 0.2f) s_sim_phase_amps = 0.0f;
 
-        // Battery regen current is bounded by duty and max battery regen limit
-        float duty_ratio = s_sim_duty_cycle_pct / 100.0f;
-        if (duty_ratio > 0.95f) duty_ratio = 0.95f;
-        if (duty_ratio < 0.25f) duty_ratio = 0.25f;
-        float target_regen_bat = - (s_sim_phase_amps * duty_ratio);
-        float max_regen_bat = fabsf(lim.min_battery_amps) > 1.0f ? fabsf(lim.min_battery_amps) : (max_bat_a * 0.6f);
-        if (-target_regen_bat > max_regen_bat) target_regen_bat = -max_regen_bat;
-        s_sim_current_amps += (target_regen_bat - s_sim_current_amps) * (dt * 6.5f);
-        if (s_sim_speed_kmh < 0.2f) s_sim_current_amps = 0.0f;
+            float duty_ratio = s_sim_duty_cycle_pct / 100.0f;
+            if (duty_ratio > 0.95f) duty_ratio = 0.95f;
+            if (duty_ratio < 0.25f) duty_ratio = 0.25f;
+            float target_regen_bat = -(s_sim_phase_amps * duty_ratio);
+            if (-target_regen_bat > 8.0f) target_regen_bat = -8.0f;
+            s_sim_current_amps += (target_regen_bat - s_sim_current_amps) * (dt * 6.5f);
+            if (s_sim_speed_kmh < 0.2f) s_sim_current_amps = 0.0f;
+        } else {
+            // brake_mode == 2 (MAXIMAL): Full normal regen braking as configured in VESC limits
+            float brake_norm = sim_b / 100.0f;
+            float decel = (6.0f + 28.0f * brake_norm) * dt;
+            s_sim_speed_kmh -= decel;
+            if (s_sim_speed_kmh < 0.2f) s_sim_speed_kmh = 0.0f;
+
+            // Regen braking: motor generates phase current
+            float target_regen_phase = (s_sim_speed_kmh > 2.0f) ? (max_pha_a * 0.75f * brake_norm) : 0.0f;
+            s_sim_phase_amps += (target_regen_phase - s_sim_phase_amps) * (dt * 6.5f);
+            if (s_sim_speed_kmh < 0.2f) s_sim_phase_amps = 0.0f;
+
+            // Battery regen current is bounded by duty and max battery regen limit
+            float duty_ratio = s_sim_duty_cycle_pct / 100.0f;
+            if (duty_ratio > 0.95f) duty_ratio = 0.95f;
+            if (duty_ratio < 0.25f) duty_ratio = 0.25f;
+            float target_regen_bat = - (s_sim_phase_amps * duty_ratio);
+            float max_regen_bat = fabsf(lim.min_battery_amps) > 1.0f ? fabsf(lim.min_battery_amps) : (max_bat_a * 0.6f);
+            if (-target_regen_bat > max_regen_bat) target_regen_bat = -max_regen_bat;
+            s_sim_current_amps += (target_regen_bat - s_sim_current_amps) * (dt * 6.5f);
+            if (s_sim_speed_kmh < 0.2f) s_sim_current_amps = 0.0f;
+        }
 
     } else if (sim_t > 0.0f) {
         // Active Throttle: electric vehicle acceleration
@@ -338,7 +368,7 @@ static void runSimulationStep(float dt) {
             g_telemetry.g_force = 0.0f;
         } else {
             float v = s_sim_speed_kmh;
-            float drag_decel = (1.6f + (v / 100.0f) * (v / 100.0f) * 4.5f + v * 0.05f) * dt;
+            float drag_decel = (brake_mode == 0 ? (0.8f + (v / 100.0f) * (v / 100.0f) * 2.8f) : (1.6f + (v / 100.0f) * (v / 100.0f) * 4.5f + v * 0.05f)) * dt;
             s_sim_speed_kmh -= drag_decel;
             if (s_sim_speed_kmh <= 0.8f) {
                 s_sim_speed_kmh = 0.0f;
@@ -358,10 +388,22 @@ static void runSimulationStep(float dt) {
                 g_telemetry.g_force = 0.0f;
             } else {
                 // Passive drag regen (mild back-EMF recuperation)
-                float coast_target_a = - (1.2f + (v / 100.0f) * 3.2f);
-                s_sim_current_amps += (coast_target_a - s_sim_current_amps) * (dt * 3.8f);
-                float coast_phase = fabsf(s_sim_current_amps) * 1.25f;
-                s_sim_phase_amps += (coast_phase - s_sim_phase_amps) * (dt * 3.8f);
+                if (brake_mode == 0) {
+                    // Freilauf / AUS: pure coasting without back-EMF drag
+                    s_sim_current_amps = 0.0f;
+                    s_sim_phase_amps = 0.0f;
+                } else if (brake_mode == 1) {
+                    float coast_target_a = - (0.4f + (v / 100.0f) * 1.2f);
+                    s_sim_current_amps += (coast_target_a - s_sim_current_amps) * (dt * 3.8f);
+                    float coast_phase = fabsf(s_sim_current_amps) * 1.25f;
+                    if (coast_phase > 12.0f) coast_phase = 12.0f;
+                    s_sim_phase_amps += (coast_phase - s_sim_phase_amps) * (dt * 3.8f);
+                } else {
+                    float coast_target_a = - (1.2f + (v / 100.0f) * 3.2f);
+                    s_sim_current_amps += (coast_target_a - s_sim_current_amps) * (dt * 3.8f);
+                    float coast_phase = fabsf(s_sim_current_amps) * 1.25f;
+                    s_sim_phase_amps += (coast_phase - s_sim_phase_amps) * (dt * 3.8f);
+                }
             }
         }
     }
@@ -1882,6 +1924,7 @@ void sim_get_telemetry(SimTelemetryExport *out) {
     out->turbine_active = g_telemetry.turbine_sound_active ? 1 : 0;
     out->turbine_freq = g_telemetry.turbine_freq;
     out->turbine_volts = g_telemetry.turbine_volts;
+    out->brake_mode = (int32_t)Settings.get().brake_mode;
 }
 
 void sim_get_config_json(char *out_buf, int max_len) {
@@ -2179,7 +2222,35 @@ void sim_cycle_theme() {
 void sim_toggle_turbine_sound() {
     Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
     Settings.save();
+    if (!Settings.get().turbine_sound_enabled) {
+        g_telemetry.turbine_sound_active = false;
+        g_telemetry.turbine_freq = 0.0f;
+        g_telemetry.turbine_volts = 0.0f;
+        Vesc.stopFocTone(0);
+        Vesc.stopFocTone(1);
+    }
     printf("[SIM_BACKEND] Turbine Sound toggled: %s\n", Settings.get().turbine_sound_enabled ? "ENABLED" : "DISABLED");
+}
+
+void sim_set_brake_mode(int mode) {
+    if (mode < 0) mode = 0;
+    if (mode > 2) mode = 2;
+    Settings.get().brake_mode = (uint8_t)mode;
+    Settings.save();
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    printf("[SIM_BACKEND] Brake Mode set to: %d (%s)\n", mode, 
+           mode == 0 ? "AUS / Freilauf" : (mode == 1 ? "MILD" : "MAXIMAL"));
+}
+
+int sim_get_brake_mode() {
+    return (int)Settings.get().brake_mode;
+}
+
+void sim_cycle_brake_mode() {
+    uint8_t m = Settings.get().brake_mode;
+    m = (m + 1) % 3;
+    sim_set_brake_mode((int)m);
 }
 
 void sim_trigger_boot_animation() {

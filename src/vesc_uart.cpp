@@ -212,17 +212,31 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     _target_speed = (sim_t / 100.0f) * max_possible_speed;
 
     float prev_sim_spd = telemetry.speed_kmh;
+    uint8_t brake_mode = Settings.get().brake_mode;
     if (sim_b > 0.01f) {
-        // Regenerative braking deceleration
-        float decel_k = 1.6f + (sim_b / 100.0f) * 4.2f;
-        telemetry.speed_kmh -= decel_k * 9.81f * 3.6f * dt * 0.22f;
-        if (telemetry.speed_kmh < 0.5f) telemetry.speed_kmh = 0.0f;
+        if (brake_mode == 0) {
+            // brake_mode == 0 (AUS / FREILAUF): Pure free coasting, no electronic regen braking
+            telemetry.speed_kmh -= 3.5f * dt;
+            if (telemetry.speed_kmh < 0.5f) telemetry.speed_kmh = 0.0f;
+            telemetry.current_amps = 0.0f;
+            telemetry.phase_amps = 0.0f;
+        } else if (brake_mode == 1) {
+            // brake_mode == 1 (MILD): Reduced regen braking current (e.g. max 12A phase / 8A battery)
+            float decel_k = 1.2f + (sim_b / 100.0f) * 2.2f;
+            telemetry.speed_kmh -= decel_k * 9.81f * 3.6f * dt * 0.22f;
+            if (telemetry.speed_kmh < 0.5f) telemetry.speed_kmh = 0.0f;
+        } else {
+            // brake_mode == 2 (MAXIMAL): Full normal regen braking
+            float decel_k = 1.6f + (sim_b / 100.0f) * 4.2f;
+            telemetry.speed_kmh -= decel_k * 9.81f * 3.6f * dt * 0.22f;
+            if (telemetry.speed_kmh < 0.5f) telemetry.speed_kmh = 0.0f;
+        }
     } else if (sim_t > 0.01f) {
         // Accelerating
         telemetry.speed_kmh += (_target_speed - telemetry.speed_kmh) * (dt * 1.5f);
     } else {
-        // Natural rolling resistance coasting
-        telemetry.speed_kmh -= 3.5f * dt;
+        // Natural rolling resistance coasting (lower drag in freewheel mode)
+        telemetry.speed_kmh -= (brake_mode == 0 ? 2.5f : 3.5f) * dt;
         if (telemetry.speed_kmh < 0.5f) telemetry.speed_kmh = 0.0f;
     }
     if (telemetry.speed_kmh <= 0.5f && sim_t <= 0.01f) {
@@ -268,10 +282,22 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     uint16_t max_pha_a = Settings.get().max_phase_amps > 0 ? Settings.get().max_phase_amps : 160;
 
     if (sim_b > 0.01f && telemetry.speed_kmh > 1.5f) {
-        // Regenerative Braking: Negative battery amps & emerald green power readout!
-        float target_regen_a = -((sim_b / 100.0f) * 18.0f);
-        telemetry.current_amps += (target_regen_a - telemetry.current_amps) * (dt * 4.0f);
-        telemetry.phase_amps = fabsf(telemetry.current_amps) * 1.8f;
+        if (brake_mode == 0) {
+            // Freewheel / AUS: electronic brake current clamped to 0A, zero regen!
+            telemetry.current_amps = 0.0f;
+            telemetry.phase_amps = 0.0f;
+        } else if (brake_mode == 1) {
+            // MILD: Reduced regen braking current (e.g. max 12A phase / 8A battery)
+            float target_regen_a = -((sim_b / 100.0f) * 8.0f);
+            telemetry.current_amps += (target_regen_a - telemetry.current_amps) * (dt * 4.0f);
+            telemetry.phase_amps = fabsf(telemetry.current_amps) * 1.5f;
+            if (telemetry.phase_amps > 12.0f) telemetry.phase_amps = 12.0f;
+        } else {
+            // MAXIMAL: Full normal regen braking
+            float target_regen_a = -((sim_b / 100.0f) * 18.0f);
+            telemetry.current_amps += (target_regen_a - telemetry.current_amps) * (dt * 4.0f);
+            telemetry.phase_amps = fabsf(telemetry.current_amps) * 1.8f;
+        }
     } else if (sim_t > 0.01f) {
         float target_bat_amps = (sim_t / 100.0f) * (float)max_bat_a;
         telemetry.current_amps += (target_bat_amps - telemetry.current_amps) * (dt * 3.5f);
@@ -881,6 +907,25 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
                 pct = 0.0f;
             }
             telemetry.throttle_pct = pct;
+
+            // Motor brake lever processing (ADC2 when throttle is ADC1, or ADC1 when throttle is ADC2)
+            float brake_pct = (Settings.get().throttle_adc_channel == 0 && payload_len >= 13) ? _last_adc2_pct : _last_adc1_pct;
+            if (brake_pct < 0.0f) brake_pct = 0.0f;
+            if (brake_pct > 100.0f) brake_pct = 100.0f;
+
+            if (brake_pct > 3.0f) {
+                if (Settings.get().brake_mode == 0) {
+                    sendCurrentBrake(0.0f);
+                } else if (Settings.get().brake_mode == 1) {
+                    sendCurrentBrake((brake_pct / 100.0f) * 12.0f);
+                } else {
+                    float max_pha = Settings.get().max_phase_amps > 0 ? (float)Settings.get().max_phase_amps * 0.75f : 45.0f;
+                    sendCurrentBrake((brake_pct / 100.0f) * max_pha);
+                }
+            } else if (telemetry.throttle_pct <= 0.5f && Settings.get().brake_mode == 0) {
+                // Throttle released in freewheel mode: clamp electronic brake current commands to 0A
+                sendCurrentBrake(0.0f);
+            }
         }
         return true;
     }
@@ -1306,6 +1351,64 @@ static void sendVescCanBuffer(uint8_t controller_id, const uint8_t *data, size_t
 }
 #endif
 
+void VescHandler::sendCurrentBrake(float brake_amps) {
+    UartLock lock;
+    uint8_t brake_mode = Settings.get().brake_mode;
+    if (brake_mode == 0) {
+        // Freilauf / AUS: electronic brake current clamped to 0A (zero regen)
+        brake_amps = 0.0f;
+    } else if (brake_mode == 1) {
+        // MILD: clamp to max 12.0A phase
+        if (brake_amps > 12.0f) brake_amps = 12.0f;
+    } else {
+        // MAXIMAL: normal configured limit
+        float max_pha = Settings.get().max_phase_amps > 0 ? (float)Settings.get().max_phase_amps : 120.0f;
+        if (brake_amps > max_pha) brake_amps = max_pha;
+    }
+    if (brake_amps < 0.0f) brake_amps = 0.0f;
+
+    int32_t current_mA = (int32_t)roundf(brake_amps * 1000.0f);
+
+    uint8_t payload[5];
+    payload[0] = 7; // COMM_SET_CURRENT_BRAKE
+    payload[1] = (uint8_t)(current_mA >> 24);
+    payload[2] = (uint8_t)(current_mA >> 16);
+    payload[3] = (uint8_t)(current_mA >> 8);
+    payload[4] = (uint8_t)(current_mA & 0xFF);
+
+    if (_transport) {
+        uint8_t packet[11];
+        packet[0] = 0x02;
+        packet[1] = 5;
+        memcpy(&packet[2], payload, 5);
+        uint16_t crc = crc16(payload, 5);
+        packet[7] = (uint8_t)(crc >> 8);
+        packet[8] = (uint8_t)(crc & 0xFF);
+        packet[9] = 0x03;
+        _transport->write(packet, 10);
+    }
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (s_can_initialized) {
+        // CAN_PACKET_SET_CURRENT_BRAKE (ID 2)
+        twai_message_t can_brake;
+        can_brake.extd = 1;
+        can_brake.identifier = (2 << 8) | VESC_CAN_ID_DEFAULT;
+        can_brake.data_length_code = 4;
+        can_brake.data[0] = payload[1];
+        can_brake.data[1] = payload[2];
+        can_brake.data[2] = payload[3];
+        can_brake.data[3] = payload[4];
+        twai_transmit(&can_brake, pdMS_TO_TICKS(5));
+
+        if (VESC_CAN_ID_DEFAULT != 0) {
+            can_brake.identifier = (2 << 8) | 0;
+            twai_transmit(&can_brake, pdMS_TO_TICKS(5));
+        }
+    }
+#endif
+}
+
 void VescHandler::sendTerminalCommand(const char *str) {
 #if !SIMULATION_MODE || defined(NATIVE_SIMULATOR)
     size_t slen = strlen(str);
@@ -1380,6 +1483,10 @@ void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
 }
 
 void VescHandler::playFocTone(uint8_t channel, float freq, float voltage) {
+    if (!Settings.get().turbine_sound_enabled && freq > 0.0f) {
+        // When turbine sound is turned OFF in Settings, absolutely NO sound or tone is played (completely silent normal operation)
+        return;
+    }
     char lisp_cmd[64];
     if (freq <= 0.0f || voltage <= 0.0f) {
         snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-play-stop)");
@@ -1518,7 +1625,8 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     payload[p_idx++] = 0;  // divide_by_controllers = false
 
     float cur_scale = is_locked ? 0.0f : 1.0f;
-    append_f32_auto(payload, cur_scale, &p_idx); // l_current_min_scale
+    float cur_min_scale = (is_locked || Settings.get().brake_mode == 0) ? 0.0f : (Settings.get().brake_mode == 1 ? 0.25f : 1.0f);
+    append_f32_auto(payload, cur_min_scale, &p_idx); // l_current_min_scale
     append_f32_auto(payload, cur_scale, &p_idx); // l_current_max_scale
     append_f32_auto(payload, is_locked ? 0.0f : -max_erpm, &p_idx);
     append_f32_auto(payload, is_locked ? 0.0f : max_erpm, &p_idx);
@@ -1570,7 +1678,8 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         can_lim.extd = 1;
         can_lim.identifier = (21 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC (76)
         can_lim.data_length_code = 8;
-        int32_t min_mot = (int32_t)(-max_phase_amps * 1000.0f);
+        int32_t min_mot = (Settings.get().brake_mode == 0) ? 0 : 
+                          ((Settings.get().brake_mode == 1) ? (int32_t)(-12.0f * 1000.0f) : (int32_t)(-max_phase_amps * 1000.0f));
         int32_t max_mot = (int32_t)(max_phase_amps * 1000.0f);
         can_lim.data[0] = (min_mot >> 24) & 0xFF;
         can_lim.data[1] = (min_mot >> 16) & 0xFF;
@@ -1591,7 +1700,8 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         can_lim_in.extd = 1;
         can_lim_in.identifier = (23 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS_IN -> Target VESC (76)
         can_lim_in.data_length_code = 8;
-        int32_t min_bat = (int32_t)(-max_battery_amps * 1000.0f);
+        int32_t min_bat = (Settings.get().brake_mode == 0) ? 0 : 
+                          ((Settings.get().brake_mode == 1) ? (int32_t)(-8.0f * 1000.0f) : (int32_t)(-max_battery_amps * 1000.0f));
         int32_t max_bat = (int32_t)(max_battery_amps * 1000.0f);
         can_lim_in.data[0] = (min_bat >> 24) & 0xFF;
         can_lim_in.data[1] = (min_bat >> 16) & 0xFF;
@@ -1640,6 +1750,15 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     sendTerminalCommand(cmd);
     snprintf(cmd, sizeof(cmd), "conf_set l_max_erpm %.0f", max_erpm);
     sendTerminalCommand(cmd);
+
+    if (Settings.get().brake_mode == 0) {
+        sendTerminalCommand("conf_set l_current_min 0.0");
+        sendTerminalCommand("conf_set l_in_current_min 0.0");
+        sendCurrentBrake(0.0f);
+    } else if (Settings.get().brake_mode == 1) {
+        sendTerminalCommand("conf_set l_current_min -12.0");
+        sendTerminalCommand("conf_set l_in_current_min -8.0");
+    }
 
     // Battery cutoff voltages if configured
     if (cutoff_start > 20.0f && cutoff_end > 20.0f) {

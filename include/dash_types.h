@@ -199,6 +199,80 @@ struct GpsTelemetry {
     }
 };
 
+// Dashboard and System Settings (stored in NVS)
+struct DashSettings {
+    uint8_t dash_style;          // 0 = STYLE_ANALOG_DIAL, 1 = STYLE_HORIZONTAL_BAR
+    uint8_t brightness_pct;      // 20 to 100% (default 90%)
+    uint16_t max_battery_amps;   // 5 to 200 A (default 28A)
+    uint16_t max_phase_amps;     // 10 to 300 A (default 55A)
+    uint8_t  field_weak_amps;    // 0 to 20 A (step 1A, default 10A)
+    uint8_t  max_speed_kmh;      // 0 = Unlimited, 25, 32, 45, 60
+    float   throttle_ramp_sec;   // 0.1 to 1.0 s (default 0.2s)
+    float   wheel_diameter_in;   // 8.0 to 29.0 in (default 11.0 for Segway G3 Max)
+    bool    wheel_gps_calibrated; // true if autonomously calibrated via GPS (default false)
+    uint8_t motor_pole_pairs;    // 8 to 24 (default 15)
+    float   gear_ratio;          // 1.0 to 4.0 (default 1.0)
+    uint8_t active_battery_profile; // 0 = Profile 1, 1 = Profile 2
+    float   voltage_trim_v;         // -2.0 to +2.0 V (default -0.3V)
+    uint8_t throttle_adc_channel;   // 0 = ADC1, 1 = ADC2 (default 0 = ADC1)
+    bool    pin_lock_enabled;       // Enable 4-digit PIN lock at startup (default true)
+    char    pin_code[8];            // 4-digit PIN code (default "1234")
+    uint8_t race_split1_kmh;        // Target speed for Split 1 (default 22 km/h)
+    uint8_t race_split2_kmh;        // Target speed for Split 2 (default 50 km/h)
+    uint8_t race_split3_kmh;        // Target speed for Split 3 (default 70 km/h)
+    bool    gps_enabled;            // Enable ATGM336H GPS & live clock (default true)
+    bool    incline_gforce_enabled; // Enable IMU pitch/incline & G-force gauges (default true)
+    bool    wifi_bridge_enabled;    // SoftAP WiFi bridge enabled (default false)
+    bool    setup_completed;        // First-time setup wizard completed (default false)
+    uint8_t color_theme;            // DashTheme: 0=Cyber Cyan, 1=Synthwave, 2=Toxic Green, 3=Racing Red, 4=Clean Ice
+    bool    turbine_sound_enabled;  // FOC audio turbine whine while driving (default true)
+    bool    ble_keyless_enabled;    // Keyless-Go Auto-Unlock active (default true)
+    bool    ble_autolock_enabled;   // Walk-Away Auto-Lock active (default true)
+    bool    ble_paired;             // Phone paired (default false)
+    char    ble_paired_addr[24];    // Paired BLE MAC/UUID
+    char    ble_paired_name[32];    // Paired phone friendly name
+    uint8_t show_gforce;            // 1 = ON, 0 = OFF (default 1)
+    uint8_t show_incline;           // 1 = ON, 0 = OFF (default 1)
+    uint8_t brake_mode;             // 0 = AUS (Freilauf), 1 = MILD, 2 = MAXIMAL (default 2)
+
+    DashSettings()
+        : dash_style(0),
+          brightness_pct(90),
+          max_battery_amps(25),
+          max_phase_amps(45),
+          field_weak_amps(10),
+          max_speed_kmh(0),
+          throttle_ramp_sec(0.2f),
+          wheel_diameter_in(11.0f),
+          wheel_gps_calibrated(false),
+          motor_pole_pairs(15),
+          gear_ratio(1.0f),
+          active_battery_profile(0),
+          voltage_trim_v(-0.3f),
+          throttle_adc_channel(0),
+          pin_lock_enabled(true),
+          race_split1_kmh(22),
+          race_split2_kmh(50),
+          race_split3_kmh(70),
+          gps_enabled(true),
+          incline_gforce_enabled(true),
+          wifi_bridge_enabled(false),
+          setup_completed(false),
+          color_theme(0),
+          turbine_sound_enabled(true),
+          ble_keyless_enabled(true),
+          ble_autolock_enabled(true),
+          ble_paired(false),
+          show_gforce(1),
+          show_incline(1),
+          brake_mode(2)
+    {
+        strncpy(pin_code, "1234", sizeof(pin_code));
+        ble_paired_addr[0] = '\0';
+        strncpy(ble_paired_name, "Smartphone", sizeof(ble_paired_name));
+    }
+};
+
 #define WAVE_HISTORY_LEN 60
 
 // Core Telemetry Data Structure

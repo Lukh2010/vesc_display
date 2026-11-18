@@ -733,6 +733,42 @@ void testTouchGestures() {
     assert(touchHandled == true);
     assert(Settings.get().race_split1_kmh == old_sp1 + 1);
 
+    // Test Tab 4 DASH buttons: G-Force toggle, Incline toggle, Brake mode cycle
+    Renderer.setSettingsTab(4);
+    uint8_t init_gf = Settings.get().show_gforce;
+    uint8_t init_inc = Settings.get().show_incline;
+    uint8_t init_bm = Settings.get().brake_mode;
+
+    // Tap G-FORCE button at x=150, y=320 -> toggles show_gforce
+    touchHandled = Renderer.handleSettingsTouch(150, 320, tTest);
+    assert(touchHandled == true);
+    assert(Settings.get().show_gforce == (init_gf ? 0 : 1));
+
+    // Tap G-FORCE again -> restore
+    touchHandled = Renderer.handleSettingsTouch(150, 320, tTest);
+    assert(touchHandled == true);
+    assert(Settings.get().show_gforce == init_gf);
+
+    // Tap NEIGUNG button at x=400, y=320 -> toggles show_incline
+    touchHandled = Renderer.handleSettingsTouch(400, 320, tTest);
+    assert(touchHandled == true);
+    assert(Settings.get().show_incline == (init_inc ? 0 : 1));
+
+    // Tap NEIGUNG again -> restore
+    touchHandled = Renderer.handleSettingsTouch(400, 320, tTest);
+    assert(touchHandled == true);
+    assert(Settings.get().show_incline == init_inc);
+
+    // Tap BREMSEN button at x=650, y=320 -> cycles brake_mode (0 -> 1 -> 2 -> 0)
+    touchHandled = Renderer.handleSettingsTouch(650, 320, tTest);
+    assert(touchHandled == true);
+    assert(Settings.get().brake_mode == (init_bm + 1) % 3);
+
+    // Restore brake_mode
+    Settings.get().brake_mode = init_bm;
+    Settings.save();
+    printf("[PASS] Settings Tab 4 DASH: G-Force, Neigung, and Brake Mode buttons verified 100%%!\n");
+
     Renderer.setSettingsTab(2); // Switch back to RACE for limit tests
 
     // 2. Adjust RACE mode limits via [-] and [+] buttons and slider track
@@ -1373,6 +1409,48 @@ void testRegenAndTripReset() {
     g_virtual_vesc.setTransport(&g_sim_test_transport.getSideB());
 
     printf("[PASS] 3. Trip reset odometer baseline offset verified.\n");
+
+    // 4. Motor Brake & Freewheel Modes (0 = AUS/Freilauf, 1 = MILD, 2 = MAXIMAL)
+    {
+        VescLoopbackTransport test_loop;
+        VirtualVesc test_vesc;
+        Vesc.setTransport(&test_loop.getSideA());
+        test_vesc.setTransport(&test_loop.getSideB());
+        test_vesc.begin();
+
+        // Mode 0: AUS / Freilauf -> Commanded brake current MUST be clamped to 0A
+        Settings.get().brake_mode = 0;
+        Vesc.sendCurrentBrake(50.0f);
+        test_vesc.process();
+        assert(test_vesc.hasExternalControl());
+        assert(test_vesc.getExternalBrake() == 0.0f); // 0A brake!
+
+        // Mode 1: MILD -> Commanded brake current clamped to max 12.0A
+        Settings.get().brake_mode = 1;
+        Vesc.sendCurrentBrake(50.0f);
+        test_vesc.process();
+        assert(test_vesc.hasExternalControl());
+        // 12A on 120A max phase = 10.0% brake pct
+        assert(fabsf(test_vesc.getExternalBrake() - 10.0f) < 0.5f);
+
+        // Mode 2: MAXIMAL -> Full normal brake current
+        uint16_t saved_pha = Settings.get().max_phase_amps;
+        Settings.get().max_phase_amps = 120;
+        Settings.get().brake_mode = 2;
+        Vesc.sendCurrentBrake(60.0f);
+        test_vesc.process();
+        assert(test_vesc.hasExternalControl());
+        // 60A on 120A max phase = 50.0% brake pct
+        assert(fabsf(test_vesc.getExternalBrake() - 50.0f) < 0.5f);
+        Settings.get().max_phase_amps = saved_pha;
+
+        // Restore default brake mode
+        Settings.get().brake_mode = 2;
+        Vesc.setTransport(&g_sim_test_transport.getSideA());
+        g_virtual_vesc.setTransport(&g_sim_test_transport.getSideB());
+        printf("[PASS] 4. Motor brake / freewheel modes (0=0A, 1=12A, 2=MAX) validated across transport.\n");
+    }
+
     printf("=== All Regenerative Braking & Trip Reset Unit Tests PASSED! ===\n\n");
 }
 
@@ -1484,6 +1562,16 @@ void testColorThemesAndTurbineSound() {
     // Sound engine calculation...
     assert(t.throttle_pct == initial_thr); // riding behavior strictly unchanged!
     printf("[PASS] 4. Riding physics & throttle invariant verified (100%% unchanged by sound engine).\n");
+
+    // 5. Silence verification when turbine sound is disabled
+    Settings.get().turbine_sound_enabled = false;
+    VescLoopbackTransport loop_quiet;
+    Vesc.setTransport(&loop_quiet.getSideA());
+    Vesc.playFocTone(0, 480.0f, 3.0f);
+    assert(!loop_quiet.getSideB().available()); // NO packets emitted when disabled!
+    Vesc.setTransport(&g_sim_test_transport.getSideA());
+    Settings.get().turbine_sound_enabled = true;
+    printf("[PASS] 5. Turbine sound OFF verified strictly silent (0 packets emitted).\n");
 
     printf("=== All Color Themes & FOC Turbine Sound Unit Tests PASSED! ===\n\n");
 }
@@ -2333,6 +2421,90 @@ void testVirtualVescEmulator() {
     printf("=== All Virtual VESC Emulator Unit Tests PASSED! ===\n\n");
 }
 
+void testDashSettingsAndUiFeatures() {
+    printf("=== Running DashSettings & Cockpit UI Features Tests ===\n");
+    // 1. DashSettings default constructor values
+    DashSettings def;
+    assert(def.show_gforce == 1);
+    assert(def.show_incline == 1);
+    assert(def.brake_mode == 2);
+    printf("[PASS] DashSettings default constructor: show_gforce=1, show_incline=1, brake_mode=2 verified.\n");
+
+    // 2. Header Clock hiding when GPS is invalid or 0 satellites
+    DashTelemetry t;
+    setBaseTelemetry(t);
+    t.screen = SCREEN_RIDE_DASH;
+    t.gps_enabled = true;
+    t.gps.valid = false;
+    t.gps.satellites = 0;
+    strncpy(t.clock_str, "12:34", sizeof(t.clock_str));
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    Renderer.render(t);
+
+    // Clock center is at (400, 36). When GPS is invalid, pixel must be 0x0000 (black, clock hidden)
+    assert(Display.getSprite().readPixel(400, 36) == 0x0000);
+    printf("[PASS] Header Clock: Hidden when GPS is not valid or 0 satellites.\n");
+
+    // When GPS fix becomes valid (satellites >= 4), clock must be displayed
+    t.gps.valid = true;
+    t.gps.satellites = 8;
+    Renderer.render(t);
+    bool has_clock_pixel = false;
+    for (int px = 370; px <= 430; px++) {
+        if (Display.getSprite().readPixel(px, 36) != 0x0000) {
+            has_clock_pixel = true;
+            break;
+        }
+    }
+    assert(has_clock_pixel == true);
+    printf("[PASS] Header Clock: Rendered when GPS fix is valid.\n");
+
+    // 3. Badges visibility
+    // Test hiding G-Force badge
+    Settings.get().show_gforce = 0;
+    Settings.get().show_incline = 1;
+    t.incline_gforce_enabled = true;
+    t.g_force = 1.2f;
+    t.incline_deg = 5.0f;
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    Renderer.render(t);
+    // G-force badge center is 50, 416. It should be 0x0000 (hidden)
+    assert(Display.getSprite().readPixel(50, 416) == 0x0000);
+    // Incline badge center is 114, 416. It should be non-zero (visible)
+    assert(Display.getSprite().readPixel(114, 416) != 0x0000);
+    printf("[PASS] G-Force badge hidden when show_gforce=0, Incline badge visible.\n");
+
+    // Test hiding Incline badge
+    Settings.get().show_gforce = 1;
+    Settings.get().show_incline = 0;
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    Renderer.render(t);
+    assert(Display.getSprite().readPixel(50, 416) != 0x0000);
+    assert(Display.getSprite().readPixel(114, 416) == 0x0000);
+    printf("[PASS] Incline badge hidden when show_incline=0, G-Force badge visible.\n");
+
+    // Test hiding both badges
+    Settings.get().show_gforce = 0;
+    Settings.get().show_incline = 0;
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    Renderer.render(t);
+    assert(Display.getSprite().readPixel(50, 416) == 0x0000);
+    assert(Display.getSprite().readPixel(114, 416) == 0x0000);
+    // Thermals FET/MOT at cx=240, 405 should still be cleanly rendered
+    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    printf("[PASS] Both badges hidden when show_gforce=0 and show_incline=0.\n");
+
+    // Restore settings
+    Settings.get().show_gforce = 1;
+    Settings.get().show_incline = 1;
+    Settings.save();
+    printf("=== DashSettings & Cockpit UI Features Tests PASSED! ===\n\n");
+}
+
 int main(int argc, char **argv) {
     printf("==================================================\n");
     printf("   VESC 4.3\" Touch LCD Emulator & Renderer (800x480) \n");
@@ -2364,6 +2536,7 @@ int main(int argc, char **argv) {
     testChargingAndTheftProtection();
     testColorThemesAndTurbineSound();
     testKeylessGoAndProximityAutoLock();
+    testDashSettingsAndUiFeatures();
 
     DashTelemetry t;
     setBaseTelemetry(t);

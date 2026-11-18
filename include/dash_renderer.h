@@ -189,6 +189,9 @@ private:
         bool use_gps_speed;
         bool gps_enabled;
         bool incline_gforce_enabled;
+        bool clock_visible;
+        uint8_t show_gforce;
+        uint8_t show_incline;
         int8_t tuning_mode_dot;
 
         void invalidate() {
@@ -198,6 +201,9 @@ private:
             use_gps_speed = false;
             gps_enabled = true;
             incline_gforce_enabled = true;
+            clock_visible = false;
+            show_gforce = 255;
+            show_incline = 255;
             tuning_mode_dot = -1;
             speed = -999;
             duty_x10 = -999;

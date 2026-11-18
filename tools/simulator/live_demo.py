@@ -81,6 +81,7 @@ class SimTelemetry(ctypes.Structure):
         ("turbine_active", ctypes.c_int32),
         ("turbine_freq", ctypes.c_float),
         ("turbine_volts", ctypes.c_float),
+        ("brake_mode", ctypes.c_int32),
     ]
 
 sim_lib.sim_init.restype = None
@@ -127,6 +128,11 @@ sim_lib.sim_trigger_boot_animation.restype = None
 sim_lib.sim_set_vesc_connected.argtypes = [ctypes.c_int]
 sim_lib.sim_set_vesc_connected.restype = None
 sim_lib.sim_toggle_vesc_connected.restype = None
+
+sim_lib.sim_set_brake_mode.argtypes = [ctypes.c_int]
+sim_lib.sim_set_brake_mode.restype = None
+sim_lib.sim_get_brake_mode.restype = ctypes.c_int
+sim_lib.sim_cycle_brake_mode.restype = None
 
 sim_lib.sim_get_frame_rgb24.argtypes = [ctypes.c_char_p]
 sim_lib.sim_get_frame_rgb24.restype = None
@@ -307,6 +313,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><button onclick="fetch('/api/tuning?toggle=1').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#34d399; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">👮 Tuning Mode (X)</button></span>
   <span><button onclick="fetch('/api/theme').catch(()=>{})" style="background:#0f172a; border:1px solid #ec4899; color:#f472b6; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🎨 Theme (T)</button></span>
   <span><button onclick="fetch('/api/turbine_sound').catch(()=>{})" style="background:#0f172a; border:1px solid #38bdf8; color:#38bdf8; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚀 Turbinensound (U)</button></span>
+  <span><button onclick="fetch('/api/brake_mode').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#34d399; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🛑 Motorbremse / Freilauf (F)</button></span>
   <span><kbd>C</kbd> <button onclick="fetch('/api/charging').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#10b981; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Laden (HUD)</button></span>
   <span><kbd>A</kbd> <button onclick="fetch('/api/theft_alarm').catch(()=>{})" style="background:#0f172a; border:1px solid #ef4444; color:#ef4444; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚨 Diebstahl-Alarm</button></span>
   <span><button onclick="fetch('/api/toggle_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Setup Wizard (W/S)</button></span>
@@ -409,6 +416,8 @@ HTML_PAGE = """<!DOCTYPE html>
       fetch('/api/theme');
     } else if (e.key === 'u' || e.key === 'U') {
       fetch('/api/turbine_sound');
+    } else if (e.key === 'f' || e.key === 'F') {
+      fetch('/api/brake_mode');
     } else if (e.key === 'r' || e.key === 'R') {
       fetch('/api/nav?action=16');
     } else if (e.key === 'x' || e.key === 'X') {
@@ -613,6 +622,18 @@ class WebDemoHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
 
+        elif path == "/api/brake_mode":
+            mode = params.get("mode", [None])[0]
+            with sim_lock:
+                if mode is not None:
+                    sim_lib.sim_set_brake_mode(int(mode))
+                else:
+                    sim_lib.sim_cycle_brake_mode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
         elif path == "/api/boot_animation":
             with sim_lock:
                 sim_lib.sim_trigger_boot_animation()
@@ -683,6 +704,8 @@ class WebDemoHandler(BaseHTTPRequestHandler):
                     "ride_time_sec": current_telemetry.ride_time_sec,
                     "tuning_mode": bool(current_telemetry.tuning_mode),
                     "g_force": current_telemetry.g_force,
+                    "brake_mode": current_telemetry.brake_mode,
+                    "brake_mode_str": ["AUS / Freilauf", "MILD", "MAXIMAL"][current_telemetry.brake_mode if 0 <= current_telemetry.brake_mode <= 2 else 2],
                 }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -778,6 +801,7 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
                     "tuning_mode": bool(current_telemetry.tuning_mode),
                     "ride_mode": current_telemetry.ride_mode,
                     "g_force": current_telemetry.g_force,
+                    "brake_mode": current_telemetry.brake_mode,
                 }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -914,6 +938,8 @@ class DesktopDemoApp:
         self.root.bind("<T>", lambda e: self.cycle_theme())
         self.root.bind("<u>", lambda e: self.toggle_turbine())
         self.root.bind("<U>", lambda e: self.toggle_turbine())
+        self.root.bind("<f>", lambda e: self.cycle_brake_mode())
+        self.root.bind("<F>", lambda e: self.cycle_brake_mode())
         self.root.bind("<v>", lambda e: self.toggle_vesc_link())
         self.root.bind("<V>", lambda e: self.toggle_vesc_link())
         self.root.bind("<r>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
@@ -1105,6 +1131,10 @@ class DesktopDemoApp:
     def toggle_turbine(self):
         with sim_lock:
             sim_lib.sim_toggle_turbine_sound()
+
+    def cycle_brake_mode(self):
+        with sim_lock:
+            sim_lib.sim_cycle_brake_mode()
 
     def toggle_vesc_link(self):
         with sim_lock:
