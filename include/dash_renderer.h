@@ -18,6 +18,8 @@ public:
     void triggerBootAnimation();
     bool isBootAnimActive() const { return _boot_anim_active; }
     void skipBootAnimation();
+    void handleBootTouch(bool is_vesc_connected);
+    bool isVescLinkSkipped() const { return _vesc_link_skipped; }
     uint8_t getBootAnimPhase() const { return _boot_anim_phase; }
     void setBootAnimElapsed(uint32_t elapsed_ms);
     void renderBootAnimation(uint32_t elapsed_ms, const DashTelemetry &telemetry);
@@ -359,6 +361,9 @@ private:
     uint8_t  _boot_anim_phase; // 0=idle/done, 1=Phase 1 (Logo), 2=Phase 2 (Console), 3=Complete (transitioning to PIN)
     uint32_t _boot_anim_start_ms;
     uint8_t  _boot_log_lines_drawn;
+    bool     _vesc_link_skipped;
+    uint32_t _vesc_skip_click_ms;
+    uint32_t _vesc_connected_at_ms;
 };
 
 extern DashboardRenderer Renderer;

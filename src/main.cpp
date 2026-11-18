@@ -337,15 +337,15 @@ void loop() {
     Buttons.update();
     Renderer.updateRaceTimer(telemetry, now);
 
-    // Boot Animation Screen Tap Handling: Instantly skips Phase 1 or 2 to PIN lockscreen
+    // Boot Animation Screen Tap Handling: Auto-continues if connected, or skips search and reveals lines if offline
     static uint32_t s_boot_skip_ms = 0;
     if (Renderer.isBootAnimActive()) {
         int16_t tx = -1, ty = -1;
         if (Buttons.getLastTap(&tx, &ty) || Buttons.isTouching()) {
-            Renderer.skipBootAnimation();
+            Renderer.handleBootTouch(telemetry.vesc_connected);
             Buttons.clearNavAction();
             s_boot_skip_ms = now;
-            Serial.println("[BOOT] Screen tapped during boot animation -> Transitioned to PIN lockscreen.");
+            Serial.println("[BOOT] Screen tapped during boot animation -> handleBootTouch executed.");
         }
     } else if (s_boot_skip_ms != 0 && now - s_boot_skip_ms < 300) {
         // Discard any residual tap from the boot skip touch so it doesn't trigger a PIN keypad button

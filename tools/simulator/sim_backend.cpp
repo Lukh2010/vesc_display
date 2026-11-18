@@ -677,15 +677,15 @@ void sim_step(uint32_t step_ms) {
     Buttons.update();
     Renderer.updateRaceTimer(g_telemetry, g_sim_uptime_ms);
 
-    // Boot Animation Screen Tap Handling: Instantly skips Phase 1 or 2 to PIN lockscreen
+    // Boot Animation Screen Tap Handling: Auto-continues if connected, or skips search and reveals lines if offline
     static uint32_t s_sim_boot_skip_ms = 0;
     if (Renderer.isBootAnimActive()) {
         int16_t tx = -1, ty = -1;
         if (Buttons.getLastTap(&tx, &ty) || Buttons.isTouching()) {
-            Renderer.skipBootAnimation();
+            Renderer.handleBootTouch(g_telemetry.vesc_connected);
             Buttons.clearNavAction();
             s_sim_boot_skip_ms = g_sim_uptime_ms;
-            printf("[SIM_BACKEND] Screen tapped during boot animation -> Transitioned to PIN lockscreen.\n");
+            printf("[SIM_BACKEND] Screen tapped during boot animation -> handleBootTouch called.\n");
         }
     } else if (s_sim_boot_skip_ms != 0 && g_sim_uptime_ms - s_sim_boot_skip_ms < 300) {
         // Discard residual tap from the boot skip touch so it doesn't trigger a PIN keypad button
@@ -1227,11 +1227,11 @@ void sim_touch_event(int is_down, int x, int y) {
     bool is_new_down = (is_down && !g_last_sim_touch_down);
     g_last_sim_touch_down = (is_down != 0);
 
-    // 00. Boot Animation Touch Handling: Tapping anywhere aborts animation directly to PIN lockscreen
+    // 00. Boot Animation Touch Handling: Tapping advances console or skips to PIN lockscreen
     if (Renderer.isBootAnimActive()) {
         if (is_new_down) {
-            Renderer.skipBootAnimation();
-            printf("[SIM_BACKEND] Touch tap detected -> Boot animation skipped to PIN lockscreen.\n");
+            Renderer.handleBootTouch(g_telemetry.vesc_connected);
+            printf("[SIM_BACKEND] Touch tap detected -> handleBootTouch called.\n");
         }
         return;
     }
