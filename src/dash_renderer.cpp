@@ -810,6 +810,27 @@ static void drawInclineBadge(LovyanGFX *canvas, float incline_deg, int cx, int c
     canvas->drawString("NEIGUNG", cx, cy + 9);
 }
 
+static void drawLightBadge(LovyanGFX *canvas, bool lights_on, int cx, int cy, int r, uint16_t primaryCol) {
+    uint16_t ringCol = lights_on ? primaryCol : COLOR_BORDER;
+    uint16_t textCol = lights_on ? primaryCol : COLOR_MUTED_GRAY;
+
+    canvas->fillRect(cx - r, cy - r, 2 * r + 1, 2 * r + 1, COLOR_BG);
+    canvas->fillCircle(cx, cy, r - 2, COLOR_SURFACE);
+    canvas->drawCircle(cx, cy, r, ringCol);
+    canvas->drawCircle(cx, cy, r - 1, ringCol);
+
+    canvas->setFont(&fonts::Font2);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(textdatum_t::middle_center);
+    canvas->setTextColor(textCol, COLOR_SURFACE);
+    canvas->drawString(lights_on ? "AN" : "AUS", cx, cy - 6);
+
+    canvas->setFont(&fonts::Font0);
+    canvas->setTextSize(1);
+    canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
+    canvas->drawString("LICHT", cx, cy + 9);
+}
+
 static void drawThermalsWithDegrees(LovyanGFX *canvas, const char *prefix, float fet, float mot, int x, int y, bool centered = false) {
     canvas->setFont(&fonts::Font2);
     canvas->setTextSize(1);
@@ -1346,36 +1367,60 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     // 9. Bottom Left: Dynamic Badges & Thermals Row
     bool gf_on  = telemetry.incline_gforce_enabled && (Settings.get().show_gforce != 0);
     bool inc_on = telemetry.incline_gforce_enabled && (Settings.get().show_incline != 0);
+    bool lb_on  = (Settings.get().show_light_btn != 0);
 
     bool badge_cfg_changed = (_cache.show_gforce != (gf_on ? 1 : 0)) ||
                              (_cache.show_incline != (inc_on ? 1 : 0)) ||
+                             (_cache.show_light_btn != (lb_on ? 1 : 0)) ||
                              (_cache.incline_gforce_enabled != telemetry.incline_gforce_enabled);
 
-    // Badges sit compactly on the left: Slot 1 at x=50, Slot 2 at x=110 (gap 6px).
+    // Badges sit compactly on the left:
+    // Slot 1 at x=50, Slot 2 at x=110 (gap 6px), y=416.
+    // If G-Force and Incline are both ON: Lichtknopf is directly above G-Force at (50, 354)!
+    // If one is OFF or both are OFF: Lichtknopf is always on the left at (50, 416)!
     // Thermals (FET & MOT) ALWAYS stay firmly centered at x=240, directly under km/h!
-    int gf_x = -1;
-    int inc_x = -1;
+    int gf_x = -1, gf_y = 416;
+    int inc_x = -1, inc_y = 416;
+    int light_x = -1, light_y = 416;
     const int temp_x = 240;
 
-    if (gf_on && inc_on) {
-        gf_x = 50;      // Slot 1
-        inc_x = 110;    // Slot 2 (compact 6px gap between badges, ends at x=137)
-    } else if (!gf_on && inc_on) {
-        inc_x = 50;     // Neigung at Slot 1 (x=50)
-    } else if (gf_on && !inc_on) {
-        gf_x = 50;      // G-Force at Slot 1 (x=50)
+    if (lb_on) {
+        if (gf_on && inc_on) {
+            gf_x = 50;  gf_y = 416;
+            inc_x = 110; inc_y = 416;
+            light_x = 50; light_y = 354; // directly above G-Force!
+        } else if (gf_on && !inc_on) {
+            light_x = 50; light_y = 416; // left
+            gf_x = 110; gf_y = 416;      // right
+        } else if (!gf_on && inc_on) {
+            light_x = 50; light_y = 416; // left
+            inc_x = 110; inc_y = 416;    // right
+        } else {
+            light_x = 50; light_y = 416; // left
+        }
+    } else {
+        if (gf_on && inc_on) {
+            gf_x = 50; gf_y = 416;
+            inc_x = 110; inc_y = 416;
+        } else if (gf_on && !inc_on) {
+            gf_x = 50; gf_y = 416;
+        } else if (!gf_on && inc_on) {
+            inc_x = 50; inc_y = 416;
+        }
     }
 
     if (!_hyper_inited || badge_cfg_changed) {
         _cache.show_gforce = gf_on ? 1 : 0;
         _cache.show_incline = inc_on ? 1 : 0;
+        _cache.show_light_btn = lb_on ? 1 : 0;
         _cache.incline_gforce_enabled = telemetry.incline_gforce_enabled;
-        _canvas->fillRect(15, 380, 135, 75, COLOR_BG);   // Clear badge area (x:15..150)
+        _canvas->fillRect(15, 320, 135, 135, COLOR_BG);  // Clear entire badge area (x:15..150, y:320..455)
         _canvas->fillRect(165, 395, 150, 45, COLOR_BG);  // Clear thermals area (x:165..315)
         _cache.temp_esc = -999;
         _cache.temp_motor = -999;
         _cache.g_force_x10 = -999;
         _cache.incline_deg = -999;
+        _cache.lights_enabled = -1;
     }
 
     // Thermals (FET & MOT) - Always centered at temp_x = 240 directly under km/h
@@ -1393,7 +1438,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         int cur_g10 = (int)roundf(telemetry.g_force * 10.0f);
         if (!_hyper_inited || badge_cfg_changed || cur_g10 != _cache.g_force_x10) {
             _cache.g_force_x10 = cur_g10;
-            drawGForceBadge(_canvas, telemetry.g_force, gf_x, 416, 27);
+            drawGForceBadge(_canvas, telemetry.g_force, gf_x, gf_y, 27);
         }
     }
 
@@ -1402,7 +1447,16 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         int cur_inc_x10 = (int)roundf(telemetry.incline_deg * 10.0f);
         if (!_hyper_inited || badge_cfg_changed || cur_inc_x10 != _cache.incline_deg) {
             _cache.incline_deg = cur_inc_x10;
-            drawInclineBadge(_canvas, telemetry.incline_deg, inc_x, 416, 27);
+            drawInclineBadge(_canvas, telemetry.incline_deg, inc_x, inc_y, 27);
+        }
+    }
+
+    // Light Badge (Schalter)
+    if (light_x > 0) {
+        int8_t cur_light = telemetry.lights_enabled ? 1 : 0;
+        if (!_hyper_inited || badge_cfg_changed || cur_light != _cache.lights_enabled) {
+            _cache.lights_enabled = cur_light;
+            drawLightBadge(_canvas, telemetry.lights_enabled, light_x, light_y, 27, pal.primary);
         }
     }
 
@@ -2216,41 +2270,50 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         _canvas->setTextColor(turbOn ? COLOR_BG : COLOR_MUTED_GRAY, turbOn ? pal.primary : pal.surface);
         _canvas->drawString(turbOn ? "[ AN ]" : "[ AUS ]", 645, 240);
 
-        // Card 3: COCKPIT BUTTONS (G-Force, Incline & Brake Mode) (y: 284..356, h: 72)
+        // Card 3: COCKPIT BUTTONS (G-Force, Incline, Light & Brake Mode) (y: 284..356, h: 72)
         drawCard(20, 284, 760, 72, COLOR_SURFACE, COLOR_BORDER);
 
         // a) [ G-FORCE: AN / AUS ]
         bool gfOn = (Settings.get().show_gforce != 0);
-        _canvas->fillRoundRect(35, 294, 235, 52, 10, gfOn ? pal.primary : pal.surface);
-        _canvas->drawRoundRect(35, 294, 235, 52, 10, gfOn ? pal.primary : pal.border);
+        _canvas->fillRoundRect(32, 294, 172, 52, 10, gfOn ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(32, 294, 172, 52, 10, gfOn ? pal.primary : pal.border);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(gfOn ? COLOR_BG : COLOR_MUTED_GRAY, gfOn ? pal.primary : pal.surface);
-        _canvas->drawString(gfOn ? "[ G-FORCE: AN ]" : "[ G-FORCE: AUS ]", 152, 320);
+        _canvas->drawString(gfOn ? "[ G-FORCE: AN ]" : "[ G-FORCE: AUS ]", 118, 320);
 
         // b) [ NEIGUNG: AN / AUS ]
         bool incOn = (Settings.get().show_incline != 0);
-        _canvas->fillRoundRect(282, 294, 235, 52, 10, incOn ? pal.primary : pal.surface);
-        _canvas->drawRoundRect(282, 294, 235, 52, 10, incOn ? pal.primary : pal.border);
+        _canvas->fillRoundRect(218, 294, 172, 52, 10, incOn ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(218, 294, 172, 52, 10, incOn ? pal.primary : pal.border);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(incOn ? COLOR_BG : COLOR_MUTED_GRAY, incOn ? pal.primary : pal.surface);
-        _canvas->drawString(incOn ? "[ NEIGUNG: AN ]" : "[ NEIGUNG: AUS ]", 400, 320);
+        _canvas->drawString(incOn ? "[ NEIGUNG: AN ]" : "[ NEIGUNG: AUS ]", 304, 320);
 
-        // c) [ BREMSEN: AUS / MILD / MAX ]
+        // c) [ LICHT: AN / AUS ]
+        bool lbOn = (Settings.get().show_light_btn != 0);
+        _canvas->fillRoundRect(404, 294, 172, 52, 10, lbOn ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(404, 294, 172, 52, 10, lbOn ? pal.primary : pal.border);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(lbOn ? COLOR_BG : COLOR_MUTED_GRAY, lbOn ? pal.primary : pal.surface);
+        _canvas->drawString(lbOn ? "[ LICHT: AN ]" : "[ LICHT: AUS ]", 490, 320);
+
+        // d) [ BREMSEN: AUS / MILD / MAX ]
         uint8_t bm = Settings.get().brake_mode;
-        const char *bmStr = (bm == 0) ? "[ BREMSEN: AUS ]" :
-                            ((bm == 1) ? "[ BREMSEN: MILD ]" : "[ BREMSEN: MAX ]");
+        const char *bmStr = (bm == 0) ? "[ BREMSE: AUS ]" :
+                            ((bm == 1) ? "[ BREMSE: MILD ]" : "[ BREMSE: MAX ]");
         uint16_t bmBg = (bm == 0) ? pal.surface : ((bm == 1) ? pal.secondary : pal.primary);
         uint16_t bmBorder = (bm == 0) ? pal.border : ((bm == 1) ? pal.secondary : pal.primary);
         uint16_t bmText = (bm == 0) ? COLOR_MUTED_GRAY : COLOR_BG;
 
-        _canvas->fillRoundRect(530, 294, 235, 52, 10, bmBg);
-        _canvas->drawRoundRect(530, 294, 235, 52, 10, bmBorder);
+        _canvas->fillRoundRect(590, 294, 172, 52, 10, bmBg);
+        _canvas->drawRoundRect(590, 294, 172, 52, 10, bmBorder);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(bmText, bmBg);
-        _canvas->drawString(bmStr, 647, 320);
+        _canvas->drawString(bmStr, 676, 320);
 
         // Card 4: WIFI-BRIDGE & SETUP (y: 364..436, h: 72)
         drawCard(20, 364, 760, 72, COLOR_SURFACE, COLOR_BORDER);
@@ -2833,24 +2896,32 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             return true;
         }
 
-        // Card 3: G-FORCE Toggle (x: 20..275, y: 280..360)
-        if (tx >= 20 && tx < 275 && ty >= 280 && ty <= 360) {
+        // Card 3: G-FORCE Toggle (x: 20..210, y: 280..360)
+        if (tx >= 20 && tx < 210 && ty >= 280 && ty <= 360) {
             Settings.get().show_gforce = Settings.get().show_gforce ? 0 : 1;
             Settings.save();
             invalidateCache();
             _menu_dirty = true;
             return true;
         }
-        // Card 3: NEIGUNG Toggle (x: 275..525, y: 280..360)
-        if (tx >= 275 && tx < 525 && ty >= 280 && ty <= 360) {
+        // Card 3: NEIGUNG Toggle (x: 210..395, y: 280..360)
+        if (tx >= 210 && tx < 395 && ty >= 280 && ty <= 360) {
             Settings.get().show_incline = Settings.get().show_incline ? 0 : 1;
             Settings.save();
             invalidateCache();
             _menu_dirty = true;
             return true;
         }
-        // Card 3: BREMSEN Mode Cycle (x: 525..780, y: 280..360)
-        if (tx >= 525 && tx <= 780 && ty >= 280 && ty <= 360) {
+        // Card 3: LICHT Toggle (x: 395..580, y: 280..360)
+        if (tx >= 395 && tx < 580 && ty >= 280 && ty <= 360) {
+            Settings.get().show_light_btn = Settings.get().show_light_btn ? 0 : 1;
+            Settings.save();
+            invalidateCache();
+            _menu_dirty = true;
+            return true;
+        }
+        // Card 3: BREMSEN Mode Cycle (x: 580..780, y: 280..360)
+        if (tx >= 580 && tx <= 780 && ty >= 280 && ty <= 360) {
             Settings.get().brake_mode = (Settings.get().brake_mode + 1) % 3;
             Settings.save();
             invalidateCache();

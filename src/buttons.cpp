@@ -418,6 +418,18 @@ void ButtonHandler::processTouch(uint32_t now) {
                         else if (_last_tap_y < 65 && _last_tap_x > 620) {
                             _pending_action = NAV_BTN1_LONG;
                         }
+                        // 4. Interactive Headlight Badge Touch Toggle
+                        else if (Settings.get().show_light_btn != 0) {
+                            bool gf_on = (Settings.get().show_gforce != 0);
+                            bool inc_on = (Settings.get().show_incline != 0);
+                            int lx = 50;
+                            int ly = (gf_on && inc_on) ? 354 : 416;
+                            int dx = (int)_last_tap_x - lx;
+                            int dy = (int)_last_tap_y - ly;
+                            if (dx * dx + dy * dy <= 32 * 32) {
+                                _pending_action = NAV_LIGHT_TOGGLE;
+                            }
+                        }
                     }
                 }
             }

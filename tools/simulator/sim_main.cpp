@@ -733,41 +733,52 @@ void testTouchGestures() {
     assert(touchHandled == true);
     assert(Settings.get().race_split1_kmh == old_sp1 + 1);
 
-    // Test Tab 4 DASH buttons: G-Force toggle, Incline toggle, Brake mode cycle
+    // Test Tab 4 DASH buttons: G-Force toggle, Incline toggle, Light toggle, Brake mode cycle
     Renderer.setSettingsTab(4);
     uint8_t init_gf = Settings.get().show_gforce;
     uint8_t init_inc = Settings.get().show_incline;
+    uint8_t init_lb = Settings.get().show_light_btn;
     uint8_t init_bm = Settings.get().brake_mode;
 
-    // Tap G-FORCE button at x=150, y=320 -> toggles show_gforce
-    touchHandled = Renderer.handleSettingsTouch(150, 320, tTest);
+    // Tap G-FORCE button at x=115, y=320 -> toggles show_gforce
+    touchHandled = Renderer.handleSettingsTouch(115, 320, tTest);
     assert(touchHandled == true);
     assert(Settings.get().show_gforce == (init_gf ? 0 : 1));
 
     // Tap G-FORCE again -> restore
-    touchHandled = Renderer.handleSettingsTouch(150, 320, tTest);
+    touchHandled = Renderer.handleSettingsTouch(115, 320, tTest);
     assert(touchHandled == true);
     assert(Settings.get().show_gforce == init_gf);
 
-    // Tap NEIGUNG button at x=400, y=320 -> toggles show_incline
-    touchHandled = Renderer.handleSettingsTouch(400, 320, tTest);
+    // Tap NEIGUNG button at x=300, y=320 -> toggles show_incline
+    touchHandled = Renderer.handleSettingsTouch(300, 320, tTest);
     assert(touchHandled == true);
     assert(Settings.get().show_incline == (init_inc ? 0 : 1));
 
     // Tap NEIGUNG again -> restore
-    touchHandled = Renderer.handleSettingsTouch(400, 320, tTest);
+    touchHandled = Renderer.handleSettingsTouch(300, 320, tTest);
     assert(touchHandled == true);
     assert(Settings.get().show_incline == init_inc);
 
-    // Tap BREMSEN button at x=650, y=320 -> cycles brake_mode (0 -> 1 -> 2 -> 0)
-    touchHandled = Renderer.handleSettingsTouch(650, 320, tTest);
+    // Tap LICHT button at x=490, y=320 -> toggles show_light_btn
+    touchHandled = Renderer.handleSettingsTouch(490, 320, tTest);
+    assert(touchHandled == true);
+    assert(Settings.get().show_light_btn == (init_lb ? 0 : 1));
+
+    // Tap LICHT again -> restore
+    touchHandled = Renderer.handleSettingsTouch(490, 320, tTest);
+    assert(touchHandled == true);
+    assert(Settings.get().show_light_btn == init_lb);
+
+    // Tap BREMSEN button at x=680, y=320 -> cycles brake_mode (0 -> 1 -> 2 -> 0)
+    touchHandled = Renderer.handleSettingsTouch(680, 320, tTest);
     assert(touchHandled == true);
     assert(Settings.get().brake_mode == (init_bm + 1) % 3);
 
     // Restore brake_mode
     Settings.get().brake_mode = init_bm;
     Settings.save();
-    printf("[PASS] Settings Tab 4 DASH: G-Force, Neigung, and Brake Mode buttons verified 100%%!\n");
+    printf("[PASS] Settings Tab 4 DASH: G-Force, Neigung, Licht, and Brake Mode buttons verified 100%%!\n");
 
     Renderer.setSettingsTab(2); // Switch back to RACE for limit tests
 
@@ -2467,8 +2478,10 @@ void testDashSettingsAndUiFeatures() {
     assert(has_clock_pixel == true);
     printf("[PASS] Header Clock: Rendered when GPS fix is valid.\n");
 
-    // 3. Badges dynamic positioning & visibility
-    // Test hiding G-Force badge: Incline badge dynamically shifts to slot 1 (x=50), temps stay centered at x=240
+    // 3. Badges dynamic positioning & visibility with Headlight Button
+    // Test: show_light_btn=1, show_gforce=0, show_incline=1
+    // Lichtknopf at left slot 1 (x=50, y=416), Incline badge at slot 2 (x=110, y=416), temps at x=240
+    Settings.get().show_light_btn = 1;
     Settings.get().show_gforce = 0;
     Settings.get().show_incline = 1;
     t.incline_gforce_enabled = true;
@@ -2477,23 +2490,51 @@ void testDashSettingsAndUiFeatures() {
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     Renderer.render(t);
-    // Incline badge must now be rendered at slot 1 (50, 416)
+    // Lichtknopf at left (50, 416), Incline at (110, 416)
     assert(Display.getSprite().readPixel(50, 416) != 0x0000);
-    // Thermals FET/MOT at cx=240, 405 stay cleanly rendered under km/h
+    assert(Display.getSprite().readPixel(110, 416) != 0x0000);
     assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
-    printf("[PASS] When show_gforce=0, Incline badge dynamically shifts to slot 1 (x=50), temps stay at x=240.\n");
+    printf("[PASS] When show_gforce=0, Lichtknopf is at left (x=50), Incline badge is at slot 2 (x=110), temps at x=240.\n");
 
-    // Test hiding Incline badge: G-Force badge is at slot 1 (x=50), temps stay centered at x=240
+    // Test: show_light_btn=1, show_gforce=1, show_incline=0
+    // Lichtknopf at left slot 1 (x=50, y=416), G-Force badge at slot 2 (x=110, y=416), temps at x=240
     Settings.get().show_gforce = 1;
     Settings.get().show_incline = 0;
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     Renderer.render(t);
     assert(Display.getSprite().readPixel(50, 416) != 0x0000);
+    assert(Display.getSprite().readPixel(110, 416) != 0x0000);
     assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
-    printf("[PASS] When show_incline=0, G-Force badge is at slot 1 (x=50), temps stay at x=240.\n");
+    printf("[PASS] When show_incline=0, Lichtknopf is at left (x=50), G-Force badge is at slot 2 (x=110), temps at x=240.\n");
 
-    // Test hiding both badges: Neither badge drawn, temps stay centered at x=240
+    // Test: show_light_btn=1, show_gforce=0, show_incline=0
+    // Lichtknopf at left slot 1 (x=50, y=416), slot 2 (x=110) empty, temps at x=240
+    Settings.get().show_gforce = 0;
+    Settings.get().show_incline = 0;
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    Renderer.render(t);
+    assert(Display.getSprite().readPixel(50, 416) != 0x0000);
+    assert(Display.getSprite().readPixel(110, 416) == 0x0000);
+    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    printf("[PASS] When both GF & INC are off, Lichtknopf stays at left (x=50), slot 2 empty, temps at x=240.\n");
+
+    // Test: all three badges enabled (show_light_btn=1, show_gforce=1, show_incline=1)
+    // G-Force at slot 1 (x=50, y=416), Incline at slot 2 (x=110, y=416), Lichtknopf directly above G-Force at (x=50, y=354)!
+    Settings.get().show_gforce = 1;
+    Settings.get().show_incline = 1;
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    Renderer.render(t);
+    assert(Display.getSprite().readPixel(50, 416) != 0x0000);  // G-Force
+    assert(Display.getSprite().readPixel(110, 416) != 0x0000); // Incline
+    assert(Display.getSprite().readPixel(50, 354) != 0x0000);  // Lichtknopf above G-Force!
+    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    printf("[PASS] When both GF and INC are active, Lichtknopf sits directly above G-Force at (50, 354)!\n");
+
+    // Test: show_light_btn=0 and both GF and INC off: neither badge drawn, (50, 416) and (110, 416) empty
+    Settings.get().show_light_btn = 0;
     Settings.get().show_gforce = 0;
     Settings.get().show_incline = 0;
     Renderer.invalidateCache();
@@ -2501,22 +2542,11 @@ void testDashSettingsAndUiFeatures() {
     Renderer.render(t);
     assert(Display.getSprite().readPixel(50, 416) == 0x0000);
     assert(Display.getSprite().readPixel(110, 416) == 0x0000);
-    // Thermals FET/MOT at cx=240, 405 should still be cleanly rendered
-    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
-    printf("[PASS] Both badges hidden when show_gforce=0 and show_incline=0; temps stay at x=240.\n");
-
-    // Test both badges enabled: G-Force at slot 1 (x=50), Incline at slot 2 (x=110), temps at x=240
-    Settings.get().show_gforce = 1;
-    Settings.get().show_incline = 1;
-    Renderer.invalidateCache();
-    Renderer.markScreenDirty();
-    Renderer.render(t);
-    assert(Display.getSprite().readPixel(50, 416) != 0x0000);
-    assert(Display.getSprite().readPixel(110, 416) != 0x0000);
-    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
-    printf("[PASS] Both badges visible at slot 1 (x=50) and slot 2 (x=110), temps at x=240.\n");
+    assert(Display.getSprite().readPixel(50, 354) == 0x0000);
+    printf("[PASS] When show_light_btn=0, show_gforce=0, show_incline=0: all badge slots empty.\n");
 
     // Restore settings
+    Settings.get().show_light_btn = 1;
     Settings.get().show_gforce = 1;
     Settings.get().show_incline = 1;
     Settings.save();

@@ -192,6 +192,7 @@ private:
         bool clock_visible;
         uint8_t show_gforce;
         uint8_t show_incline;
+        uint8_t show_light_btn;
         int8_t tuning_mode_dot;
 
         void invalidate() {
@@ -204,6 +205,7 @@ private:
             clock_visible = false;
             show_gforce = 255;
             show_incline = 255;
+            show_light_btn = 255;
             tuning_mode_dot = -1;
             speed = -999;
             duty_x10 = -999;

@@ -231,6 +231,7 @@ struct DashSettings {
     char    ble_paired_name[32];    // Paired phone friendly name
     uint8_t show_gforce;            // 1 = ON, 0 = OFF (default 1)
     uint8_t show_incline;           // 1 = ON, 0 = OFF (default 1)
+    uint8_t show_light_btn;         // 1 = ON, 0 = OFF (default 1)
     uint8_t brake_mode;             // 0 = AUS (Freilauf), 1 = MILD, 2 = MAXIMAL (default 2)
 
     DashSettings()
@@ -263,6 +264,7 @@ struct DashSettings {
           ble_paired(false),
           show_gforce(1),
           show_incline(1),
+          show_light_btn(1),
           brake_mode(2)
     {
         strncpy(pin_code, "1234", sizeof(pin_code));
