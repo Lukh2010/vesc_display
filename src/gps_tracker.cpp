@@ -223,19 +223,26 @@ void GpsTracker::update(DashTelemetry &telemetry) {
     }
 
     // --------------------------------------------------------------------------
-    // SPEED PRIORITY SELECTOR:
-    // Decoupled from GPS! telemetry.speed_kmh is ALWAYS driven directly by
-    // VESC motor ERPM / wheel speed (0ms latency).
-    // GPS speed remains in telemetry.gps.speed_kmh for Dragy/Race Timer logs
-    // and is only used as a fallback if VESC is disconnected (!telemetry.vesc_connected).
+    // SPEED PRIORITY SELECTOR (Smart Fusion):
+    // 1. Stillstand / Ampel: Steht das Rad (< 0.8 km/h), felsenfest 0 km/h (kein GPS-Drift).
+    // 2. Rollenprüfstand / Dyno: Rad dreht sich (> 0.8 km/h), aber GPS steht (GPS < 1.0 km/h):
+    //    Tacho zeigt 100% VESC-Wellengeschwindigkeit (11" kalibriert, strikt <= 22 km/h legal).
+    // 3. Reale Straßenfahrt: Sobald GPS-Fix aktiv ist und das Fahrzeug real rollt (GPS >= 1.0 km/h):
+    //    GPS Ground Speed hat absolute Priorität!
+    // 4. Signalverlust / Tunnel: Nahtloser Fallback auf VESC-Wellengeschwindigkeit.
     // --------------------------------------------------------------------------
     bool has_gps_fix = (telemetry.gps.valid && telemetry.gps.satellites >= 4 &&
                         (now - telemetry.gps.last_fix_ms < 2500));
 
-    if (!telemetry.vesc_connected && has_gps_fix) {
-        telemetry.use_gps_speed = true;
+    if (telemetry.vesc_motor_speed < 0.8f && (!has_gps_fix || telemetry.gps.speed_kmh < 1.2f)) {
+        telemetry.speed_kmh = 0.0f;
+        telemetry.use_gps_speed = false;
+    } else if (has_gps_fix && telemetry.gps.speed_kmh >= 1.0f) {
         telemetry.speed_kmh = telemetry.gps.speed_kmh;
+        telemetry.use_gps_speed = true;
     } else {
+        // Rollenprüfstand (Rad dreht, GPS = 0) oder Tunnel/Signalverlust: VESC-Drehzahl
+        telemetry.speed_kmh = telemetry.vesc_motor_speed;
         telemetry.use_gps_speed = false;
     }
 
