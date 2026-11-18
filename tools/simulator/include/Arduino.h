@@ -30,6 +30,7 @@ inline uint32_t g_sim_time_ms = 1000;
 inline bool g_use_wall_clock_millis = false;
 
 inline void pinMode(int pin, int mode) {}
+inline void digitalWrite(int pin, int val) { if (pin >= 0 && pin < 64) g_sim_pin_state[pin] = val; }
 inline int digitalRead(int pin) { return (pin >= 0 && pin < 64) ? g_sim_pin_state[pin] : HIGH; }
 inline void simSetPin(int pin, int state) { if (pin >= 0 && pin < 64) g_sim_pin_state[pin] = state; }
 inline void simAdvanceMs(uint32_t ms) { g_sim_time_ms += ms; }

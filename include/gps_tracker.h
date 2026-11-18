@@ -1,12 +1,13 @@
 #pragma once
 
 #include <Arduino.h>
+#include "board_config.h"
 #include "dash_types.h"
 
 // ==============================================================================
 // ATGM336H GPS + BDS (BeiDou) Hardware Tracker & NMEA Parser
 // ==============================================================================
-// Communicates with ATGM336H on ESP32-S3 GPIO 6 (RX) at 9600 baud.
+// Communicates with ATGM336H on ESP32-S3 GPIO 44 (RX) at 9600 baud.
 // Parses $GNRMC, $GPRMC, $GNGGA, $GPGGA strings with zero heap allocation.
 // Provides live satellite speed, 3D fix status, altitude, and UTC clock.
 

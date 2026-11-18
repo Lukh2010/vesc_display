@@ -102,6 +102,18 @@
 #define VESC_CAN_ID_DEFAULT 76     // Target VESC Controller ID (Spintend Ubox = 76)
 
 // ==============================================================================
+// Accessory Interfaces (Cockpit Header Pins)
+// ==============================================================================
+// Headlight 12V MOSFET Trigger Switch (Dual D4184 Module, 3.3V Logic)
+// Connect MOSFET TRIG -> Waveshare UART Header Pin TX (GPIO 43)
+#define PIN_HEADLIGHT_MOSFET 43
+
+// ATGM336H / NEO-M8N GPS Module (NMEA 9600 Baud)
+// Connect GPS Module TX -> Waveshare UART Header Pin RX (GPIO 44)
+#define PIN_GPS_RX          44
+#define PIN_GPS_TX          -1   // RX-only listening mode
+
+// ==============================================================================
 // Feature Flags
 // ==============================================================================
 // 1 = Self-running simulation mode (test without VESC connected)
