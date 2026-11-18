@@ -124,6 +124,9 @@ sim_lib.sim_set_theme.restype = None
 sim_lib.sim_cycle_theme.restype = None
 sim_lib.sim_toggle_turbine_sound.restype = None
 sim_lib.sim_trigger_boot_animation.restype = None
+sim_lib.sim_set_vesc_connected.argtypes = [ctypes.c_int]
+sim_lib.sim_set_vesc_connected.restype = None
+sim_lib.sim_toggle_vesc_connected.restype = None
 
 sim_lib.sim_get_frame_rgb24.argtypes = [ctypes.c_char_p]
 sim_lib.sim_get_frame_rgb24.restype = None
@@ -309,6 +312,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><button onclick="fetch('/api/toggle_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Setup Wizard (W/S)</button></span>
   <span><button onclick="fetch('/api/emergency_unlock').catch(()=>{})" style="background:#0f172a; border:1px solid #eab308; color:#fde047; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔓 Emergency Unlock</button></span>
   <span><button onclick="fetch('/api/boot_animation').catch(()=>{})" style="background:#0f172a; border:1px solid #a855f7; color:#c084fc; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🎬 Boot Animation (Replay)</button></span>
+  <span><button onclick="fetch('/api/vesc_link?toggle=1').catch(()=>{})" style="background:#0f172a; border:1px solid #06b6d4; color:#22d3ee; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔌 VESC Link Toggle (V)</button></span>
   <span><a href="/portal" target="_blank" style="color:#00e5ff; text-decoration:underline; font-weight:bold;">⚙️ Captive Portal</a> (<a href="http://localhost:8081" target="_blank" style="color:#00e5ff;">Port 8081</a>)</span>
 </div>
 
@@ -411,6 +415,8 @@ HTML_PAGE = """<!DOCTYPE html>
       fetch('/api/tuning?toggle=1');
     } else if (e.key === 'c' || e.key === 'C') {
       fetch('/api/charging');
+    } else if (e.key === 'v' || e.key === 'V') {
+      fetch('/api/vesc_link?toggle=1');
     } else if (e.key === 'a' || e.key === 'A') {
       fetch('/api/theft_alarm');
     }
@@ -610,6 +616,19 @@ class WebDemoHandler(BaseHTTPRequestHandler):
         elif path == "/api/boot_animation":
             with sim_lock:
                 sim_lib.sim_trigger_boot_animation()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
+        elif path == "/api/vesc_link":
+            enable = int(params.get("enable", [-1])[0])
+            toggle = int(params.get("toggle", [0])[0])
+            with sim_lock:
+                if toggle != 0:
+                    sim_lib.sim_toggle_vesc_connected()
+                elif enable >= 0:
+                    sim_lib.sim_set_vesc_connected(enable)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -895,6 +914,8 @@ class DesktopDemoApp:
         self.root.bind("<T>", lambda e: self.cycle_theme())
         self.root.bind("<u>", lambda e: self.toggle_turbine())
         self.root.bind("<U>", lambda e: self.toggle_turbine())
+        self.root.bind("<v>", lambda e: self.toggle_vesc_link())
+        self.root.bind("<V>", lambda e: self.toggle_vesc_link())
         self.root.bind("<r>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
         self.root.bind("<R>", lambda e: self.trigger_nav(NAV_SCREEN_RACE))
         self.root.bind("<Control-r>", lambda e: self.reset_wizard())
@@ -1084,6 +1105,10 @@ class DesktopDemoApp:
     def toggle_turbine(self):
         with sim_lock:
             sim_lib.sim_toggle_turbine_sound()
+
+    def toggle_vesc_link(self):
+        with sim_lock:
+            sim_lib.sim_toggle_vesc_connected()
 
     def adjust_throttle(self, delta):
         with sim_lock:
