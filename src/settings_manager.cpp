@@ -39,6 +39,7 @@ void SettingsManager::loadDefaults() {
     strncpy(_settings.ble_paired_name, "Smartphone", sizeof(_settings.ble_paired_name));
     _settings.show_gforce            = 1;
     _settings.show_incline           = 1;
+    _settings.show_light_btn         = 1;
     _settings.brake_mode             = 2;
     _race_records.reset();
 }
@@ -92,6 +93,8 @@ void SettingsManager::begin() {
         if (_settings.show_gforce > 1) _settings.show_gforce = 1;
         _settings.show_incline           = _prefs.getUChar("show_inc", 1);
         if (_settings.show_incline > 1) _settings.show_incline = 1;
+        _settings.show_light_btn         = _prefs.getUChar("show_lb", 1);
+        if (_settings.show_light_btn > 1) _settings.show_light_btn = 1;
         _settings.brake_mode             = _prefs.getUChar("brk_mode", 2);
         if (_settings.brake_mode > 2) _settings.brake_mode = 2;
         _settings.wifi_bridge_enabled    = _prefs.getBool("wifi_en", false);
@@ -148,6 +151,7 @@ void SettingsManager::save() {
     _prefs.putBool("inc_en", _settings.incline_gforce_enabled);
     _prefs.putUChar("show_gf", _settings.show_gforce);
     _prefs.putUChar("show_inc", _settings.show_incline);
+    _prefs.putUChar("show_lb", _settings.show_light_btn);
     _prefs.putUChar("brk_mode", _settings.brake_mode);
     _prefs.putBool("wifi_en", _settings.wifi_bridge_enabled);
     _prefs.putBool("setup_done", _settings.setup_completed);
