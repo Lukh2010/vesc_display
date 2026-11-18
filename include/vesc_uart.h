@@ -91,7 +91,7 @@ private:
 
     // Telemetry & Ebike Physics Parameters
     int _pole_pairs;            // Standard ebike hub motor: usually 15 or 23 pole pairs
-    float _wheel_diameter_mm;   // e.g., 26" wheel ~ 660mm, 20" ~ 500mm
+    float _wheel_diameter_mm;   // e.g., 11" wheel ~ 279.4mm, 26" ~ 660mm
     float _gear_ratio;          // 1.0 for direct-drive hub, or gear reduction ratio
     int32_t _tacho_trip_offset; // Trip odometer tachometer baseline offset
     int32_t _last_tacho;        // Most recent raw tachometer reading from VESC

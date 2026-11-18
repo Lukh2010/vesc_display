@@ -203,7 +203,7 @@ static void runSimulationStep(float dt) {
     int pole_pairs = Settings.get().motor_pole_pairs;
     if (pole_pairs < 2) pole_pairs = 15;
     float wheel_diam_in = Settings.get().wheel_diameter_in;
-    if (wheel_diam_in < 5.0f) wheel_diam_in = 26.0f;
+    if (wheel_diam_in < 5.0f) wheel_diam_in = 11.0f;
     float wheel_circ_m = (wheel_diam_in * 0.0254f) * M_PI;
     float gear_ratio = Settings.get().gear_ratio;
     if (gear_ratio < 0.1f) gear_ratio = 1.0f;

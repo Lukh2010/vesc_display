@@ -84,7 +84,7 @@ void VescHandler::resetTripOdometer(int32_t current_tacho) {
 VescHandler::VescHandler()
     : _transport(nullptr),
       _pole_pairs(15),
-      _wheel_diameter_mm(660.0f),
+      _wheel_diameter_mm(279.4f), // 11" wheel = 279.4 mm
       _gear_ratio(1.0f),
       _tacho_trip_offset(0),
       _last_tacho(0),
@@ -1333,7 +1333,7 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     int pole_pairs = Settings.get().motor_pole_pairs;
     if (pole_pairs < 2) pole_pairs = 15;
     float wheel_diam_in = Settings.get().wheel_diameter_in;
-    if (wheel_diam_in < 5.0f) wheel_diam_in = 26.0f;
+    if (wheel_diam_in < 5.0f) wheel_diam_in = 11.0f;
     float wheel_circ_m = (wheel_diam_in * 0.0254f) * M_PI;
     float gear_ratio = Settings.get().gear_ratio;
     if (gear_ratio < 0.1f) gear_ratio = 1.0f;
