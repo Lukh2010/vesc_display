@@ -194,19 +194,6 @@ void loop() {
             telemetry.boost_active = !telemetry.boost_active;
             Renderer.markScreenDirty();
             Serial.printf("[SIM] Boost: %s\n", telemetry.boost_active ? "AN" : "AUS");
-        } else if (c == 'c' || c == 'C') {
-            telemetry.is_charging = !telemetry.is_charging;
-            if (telemetry.is_charging) {
-                telemetry.screen = SCREEN_CHARGING_HUD;
-                telemetry.charge_power_watts = 165.0f;
-                telemetry.charge_current_amps = 3.1f;
-                telemetry.charge_est_minutes = 42.0f;
-            } else {
-                telemetry.screen = SCREEN_RIDE_DASH;
-            }
-            Renderer.markScreenDirty();
-            Renderer.invalidateCache();
-            Serial.printf("[SIM] Lade-HUD (Charging): %s\n", telemetry.is_charging ? "AKTIV" : "INAKTIV");
         } else if (c == 'p' || c == 'P') {
             telemetry.is_locked = !telemetry.is_locked;
             ModeManager::instance().setLocked(telemetry.is_locked);
@@ -919,96 +906,6 @@ void loop() {
     // 2b. Update Live GPS+BDS Satellite Tracker & Ground Speed Priority
     GpsTracker::instance().update(telemetry);
 
-    // 2c. Smart Charging Detection & Drive Lockout
-    // TEMPORARILY DISABLED (Obsidian TODO): Regen braking to standstill or high SoC (>=99%)
-    // erroneously triggered charging HUD and locked out drive with 0A.
-    // Manual serial toggle ('c') remains available for testing.
-    bool charge_detected = false;
-#if 0
-    static uint32_t s_stationary_since_ms = 0;
-    static float s_stationary_baseline_v = 0.0f;
-    static uint32_t s_charge_unplug_timer_ms = 0;
-    static DashboardScreen s_screen_before_charge = SCREEN_RIDE_DASH;
-
-    bool is_stationary = (telemetry.speed_kmh <= 0.5f && telemetry.rpm <= 10.0f);
-    if (telemetry.gps.valid && telemetry.gps.speed_kmh > 0.8f) is_stationary = false;
-
-    if (is_stationary) {
-        if (s_stationary_since_ms == 0) {
-            s_stationary_since_ms = now;
-            s_stationary_baseline_v = telemetry.voltage;
-        } else if (now - s_stationary_since_ms < 3000) {
-            // Update baseline during initial sag recovery
-            s_stationary_baseline_v = telemetry.voltage;
-        }
-    } else {
-        s_stationary_since_ms = 0;
-        s_stationary_baseline_v = 0.0f;
-    }
-
-    // Charging detection:
-    // 1) Direct charging current into battery detected by VESC
-    bool incoming_current = (telemetry.current_amps < -0.15f || telemetry.power_watts < -5.0f);
-    // 2) Voltage rising while stationary (external charger connected directly to battery pack)
-    bool rising_voltage = (is_stationary && (now - s_stationary_since_ms >= 4000) &&
-                           telemetry.voltage >= s_stationary_baseline_v + 0.12f &&
-                           telemetry.voltage >= 35.0f);
-
-    charge_detected = is_stationary && (incoming_current || rising_voltage || (telemetry.is_charging && telemetry.battery_pct >= 99.0f));
-
-    if (charge_detected) {
-        s_charge_unplug_timer_ms = 0;
-        if (!telemetry.is_charging) {
-            telemetry.is_charging = true;
-            telemetry.charge_start_ms = now;
-            if (telemetry.screen != SCREEN_CHARGING_HUD && telemetry.screen != SCREEN_SETUP_WIZARD) {
-                s_screen_before_charge = telemetry.screen;
-                telemetry.screen = SCREEN_CHARGING_HUD;
-            }
-            Renderer.markScreenDirty();
-            Renderer.invalidateCache();
-            Serial.printf("[CHARGING] Charger connected! Voltage: %.1fV, Amps: %.1fA, Power: %.0fW\n",
-                          telemetry.voltage, telemetry.current_amps, telemetry.power_watts);
-        }
-
-        // Calculate incoming charge power & estimated remaining time
-        float chg_w = fabsf(telemetry.power_watts);
-        if (chg_w < 10.0f) chg_w = 160.0f; // Typical 3A e-bike charger ~ 160W
-        telemetry.charge_power_watts = chg_w;
-        telemetry.charge_current_amps = fabsf(telemetry.current_amps);
-
-        float nominal_wh = Battery.getProfile(Battery.getActiveProfileIndex()).nominal_wh;
-        if (nominal_wh < 100.0f) nominal_wh = 1300.0f;
-        float missing_wh = ((100.0f - telemetry.battery_pct) / 100.0f) * nominal_wh;
-        if (missing_wh < 0.0f) missing_wh = 0.0f;
-        telemetry.charge_est_minutes = (missing_wh / chg_w) * 60.0f;
-
-        // Drive Lockout: "wärend er läd soll man nicht fahren können"
-        telemetry.throttle_pct = 0.0f;
-        Vesc.sendModeLimits(0.0f, 0.0f, 0.0f, 0.0f);
-    } else if (telemetry.is_charging) {
-        // Charger unplugged debounce (3.5 seconds without charge)
-        if (s_charge_unplug_timer_ms == 0) {
-            s_charge_unplug_timer_ms = now;
-        } else if (now - s_charge_unplug_timer_ms >= 3500) {
-            telemetry.is_charging = false;
-            s_charge_unplug_timer_ms = 0;
-            if (telemetry.screen == SCREEN_CHARGING_HUD) {
-                telemetry.screen = s_screen_before_charge;
-            }
-            // Unlock drive only if PIN lock is not active
-            if (!Settings.get().pin_lock_enabled || !telemetry.is_locked) {
-                ModeManager::instance().setLocked(false);
-                ModeManager::instance().applyLimitsToVesc();
-            }
-            Renderer.markScreenDirty();
-            Renderer.invalidateCache();
-            Renderer.triggerNeedleSweep();
-            Serial.println("[CHARGING] Charger disconnected. Drive lockout released.");
-        }
-    }
-#endif
-
     telemetry.uptime_sec = (now - boot_ms) / 1000;
     telemetry.dynamic_wh_km = Battery.getDynamicWhKm();
     telemetry.est_range_km = Battery.getEstRangeKm();
@@ -1040,8 +937,8 @@ void loop() {
 
     telemetry.color_theme = Settings.get().color_theme;
     bool turbine_enabled = Settings.get().turbine_sound_enabled;
-    // Active if vehicle is unlocked, not charging, no alarm, and either moving or throttle applied
-    bool is_driving = (!telemetry.is_locked && !telemetry.is_charging && !telemetry.theft_alarm_active && 
+    // Active if vehicle is unlocked, no alarm, and either moving or throttle applied
+    bool is_driving = (!telemetry.is_locked && !telemetry.theft_alarm_active && 
                        (telemetry.speed_kmh >= 0.8f || telemetry.throttle_pct >= 3.0f));
 
     if (turbine_enabled && is_driving) {

@@ -111,10 +111,6 @@ private:
     // Screen 7: First-Time Setup & Onboarding Wizard
     void renderSetupWizard(const DashTelemetry &telemetry);
 
-    // Screen 8: Animated Battery Charging HUD with Drive Lockout
-    void initChargingScreen();
-    void renderChargingScreen(const DashTelemetry &telemetry);
-
     // Screen 9: Wireless OTA Firmware Update Progress HUD
     void renderOtaScreen(int pct, const char *status);
 
@@ -330,14 +326,6 @@ private:
     bool     _last_theft_alarm;
     bool     _last_ble_conn;
     uint8_t  _last_ble_bars;
-
-    // Charging HUD Screen State
-    bool     _charging_inited;
-    float    _last_charge_pct;
-    float    _last_charge_angle;
-    int      _last_charge_min;
-    int      _last_charge_w;
-    int      _last_charge_v_x10;
 
     // PIN Change Modal State (in Settings)
     bool     _pin_modal_open;
