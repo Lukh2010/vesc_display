@@ -160,8 +160,15 @@ void setup() {
     FaultManager::instance().begin();
     Serial.printf("[OK] Fault Manager initialized (%d logged faults).\n", FaultManager::instance().getFaultCount());
 
-    // 10. Initialize ATGM336H GPS+BDS Satellite Tracker on GPIO 6
+    // 10. Initialize ATGM336H GPS+BDS Satellite Tracker on GPIO 44 (RX)
     GpsTracker::instance().init();
+
+    // 10b. Initialize 12V Headlight MOSFET Trigger Switch on GPIO 43
+#if defined(PIN_HEADLIGHT_MOSFET) && (PIN_HEADLIGHT_MOSFET >= 0)
+    pinMode(PIN_HEADLIGHT_MOSFET, OUTPUT);
+    digitalWrite(PIN_HEADLIGHT_MOSFET, LOW);
+    Serial.printf("[LIGHT] Initialized 12V Headlight MOSFET Switch on GPIO %d (State: OFF).\n", PIN_HEADLIGHT_MOSFET);
+#endif
 
     // 11. Bluetooth Low Energy Keyless-Go Manager disabled as requested
     // BleKeylessManager::instance().begin();
@@ -857,7 +864,13 @@ void loop() {
                 case NAV_LIGHT_TOGGLE:
                     telemetry.lights_enabled = !telemetry.lights_enabled;
                     Renderer.markScreenDirty();
-                    Serial.printf("[NAV] Toggled Light Switch (Hauptschalter): %s\n", telemetry.lights_enabled ? "ON" : "OFF");
+#if defined(PIN_HEADLIGHT_MOSFET) && (PIN_HEADLIGHT_MOSFET >= 0)
+                    digitalWrite(PIN_HEADLIGHT_MOSFET, telemetry.lights_enabled ? HIGH : LOW);
+#endif
+                    Serial.printf("[NAV] Toggled Light Switch (Hauptschalter): %s (GPIO %d: %s)\n",
+                                  telemetry.lights_enabled ? "ON" : "OFF",
+                                  PIN_HEADLIGHT_MOSFET,
+                                  telemetry.lights_enabled ? "HIGH" : "LOW");
                     break;
 
                 case NAV_BOTH_PRESSED: // Fast Toggle Active Battery Profile
@@ -906,7 +919,16 @@ void loop() {
     // 2b. Update Live GPS+BDS Satellite Tracker & Ground Speed Priority
     GpsTracker::instance().update(telemetry);
 
-    // 2c. Speed fusion stats sync: if active ground speed exceeds recorded max, update record
+    // 2c. Update Headlight MOSFET hardware state if changed
+    static bool s_last_hw_light = false;
+    if (telemetry.lights_enabled != s_last_hw_light) {
+        s_last_hw_light = telemetry.lights_enabled;
+#if defined(PIN_HEADLIGHT_MOSFET) && (PIN_HEADLIGHT_MOSFET >= 0)
+        digitalWrite(PIN_HEADLIGHT_MOSFET, s_last_hw_light ? HIGH : LOW);
+#endif
+    }
+
+    // 2d. Speed fusion stats sync: if active ground speed exceeds recorded max, update record
     if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) {
         telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
     }
