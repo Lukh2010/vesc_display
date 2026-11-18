@@ -1351,48 +1351,40 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
                              (_cache.show_incline != (inc_on ? 1 : 0)) ||
                              (_cache.incline_gforce_enabled != telemetry.incline_gforce_enabled);
 
+    // Badges sit compactly on the left: Slot 1 at x=50, Slot 2 at x=110 (gap 6px).
+    // Thermals (FET & MOT) ALWAYS stay firmly centered at x=240, directly under km/h!
     int gf_x = -1;
     int inc_x = -1;
-    int temp_x = 240;
+    const int temp_x = 240;
 
     if (gf_on && inc_on) {
-        gf_x = 62;      // Slot 1
-        inc_x = 144;    // Slot 2
-        temp_x = 224;   // Temps at x=224
+        gf_x = 50;      // Slot 1
+        inc_x = 110;    // Slot 2 (compact 6px gap between badges, ends at x=137)
     } else if (!gf_on && inc_on) {
-        inc_x = 62;     // Neigung at Slot 1 (x=62)
-        temp_x = 144;   // Temps shift to x=144
+        inc_x = 50;     // Neigung at Slot 1 (x=50)
     } else if (gf_on && !inc_on) {
-        gf_x = 62;      // G-Force at Slot 1 (x=62)
-        temp_x = 144;   // Temps shift to x=144
-    } else {
-        temp_x = 240;   // Neither badge drawn, temps centered under dial (x=240)
+        gf_x = 50;      // G-Force at Slot 1 (x=50)
     }
 
     if (!_hyper_inited || badge_cfg_changed) {
         _cache.show_gforce = gf_on ? 1 : 0;
         _cache.show_incline = inc_on ? 1 : 0;
         _cache.incline_gforce_enabled = telemetry.incline_gforce_enabled;
-        _canvas->fillRect(15, 380, 310, 75, COLOR_BG); // Clear entire bottom-left badges & thermals area
+        _canvas->fillRect(15, 380, 135, 75, COLOR_BG);   // Clear badge area (x:15..150)
+        _canvas->fillRect(165, 395, 150, 45, COLOR_BG);  // Clear thermals area (x:165..315)
         _cache.temp_esc = -999;
         _cache.temp_motor = -999;
         _cache.g_force_x10 = -999;
         _cache.incline_deg = -999;
     }
 
-    // Thermals (FET & MOT)
+    // Thermals (FET & MOT) - Always centered at temp_x = 240 directly under km/h
     int cur_fet = (int)(telemetry.temp_esc + 0.5f);
     int cur_mot = (int)(telemetry.temp_motor + 0.5f);
     if (!_hyper_inited || badge_cfg_changed || cur_fet != _cache.temp_esc || cur_mot != _cache.temp_motor) {
         _cache.temp_esc = cur_fet;
         _cache.temp_motor = cur_mot;
-        if (temp_x == 240) {
-            _canvas->fillRect(150, 395, 180, 45, COLOR_BG);
-        } else if (temp_x == 224) {
-            _canvas->fillRect(173, 395, 110, 45, COLOR_BG);
-        } else if (temp_x == 144) {
-            _canvas->fillRect(91, 395, 110, 45, COLOR_BG);
-        }
+        _canvas->fillRect(165, 395, 150, 45, COLOR_BG);
         drawThermalsWithDegrees(_canvas, "", telemetry.temp_esc, telemetry.temp_motor, temp_x, 405, true);
     }
 
@@ -1401,7 +1393,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         int cur_g10 = (int)roundf(telemetry.g_force * 10.0f);
         if (!_hyper_inited || badge_cfg_changed || cur_g10 != _cache.g_force_x10) {
             _cache.g_force_x10 = cur_g10;
-            drawGForceBadge(_canvas, telemetry.g_force, gf_x, 416, 28);
+            drawGForceBadge(_canvas, telemetry.g_force, gf_x, 416, 27);
         }
     }
 
@@ -1410,7 +1402,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         int cur_inc_x10 = (int)roundf(telemetry.incline_deg * 10.0f);
         if (!_hyper_inited || badge_cfg_changed || cur_inc_x10 != _cache.incline_deg) {
             _cache.incline_deg = cur_inc_x10;
-            drawInclineBadge(_canvas, telemetry.incline_deg, inc_x, 416, 28);
+            drawInclineBadge(_canvas, telemetry.incline_deg, inc_x, 416, 27);
         }
     }
 

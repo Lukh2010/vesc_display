@@ -2468,7 +2468,7 @@ void testDashSettingsAndUiFeatures() {
     printf("[PASS] Header Clock: Rendered when GPS fix is valid.\n");
 
     // 3. Badges dynamic positioning & visibility
-    // Test hiding G-Force badge: Incline badge dynamically shifts to slot 1 (x=62), temps shift to x=144
+    // Test hiding G-Force badge: Incline badge dynamically shifts to slot 1 (x=50), temps stay centered at x=240
     Settings.get().show_gforce = 0;
     Settings.get().show_incline = 1;
     t.incline_gforce_enabled = true;
@@ -2477,40 +2477,44 @@ void testDashSettingsAndUiFeatures() {
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     Renderer.render(t);
-    // Incline badge must now be rendered at slot 1 (62, 416)
-    assert(Display.getSprite().readPixel(62, 416) != 0x0000);
-    printf("[PASS] When show_gforce=0, Incline badge dynamically shifts to slot 1 (x=62).\n");
+    // Incline badge must now be rendered at slot 1 (50, 416)
+    assert(Display.getSprite().readPixel(50, 416) != 0x0000);
+    // Thermals FET/MOT at cx=240, 405 stay cleanly rendered under km/h
+    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    printf("[PASS] When show_gforce=0, Incline badge dynamically shifts to slot 1 (x=50), temps stay at x=240.\n");
 
-    // Test hiding Incline badge: G-Force badge is at slot 1 (x=62), temps shift to x=144
+    // Test hiding Incline badge: G-Force badge is at slot 1 (x=50), temps stay centered at x=240
     Settings.get().show_gforce = 1;
     Settings.get().show_incline = 0;
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     Renderer.render(t);
-    assert(Display.getSprite().readPixel(62, 416) != 0x0000);
-    printf("[PASS] When show_incline=0, G-Force badge is at slot 1 (x=62) and temps shift to x=144.\n");
+    assert(Display.getSprite().readPixel(50, 416) != 0x0000);
+    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    printf("[PASS] When show_incline=0, G-Force badge is at slot 1 (x=50), temps stay at x=240.\n");
 
-    // Test hiding both badges: Neither badge drawn, temps centered under dial (x=240)
+    // Test hiding both badges: Neither badge drawn, temps stay centered at x=240
     Settings.get().show_gforce = 0;
     Settings.get().show_incline = 0;
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     Renderer.render(t);
-    assert(Display.getSprite().readPixel(62, 416) == 0x0000);
-    assert(Display.getSprite().readPixel(144, 416) == 0x0000);
+    assert(Display.getSprite().readPixel(50, 416) == 0x0000);
+    assert(Display.getSprite().readPixel(110, 416) == 0x0000);
     // Thermals FET/MOT at cx=240, 405 should still be cleanly rendered
     assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
-    printf("[PASS] Both badges hidden when show_gforce=0 and show_incline=0; temps centered at x=240.\n");
+    printf("[PASS] Both badges hidden when show_gforce=0 and show_incline=0; temps stay at x=240.\n");
 
-    // Test both badges enabled: G-Force at slot 1 (x=62), Incline at slot 2 (x=144), temps at x=224
+    // Test both badges enabled: G-Force at slot 1 (x=50), Incline at slot 2 (x=110), temps at x=240
     Settings.get().show_gforce = 1;
     Settings.get().show_incline = 1;
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     Renderer.render(t);
-    assert(Display.getSprite().readPixel(62, 416) != 0x0000);
-    assert(Display.getSprite().readPixel(144, 416) != 0x0000);
-    printf("[PASS] Both badges visible at slot 1 (x=62) and slot 2 (x=144), temps at x=224.\n");
+    assert(Display.getSprite().readPixel(50, 416) != 0x0000);
+    assert(Display.getSprite().readPixel(110, 416) != 0x0000);
+    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    printf("[PASS] Both badges visible at slot 1 (x=50) and slot 2 (x=110), temps at x=240.\n");
 
     // Restore settings
     Settings.get().show_gforce = 1;
