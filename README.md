@@ -67,19 +67,18 @@ Das Dashboard nutzt das extrem performante 16-Bit RGB565 Parallel-Interface und 
 | **Erweiterte Fahrt-Statistiken & Helligkeit** | **PIN Fehleingabe-Animation** |
 | <img src="tools/simulator/screenshots/15_stats_rich_overview.png" width="100%"> | <img src="tools/simulator/screenshots/18_pin_lockscreen_error.png" width="100%"> |
 
-### 6. Intelligenter Akku-Lademodus & Diebstahlschutz
-| Akku-Lademodus mit Restzeit-Anzeige & Wegfahrsperre | Diebstahlschutz mit VESC FOC Motor-Sirene |
+### 6. Diebstahlschutz & Drahtloses Keyless-Go
+| Diebstahlschutz mit VESC FOC Motor-Sirene | Drahtloses Keyless-Go (Bluetooth Proximity) |
 |:---:|:---:|
-| <img src="tools/simulator/screenshots/26_charging_hud.png" width="100%"> | <img src="tools/simulator/screenshots/27_pin_lockscreen_theft_alarm.png" width="100%"> |
+| <img src="tools/simulator/screenshots/27_pin_lockscreen_theft_alarm.png" width="100%"> | <img src="tools/simulator/screenshots/33_pin_lockscreen_ble_proximity.png" width="100%"> |
 
 ---
 
 ## 🌟 Spannende Features & Highlights
 
-- ⚡ **Intelligenter Akku-Lademodus (Charging HUD):**
-  - **Vollautomatische Erkennung:** Erkennt das Anstecken des Ladegeräts im Stillstand anhand von Ladestrom oder Spannungsanstieg sofort und schaltet eigenständig auf das Lade-HUD um.
-  - **Tacho-Ladekreis & Restzeit:** Eleganter 270°-Bogen mit großem Akkustand (%) im Zentrum, Live-Anzeige von Ladeleistung (Watt), Spannung (Volt) und Strom (Ampere) sowie dynamisch hochgerechneter Restladezeit (`RESTZEIT: ca. X min bis voll`).
-  - **Hardware-Wegfahrsperre:** Während des Ladevorgangs wird der VESC-Motorstrom auf 0 A gekappt – Fahren oder versehentliches Gasgeben bei eingestecktem Kabel ist unmöglich. Nach dem Abstecken wird der vorherige Bildschirm automatisch wiederhergestellt.
+- 🔑 **Keyless-Go & Drahtloses Entsperren (BLE Proximity):**
+  - **Automatische Erkennung:** Erkennt das gekoppelte Smartphone oder eine Smartwatch automatisch per Bluetooth RSSI-Feldstärke bei Annäherung an das Fahrzeug.
+  - **Fahrtbereit ohne PIN:** Bei Annäherung wird die PIN-Sperre sofort freigegeben; beim Entfernen wird der Antrieb selbsttätig wieder gesperrt.
 
 - 🚨 **Diebstahlschutz mit VESC FOC Motor-Sirene:**
   - **Bewegungserkennung im Lock-Zustand:** Wird das gesperrte Fahrzeug mehr als 2 Meter bewegt (gemessen über Motor-ERPM, GPS oder Gyro), schlägt das System Alarm.
