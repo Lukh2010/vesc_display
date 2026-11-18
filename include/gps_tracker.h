@@ -33,6 +33,9 @@ private:
     int8_t _timezone_offset;
     uint32_t _last_can_broadcast_ms;
     uint32_t _last_sim_tick_ms;
+    float    _calib_diam_accum;
+    uint16_t _calib_samples_count;
+    uint32_t _last_calib_eval_ms;
 
     char _rx_buf[128];
     uint8_t _rx_idx;

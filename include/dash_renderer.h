@@ -20,7 +20,7 @@ public:
     void skipBootAnimation();
     uint8_t getBootAnimPhase() const { return _boot_anim_phase; }
     void setBootAnimElapsed(uint32_t elapsed_ms);
-    void renderBootAnimation(uint32_t elapsed_ms);
+    void renderBootAnimation(uint32_t elapsed_ms, const DashTelemetry &telemetry);
 
     void markScreenDirty() { _screen_dirty = true; }
     void markMenuDirty() { _menu_dirty = true; }

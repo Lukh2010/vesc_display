@@ -253,6 +253,9 @@ void DashboardRenderer::skipBootAnimation() {
         _last_wizard_step = -1;
         _screen_dirty = true;
         _cache.invalidate();
+        if (!Settings.get().pin_lock_enabled) {
+            triggerNeedleSweep();
+        }
     }
 }
 
@@ -261,7 +264,7 @@ void DashboardRenderer::setBootAnimElapsed(uint32_t elapsed_ms) {
     _boot_anim_start_ms = millis() - elapsed_ms;
 }
 
-void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms) {
+void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms, const DashTelemetry &telemetry) {
     if (elapsed_ms < 2250) {
         // Phase 1 (0.0s..2.25s): Display the logo centered on pure black background
         if (_boot_anim_phase != 1) {
@@ -272,48 +275,115 @@ void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms) {
             int ly = (480 - BOOT_LOGO_HEIGHT) / 2;
             _canvas->pushImage(lx, ly, BOOT_LOGO_WIDTH, BOOT_LOGO_HEIGHT, boot_logo_rgb565);
         }
-    } else {
-        // Phase 2 (2.25s..3.25s): Clear screen to pure black, render Option 1 console log from top-left (x=24, y=32)
-        uint32_t p2_ms = elapsed_ms - 2250;
-        if (_boot_anim_phase != 2) {
-            _boot_anim_phase = 2;
-            _boot_log_lines_drawn = 0;
-            _canvas->fillScreen(COLOR_BLACK);
-        }
+        return;
+    }
 
-        static const struct {
-            uint32_t delay_ms;
-            const char *text;
-        } kBootLogs[6] = {
-            {  50, "[ 0.05s ] psram 8MB ok" },
-            { 180, "[ 0.18s ] touch gt911 ready" },
-            { 350, "[ 0.35s ] can bus 500k started" },
-            { 520, "[ 0.52s ] vesc link ok" },
-            { 700, "[ 0.70s ] throttle / brake idle" },
-            { 880, "[ 0.88s ] motor locked (0A)" }
-        };
+    // Phase 2 (>= 2.25s): Live Diagnostic Console & Wait for Screen Tap
+    uint32_t p2_ms = elapsed_ms - 2250;
+    if (_boot_anim_phase != 2) {
+        _boot_anim_phase = 2;
+        _boot_log_lines_drawn = 0;
+        _canvas->fillScreen(COLOR_BLACK);
+    }
 
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_BLACK);
+    const int start_x = 36;
+    const int start_y = 52;
+    const int line_spacing = 36;
+    _canvas->setFont(&fonts::Font2);
+
+    auto drawConsoleLine = [&](int line_idx, const char *bracket_text, uint16_t bracket_col, const char *msg_text, uint16_t msg_col) {
+        int y = start_y + (line_idx * line_spacing);
         _canvas->setTextDatum(textdatum_t::top_left);
+        _canvas->setTextPadding(0);
 
-        const int start_x = 24;
-        const int start_y = 32;
-        const int line_spacing = 26;
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BLACK);
+        _canvas->drawString("[ ", start_x, y);
+        int cur_x = start_x + _canvas->textWidth("[ ");
 
-        for (int i = 0; i < 6; i++) {
-            if (p2_ms >= kBootLogs[i].delay_ms) {
-                if (i >= _boot_log_lines_drawn) {
-                    _canvas->drawString(kBootLogs[i].text, start_x, start_y + (i * line_spacing));
-                }
+        _canvas->setTextColor(bracket_col, COLOR_BLACK);
+        _canvas->drawString(bracket_text, cur_x, y);
+        cur_x += _canvas->textWidth(bracket_text);
+
+        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BLACK);
+        _canvas->drawString(" ]", cur_x, y);
+
+        int msg_x = start_x + 80;
+        _canvas->setTextColor(msg_col, COLOR_BLACK);
+        _canvas->setTextPadding(800 - msg_x);
+        _canvas->drawString(msg_text, msg_x, y);
+        _canvas->setTextPadding(0);
+    };
+
+    // Line 0: System Initialized (PSRAM 8MB)
+    if (p2_ms >= 50) {
+        drawConsoleLine(0, " OK ", COLOR_GREEN, "SYSTEM INITIALIZED (PSRAM 8MB)", COLOR_WHITE);
+    }
+
+    // Line 1: CAN-Bus 500k Active
+    if (p2_ms >= 180) {
+        drawConsoleLine(1, " OK ", COLOR_GREEN, "CAN-BUS 500k ACTIVE", COLOR_WHITE);
+    }
+
+    // Line 2: VESC Link Check (Waits live until connected!)
+    if (p2_ms >= 350) {
+        if (!telemetry.vesc_connected) {
+            uint8_t dots_idx = (p2_ms / 250) % 4;
+            const char *dots_str[4] = { ".   ", "..  ", "... ", "...." };
+            drawConsoleLine(2, dots_str[dots_idx], COLOR_AMBER, "VESC LINK: SEARCHING...", COLOR_LIGHT_GRAY);
+
+            // While searching, user can still tap anytime to bypass / proceed offline
+            int prompt_y = 390;
+            const char *prompt = ">> TIPPE AUFS DISPLAY ZUM UEBERSPRINGEN >>";
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BLACK);
+            _canvas->setTextDatum(textdatum_t::top_center);
+            _canvas->setTextPadding(800);
+            _canvas->drawString(prompt, 400, prompt_y);
+            _canvas->setTextPadding(0);
+            return; // STOP HERE! Do not render tire or security lines until VESC link is established!
+        } else {
+            char vesc_msg[64];
+            if (telemetry.voltage > 10.0f) {
+                snprintf(vesc_msg, sizeof(vesc_msg), "VESC LINK: CONNECTED (%.1fV)", telemetry.voltage);
+            } else {
+                snprintf(vesc_msg, sizeof(vesc_msg), "VESC LINK: CONNECTED");
             }
+            drawConsoleLine(2, " OK ", COLOR_GREEN, vesc_msg, COLOR_WHITE);
         }
-        for (int i = 5; i >= 0; i--) {
-            if (p2_ms >= kBootLogs[i].delay_ms) {
-                _boot_log_lines_drawn = i + 1;
-                break;
+    }
+
+    // Line 3: Tire Calibration (Universal: shows GPS calibrated value or default 11in, strictly NO "G3")
+    if (p2_ms >= 450 && telemetry.vesc_connected) {
+        char tire_val[16];
+        float diam = Settings.get().wheel_diameter_in;
+        if (Settings.get().wheel_gps_calibrated || fabsf(diam - 11.0f) > 0.05f) {
+            if (fabsf(diam - roundf(diam)) < 0.05f) {
+                snprintf(tire_val, sizeof(tire_val), "%din", (int)roundf(diam));
+            } else {
+                snprintf(tire_val, sizeof(tire_val), "%.1fin", diam);
             }
+        } else {
+            snprintf(tire_val, sizeof(tire_val), "11in");
         }
+        char tire_msg[64];
+        snprintf(tire_msg, sizeof(tire_msg), "TIRE CALIBRATION: %s", tire_val);
+        drawConsoleLine(3, " OK ", COLOR_GREEN, tire_msg, COLOR_WHITE);
+    }
+
+    // Line 4: Security System Armed
+    if (p2_ms >= 550 && telemetry.vesc_connected) {
+        drawConsoleLine(4, " OK ", COLOR_GREEN, "SECURITY SYSTEM: ARMED (0A CUTOFF)", COLOR_WHITE);
+
+        // Prompt: Only advances when clicked/tapped, never automatically!
+        int prompt_y = 390;
+        const char *prompt = Settings.get().pin_lock_enabled ?
+                             ">> TIPPE AUFS DISPLAY ZUM ENTSPERREN >>" :
+                             ">> TIPPE AUFS DISPLAY ZUM STARTEN >>";
+        uint16_t prompt_col = ((p2_ms / 600) % 2 == 0) ? COLOR_CYAN : COLOR_WHITE;
+        _canvas->setTextColor(prompt_col, COLOR_BLACK);
+        _canvas->setTextDatum(textdatum_t::top_center);
+        _canvas->setTextPadding(800);
+        _canvas->drawString(prompt, 400, prompt_y);
+        _canvas->setTextPadding(0);
     }
 }
 
@@ -402,22 +472,12 @@ void DashboardRenderer::triggerNeedleSweep() {
 
 // Top-Level Screen Dispatcher
 void DashboardRenderer::render(const DashTelemetry &telemetry) {
-    // 0. Boot Animation Sequence (Phase 1: 0.0s..2.25s Logo, Phase 2: 2.25s..3.25s Console, Phase 3: >=3.25s PIN Lock / Setup Wizard)
+    // 0. Boot Animation Sequence (Phase 1: 0.0s..2.25s Logo, Phase 2: Live Console Diagnostics & Wait for Click/Tap)
     if (_boot_anim_active) {
         uint32_t now = millis();
         uint32_t elapsed_ms = now - _boot_anim_start_ms;
-        if (elapsed_ms >= 3250) {
-            _boot_anim_active = false;
-            _boot_anim_phase = 3;
-            _pin_screen_drawn = false;
-            _wizard_inited = false;
-            _last_wizard_step = -1;
-            _screen_dirty = true;
-            _cache.invalidate();
-        } else {
-            renderBootAnimation(elapsed_ms);
-            return;
-        }
+        renderBootAnimation(elapsed_ms, telemetry);
+        return;
     }
 
     // 0b. First-Time Setup Wizard takes precedence on first boot (bypasses PIN lockscreen)
