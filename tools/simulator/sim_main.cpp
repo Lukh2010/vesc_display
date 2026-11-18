@@ -2588,7 +2588,6 @@ int main(int argc, char **argv) {
     strncpy(t.clock_str, "14:32", sizeof(t.clock_str));
     Renderer.markScreenDirty();
     renderAndSave("00_hyper_35kw_idle", t);
-    renderAndSave("demo_00_hyper_cluster", t);
 
     // ----------------------------------------------------
     // Scenario 0b: Hyper 35kW+ Pro Cluster - RACE Mode & BOOST
@@ -2636,7 +2635,6 @@ int main(int argc, char **argv) {
     t.hazard_active = false;
     Renderer.markScreenDirty();
     renderAndSave("06_energy_analytics", t);
-    renderAndSave("demo_01_lights_screen", t);
 
     // ----------------------------------------------------
     // Scenario 7: Screen 2 - RT Waveforms & Dual Controllers (Video Exact)
@@ -2654,7 +2652,6 @@ int main(int argc, char **argv) {
     t.vesc2_max_speed = 93.8f;
     Renderer.markScreenDirty();
     renderAndSave("07_power_dynamics", t);
-    renderAndSave("demo_02_rt_graphs_screen", t);
 
     // ----------------------------------------------------
     // Scenario 8: Screen 3 - Mode Configurator (ECO Tab)

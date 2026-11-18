@@ -12,7 +12,6 @@ enum DashboardScreen {
     SCREEN_WIFI_BRIDGE   = 5,  // Transparent Wi-Fi TCP <-> UART Bridge for VESC Tool
     SCREEN_RACE_TIMER    = 6,  // Dragy / Launch Acceleration Timer Screen
     SCREEN_SETUP_WIZARD  = 7,  // First-Time Setup & Onboarding Wizard
-    SCREEN_CHARGING_HUD  = 8,  // Animated Battery Charging HUD with Drive Lockout
     SCREEN_ENERGY_STATS  = SCREEN_LIGHTS,
     SCREEN_PERF_STATS    = SCREEN_RT_GRAPHS,
     SCREEN_COUNT
@@ -83,8 +82,7 @@ enum NavAction {
     NAV_RACE_START_LAUNCH, // Tap on [ START LAUNCH ]
     NAV_RACE_ABORT,        // Tap center while measuring/countdown
     NAV_LIGHT_TOGGLE,      // Tap on Light Switch Badge (Hauptschalter)
-    NAV_PIN_EMERGENCY_RESET, // 5s continuous hold on lockscreen: emergency reset PIN to 1234
-    NAV_CHARGING_EXIT       // Tap on [< DASH] button on Charging HUD
+    NAV_PIN_EMERGENCY_RESET // 5s continuous hold on lockscreen: emergency reset PIN to 1234
 };
 
 // Dragy / Launch Acceleration Best Records
