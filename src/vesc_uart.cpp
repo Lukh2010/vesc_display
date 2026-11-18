@@ -398,7 +398,6 @@ void VescHandler::initCanBus() {
 }
 
 void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
-#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (!s_can_initialized) return;
 
     twai_status_info_t st;
@@ -409,7 +408,6 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
             twai_start();
         }
     }
-#endif
     uint32_t now = millis();
     static uint32_t s_last_can_rx_ms = 0;
     static uint32_t s_last_can_diag_ms = 0;

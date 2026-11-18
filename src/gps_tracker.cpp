@@ -234,13 +234,28 @@ void GpsTracker::update(DashTelemetry &telemetry) {
     bool has_gps_fix = (telemetry.gps.valid && telemetry.gps.satellites >= 4 &&
                         (now - telemetry.gps.last_fix_ms < 2500));
 
+    static bool s_using_gps = false;
     if (telemetry.vesc_motor_speed < 0.8f && (!has_gps_fix || telemetry.gps.speed_kmh < 1.2f)) {
         telemetry.speed_kmh = 0.0f;
+        s_using_gps = false;
         telemetry.use_gps_speed = false;
-    } else if (has_gps_fix && telemetry.gps.speed_kmh >= 1.0f) {
-        telemetry.speed_kmh = telemetry.gps.speed_kmh;
-        telemetry.use_gps_speed = true;
+    } else if (has_gps_fix) {
+        // Hysterese gegen Umschalt-Jitter: Aktivierung bei >= 1.5 km/h, Deaktivierung erst bei < 0.8 km/h
+        if (!s_using_gps && telemetry.gps.speed_kmh >= 1.5f) {
+            s_using_gps = true;
+        } else if (s_using_gps && telemetry.gps.speed_kmh < 0.8f) {
+            s_using_gps = false;
+        }
+
+        if (s_using_gps) {
+            telemetry.speed_kmh = telemetry.gps.speed_kmh;
+            telemetry.use_gps_speed = true;
+        } else {
+            telemetry.speed_kmh = telemetry.vesc_motor_speed;
+            telemetry.use_gps_speed = false;
+        }
     } else {
+        s_using_gps = false;
         // Rollenprüfstand (Rad dreht, GPS = 0) oder Tunnel/Signalverlust: VESC-Drehzahl
         telemetry.speed_kmh = telemetry.vesc_motor_speed;
         telemetry.use_gps_speed = false;
