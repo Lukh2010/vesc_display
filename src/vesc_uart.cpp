@@ -79,6 +79,10 @@ void VescHandler::resetTripOdometer(int32_t current_tacho) {
         _tacho_trip_offset = _last_tacho;
         _dist_trip_offset = _last_dist;
     }
+    _wh_trip_offset = _last_wh;
+    _ah_trip_offset = _last_ah;
+    _wh_trip_inited = true;
+    _ah_trip_inited = true;
 }
 
 VescHandler::VescHandler()
@@ -90,6 +94,12 @@ VescHandler::VescHandler()
       _last_tacho(0),
       _dist_trip_offset(0),
       _last_dist(0),
+      _wh_trip_offset(0),
+      _last_wh(0),
+      _ah_trip_offset(0),
+      _last_ah(0),
+      _wh_trip_inited(false),
+      _ah_trip_inited(false),
       _sim_throttle(0.0f),
       _sim_incline(0.0f),
       _target_speed(0.0f),
@@ -411,6 +421,8 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
     uint32_t now = millis();
     static uint32_t s_last_can_rx_ms = 0;
     static uint32_t s_last_can_diag_ms = 0;
+    static uint32_t s_sec_last_rx_ms = 0;
+    static bool s_has_imu_g = false;
 
     twai_message_t msg;
     int frames_read = 0;
@@ -443,6 +455,10 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
 
         bool is_primary = (controller_id == s_primary_vesc_id);
         bool is_secondary = (!is_primary && (controller_id == 77 || (s_primary_vesc_id == 76 && controller_id == 1) || (s_primary_vesc_id == 1 && controller_id == 2)));
+
+        if (is_secondary) {
+            s_sec_last_rx_ms = now;
+        }
 
         if (cmd_id == 9 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS
             int32_t erpm = (int32_t)(((uint32_t)msg.data[0] << 24) |
@@ -541,7 +557,14 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                                        ((uint32_t)msg.data[2] << 8)  |
                                        (uint32_t)msg.data[3]);
             if (is_primary) {
-                telemetry.amphours_used = (float)ah_raw / 10000.0f;
+                _last_ah = ah_raw;
+                if (!_ah_trip_inited) {
+                    _ah_trip_offset = ah_raw;
+                    _ah_trip_inited = true;
+                }
+                int32_t rel_ah = ah_raw - _ah_trip_offset;
+                if (rel_ah < 0) rel_ah = 0;
+                telemetry.amphours_used = (float)rel_ah / 10000.0f;
             }
         }
         else if (cmd_id == 15 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS_3
@@ -550,7 +573,31 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                                        ((uint32_t)msg.data[2] << 8)  |
                                        (uint32_t)msg.data[3]);
             if (is_primary) {
-                telemetry.stats.trip_wh = (float)wh_raw / 10000.0f;
+                _last_wh = wh_raw;
+                if (!_wh_trip_inited) {
+                    _wh_trip_offset = wh_raw;
+                    _wh_trip_inited = true;
+                }
+                int32_t rel_wh = wh_raw - _wh_trip_offset;
+                if (rel_wh < 0) rel_wh = 0;
+                telemetry.stats.trip_wh = (float)rel_wh / 10000.0f;
+            }
+        }
+        else if (cmd_id == 60 && msg.data_length_code >= 4) { // CAN_PACKET_STATUS_6 (IMU Incline & Accel)
+            int16_t roll_raw  = (int16_t)(((uint16_t)msg.data[0] << 8) | msg.data[1]);
+            int16_t pitch_raw = (int16_t)(((uint16_t)msg.data[2] << 8) | msg.data[3]);
+            (void)roll_raw;
+            float pitch_deg = (float)pitch_raw / 10.0f;
+            if (is_primary && fabsf(pitch_deg) <= 45.0f) {
+                telemetry.incline_deg = pitch_deg;
+            }
+            if (is_primary && msg.data_length_code >= 8) {
+                int16_t acc_raw = (int16_t)(((uint16_t)msg.data[6] << 8) | msg.data[7]);
+                float g_imu = (float)acc_raw / 100.0f;
+                if (fabsf(g_imu) <= 3.0f) {
+                    telemetry.g_force = g_imu;
+                    s_has_imu_g = true;
+                }
             }
         }
     }
@@ -577,6 +624,60 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         telemetry.power_watts = 0.0f;
         telemetry.current_amps = 0.0f;
         telemetry.phase_amps = 0.0f;
+    }
+
+    // Per-tick Physics, Battery and Peak Statistics Integration for CAN mode
+    static uint32_t s_last_can_calc_ms = millis();
+    float dt = (now - s_last_can_calc_ms) / 1000.0f;
+    s_last_can_calc_ms = now;
+    if (dt < 0.001f) dt = 0.016f;
+    if (dt > 0.5f) dt = 0.05f;
+
+    // 1. Dual ESC current / power combination
+    if (s_sec_last_rx_ms > 0 && (now - s_sec_last_rx_ms < 1000)) {
+        telemetry.power_watts = (telemetry.voltage * telemetry.current_amps) + telemetry.vesc2_max_power;
+    }
+
+    // 2. Battery State of Charge, Remaining Wh & Degradation Learning Filter
+    Battery.update(telemetry, dt);
+
+    // 3. Peak statistics tracking
+    if (telemetry.current_amps > telemetry.stats.peak_current_amps) telemetry.stats.peak_current_amps = telemetry.current_amps;
+    if (telemetry.phase_amps > telemetry.stats.peak_phase_amps) telemetry.stats.peak_phase_amps = telemetry.phase_amps;
+    if (telemetry.power_watts > telemetry.stats.peak_power_watts) telemetry.stats.peak_power_watts = telemetry.power_watts;
+    if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
+    if (telemetry.temp_motor > telemetry.stats.max_temp_motor) telemetry.stats.max_temp_motor = telemetry.temp_motor;
+    if (telemetry.temp_esc > telemetry.stats.max_temp_esc) telemetry.stats.max_temp_esc = telemetry.temp_esc;
+
+    // 4. Longitudinal acceleration G-force (if no CAN IMU packet present)
+    static float s_last_spd_can = 0.0f;
+    if (dt > 0.005f && !s_has_imu_g) {
+        float dv_ms = (telemetry.speed_kmh - s_last_spd_can) / 3.6f;
+        float g_inst = (dv_ms / dt) / 9.80665f;
+        if (g_inst > 3.0f) g_inst = 3.0f;
+        if (g_inst < -3.0f) g_inst = -3.0f;
+        telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
+        if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
+        s_last_spd_can = telemetry.speed_kmh;
+    }
+    if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
+        telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
+    }
+
+    // 5. Trip ride time & average speed calculation
+    static float s_can_ride_time_accum = 0.0f;
+    if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
+        s_can_ride_time_accum = 0.0f;
+    }
+    if (telemetry.speed_kmh > 1.2f) {
+        s_can_ride_time_accum += dt;
+        while (s_can_ride_time_accum >= 1.0f) {
+            telemetry.stats.ride_time_sec += 1;
+            s_can_ride_time_accum -= 1.0f;
+        }
+    }
+    if (telemetry.stats.ride_time_sec > 2 && telemetry.trip_km > 0.01f) {
+        telemetry.stats.avg_speed_kmh = telemetry.trip_km / (telemetry.stats.ride_time_sec / 3600.0f);
     }
 }
 #else

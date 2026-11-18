@@ -1123,8 +1123,6 @@ void sim_step(uint32_t step_ms) {
                     ensureZeroSpeedIfIdle();
                     Renderer.markScreenDirty();
                     break;
-                    Renderer.markScreenDirty();
-                    break;
                 case NAV_HAZARD_TOGGLE:
                     g_telemetry.hazard_active = !g_telemetry.hazard_active;
                     Renderer.markScreenDirty();
