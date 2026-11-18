@@ -12,7 +12,7 @@ struct DashSettings {
     uint8_t  field_weak_amps;    // 0 to 20 A (step 1A, default 10A)
     uint8_t  max_speed_kmh;      // 0 = Unlimited, 25, 32, 45, 60
     float   throttle_ramp_sec;   // 0.1 to 1.0 s (default 0.2s)
-    float   wheel_diameter_in;   // 20.0 to 29.0 in (default 26.0)
+    float   wheel_diameter_in;   // 8.0 to 29.0 in (default 11.0 for Segway G3 Max)
     uint8_t motor_pole_pairs;    // 8 to 24 (default 15)
     float   gear_ratio;          // 1.0 to 4.0 (default 1.0)
     uint8_t active_battery_profile; // 0 = Profile 1, 1 = Profile 2

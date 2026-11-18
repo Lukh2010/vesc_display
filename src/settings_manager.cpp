@@ -14,7 +14,7 @@ void SettingsManager::loadDefaults() {
     _settings.field_weak_amps        = 10;
     _settings.max_speed_kmh          = 0; // Unlimited
     _settings.throttle_ramp_sec      = 0.2f;
-    _settings.wheel_diameter_in      = 26.0f;
+    _settings.wheel_diameter_in      = 11.0f;
     _settings.motor_pole_pairs       = 15;
     _settings.gear_ratio             = 1.0f;
     _settings.active_battery_profile = 0;
@@ -57,7 +57,12 @@ void SettingsManager::begin() {
         _settings.field_weak_amps        = _prefs.getUChar("fw_a", 10);
         _settings.max_speed_kmh          = _prefs.getUChar("spd_lim", 0);
         _settings.throttle_ramp_sec      = _prefs.getFloat("t_ramp", 0.2f);
-        _settings.wheel_diameter_in      = _prefs.getFloat("wheel", 26.0f);
+        _settings.wheel_diameter_in      = _prefs.getFloat("wheel", 11.0f);
+        if (_settings.wheel_diameter_in > 18.0f) {
+            // Auto-migrate legacy bicycle default (26.0") to Segway G3 Max 11.0"
+            _settings.wheel_diameter_in = 11.0f;
+            _prefs.putFloat("wheel", 11.0f);
+        }
         _settings.motor_pole_pairs       = _prefs.getUChar("poles", 15);
         _settings.gear_ratio             = _prefs.getFloat("gear", 1.0f);
         _settings.active_battery_profile = _prefs.getUChar("bat_prof", 0);
