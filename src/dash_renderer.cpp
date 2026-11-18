@@ -220,7 +220,10 @@ DashboardRenderer::DashboardRenderer()
       _boot_anim_active(false),
       _boot_anim_phase(0),
       _boot_anim_start_ms(0),
-      _boot_log_lines_drawn(0) {
+      _boot_log_lines_drawn(0),
+      _vesc_link_skipped(false),
+      _vesc_skip_click_ms(0),
+      _vesc_connected_at_ms(0) {
     _wizard_pin_buf[0] = '\0';
     _pin_modal_buf[0] = '\0';
     _last_needle.valid = false;
@@ -241,6 +244,9 @@ void DashboardRenderer::triggerBootAnimation() {
     _boot_anim_phase = 0;
     _boot_anim_start_ms = millis();
     _boot_log_lines_drawn = 0;
+    _vesc_link_skipped = false;
+    _vesc_skip_click_ms = 0;
+    _vesc_connected_at_ms = 0;
     _screen_dirty = true;
 }
 
@@ -256,6 +262,24 @@ void DashboardRenderer::skipBootAnimation() {
         if (!Settings.get().pin_lock_enabled) {
             triggerNeedleSweep();
         }
+    }
+}
+
+void DashboardRenderer::handleBootTouch(bool is_vesc_connected) {
+    if (!_boot_anim_active) return;
+
+    uint32_t elapsed_ms = millis() - _boot_anim_start_ms;
+    if (!is_vesc_connected && !_vesc_link_skipped && elapsed_ms >= 2250) {
+        // User clicked while searching for VESC link!
+        // Mark VESC link as skipped and reveal the remaining diagnostic lines underneath
+        _boot_anim_phase = 2;
+        _vesc_link_skipped = true;
+        _vesc_skip_click_ms = millis();
+        _screen_dirty = true;
+    } else {
+        // User clicked during Phase 1 (Logo), or after lines are already revealed:
+        // Transition directly to Phase 3 (PIN Lockscreen / Setup Wizard)
+        skipBootAnimation();
     }
 }
 
@@ -324,23 +348,10 @@ void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms, const DashTelem
         drawConsoleLine(1, " OK ", COLOR_GREEN, "CAN-BUS 500k ACTIVE", COLOR_WHITE);
     }
 
-    // Line 2: VESC Link Check (Waits live until connected!)
+    // Line 2: VESC Link Check
+    bool vesc_ready = telemetry.vesc_connected;
     if (p2_ms >= 350) {
-        if (!telemetry.vesc_connected) {
-            uint8_t dots_idx = (p2_ms / 250) % 4;
-            const char *dots_str[4] = { ".   ", "..  ", "... ", "...." };
-            drawConsoleLine(2, dots_str[dots_idx], COLOR_AMBER, "VESC LINK: SEARCHING...", COLOR_LIGHT_GRAY);
-
-            // While searching, user can still tap anytime to bypass / proceed offline
-            int prompt_y = 390;
-            const char *prompt = ">> TIPPE AUFS DISPLAY ZUM UEBERSPRINGEN >>";
-            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BLACK);
-            _canvas->setTextDatum(textdatum_t::top_center);
-            _canvas->setTextPadding(800);
-            _canvas->drawString(prompt, 400, prompt_y);
-            _canvas->setTextPadding(0);
-            return; // STOP HERE! Do not render tire or security lines until VESC link is established!
-        } else {
+        if (vesc_ready) {
             char vesc_msg[64];
             if (telemetry.voltage > 10.0f) {
                 snprintf(vesc_msg, sizeof(vesc_msg), "VESC LINK: CONNECTED (%.1fV)", telemetry.voltage);
@@ -348,11 +359,27 @@ void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms, const DashTelem
                 snprintf(vesc_msg, sizeof(vesc_msg), "VESC LINK: CONNECTED");
             }
             drawConsoleLine(2, " OK ", COLOR_GREEN, vesc_msg, COLOR_WHITE);
+        } else if (_vesc_link_skipped) {
+            drawConsoleLine(2, "SKIP", COLOR_AMBER, "VESC LINK: OFFLINE (SKIPPED)", COLOR_LIGHT_GRAY);
+        } else {
+            uint8_t dots_idx = (p2_ms / 250) % 4;
+            const char *dots_str[4] = { ".   ", "..  ", "... ", "...." };
+            drawConsoleLine(2, dots_str[dots_idx], COLOR_AMBER, "VESC LINK: SEARCHING...", COLOR_LIGHT_GRAY);
+
+            // While waiting for VESC link, lines underneath do NOT appear yet!
+            int prompt_y = 390;
+            const char *prompt = ">> TIPPE ZUM WEITERGEHEN (OFFLINE) >>";
+            _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BLACK);
+            _canvas->setTextDatum(textdatum_t::top_center);
+            _canvas->setTextPadding(800);
+            _canvas->drawString(prompt, 400, prompt_y);
+            _canvas->setTextPadding(0);
+            return; // STOP!
         }
     }
 
     // Line 3: Tire Calibration (Universal: shows GPS calibrated value or default 11in, strictly NO "G3")
-    if (p2_ms >= 450 && telemetry.vesc_connected) {
+    if ((p2_ms >= 450 && vesc_ready) || _vesc_link_skipped) {
         char tire_val[16];
         float diam = Settings.get().wheel_diameter_in;
         if (Settings.get().wheel_gps_calibrated || fabsf(diam - 11.0f) > 0.05f) {
@@ -370,10 +397,9 @@ void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms, const DashTelem
     }
 
     // Line 4: Security System Armed
-    if (p2_ms >= 550 && telemetry.vesc_connected) {
+    if ((p2_ms >= 550 && vesc_ready) || _vesc_link_skipped) {
         drawConsoleLine(4, " OK ", COLOR_GREEN, "SECURITY SYSTEM: ARMED (0A CUTOFF)", COLOR_WHITE);
 
-        // Prompt: Only advances when clicked/tapped, never automatically!
         int prompt_y = 390;
         const char *prompt = Settings.get().pin_lock_enabled ?
                              ">> TIPPE AUFS DISPLAY ZUM ENTSPERREN >>" :
@@ -472,12 +498,40 @@ void DashboardRenderer::triggerNeedleSweep() {
 
 // Top-Level Screen Dispatcher
 void DashboardRenderer::render(const DashTelemetry &telemetry) {
-    // 0. Boot Animation Sequence (Phase 1: 0.0s..2.25s Logo, Phase 2: Live Console Diagnostics & Wait for Click/Tap)
+    // 0. Boot Animation Sequence (Phase 1: 0.0s..2.25s Logo, Phase 2: Live Console Diagnostics & Auto/Click Transition)
     if (_boot_anim_active) {
         uint32_t now = millis();
         uint32_t elapsed_ms = now - _boot_anim_start_ms;
-        renderBootAnimation(elapsed_ms, telemetry);
-        return;
+
+        // Auto-advance logic:
+        // 1. If VESC is connected: advances automatically at elapsed_ms >= 3250 (wie vorher!)
+        // 2. If VESC was offline and skipped by user click: advances 700ms after user clicked
+        bool should_auto_advance = false;
+        if (telemetry.vesc_connected) {
+            if (elapsed_ms >= 3250) {
+                should_auto_advance = true;
+            }
+        } else if (_vesc_link_skipped && _vesc_skip_click_ms > 0) {
+            if (now - _vesc_skip_click_ms >= 700) {
+                should_auto_advance = true;
+            }
+        }
+
+        if (should_auto_advance) {
+            _boot_anim_active = false;
+            _boot_anim_phase = 3;
+            _pin_screen_drawn = false;
+            _wizard_inited = false;
+            _last_wizard_step = -1;
+            _screen_dirty = true;
+            _cache.invalidate();
+            if (!Settings.get().pin_lock_enabled) {
+                triggerNeedleSweep();
+            }
+        } else {
+            renderBootAnimation(elapsed_ms, telemetry);
+            return;
+        }
     }
 
     // 0b. First-Time Setup Wizard takes precedence on first boot (bypasses PIN lockscreen)
