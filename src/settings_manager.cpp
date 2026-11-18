@@ -37,6 +37,9 @@ void SettingsManager::loadDefaults() {
     _settings.ble_paired             = false;
     _settings.ble_paired_addr[0]     = '\0';
     strncpy(_settings.ble_paired_name, "Smartphone", sizeof(_settings.ble_paired_name));
+    _settings.show_gforce            = 1;
+    _settings.show_incline           = 1;
+    _settings.brake_mode             = 2;
     _race_records.reset();
 }
 
@@ -85,6 +88,12 @@ void SettingsManager::begin() {
 
         _settings.gps_enabled            = _prefs.getBool("gps_en", true);
         _settings.incline_gforce_enabled = _prefs.getBool("inc_en", true);
+        _settings.show_gforce            = _prefs.getUChar("show_gf", 1);
+        if (_settings.show_gforce > 1) _settings.show_gforce = 1;
+        _settings.show_incline           = _prefs.getUChar("show_inc", 1);
+        if (_settings.show_incline > 1) _settings.show_incline = 1;
+        _settings.brake_mode             = _prefs.getUChar("brk_mode", 2);
+        if (_settings.brake_mode > 2) _settings.brake_mode = 2;
         _settings.wifi_bridge_enabled    = _prefs.getBool("wifi_en", false);
         _settings.setup_completed        = _prefs.getBool("setup_done", false);
         _settings.color_theme            = _prefs.getUChar("theme", THEME_CYBER_CYAN);
@@ -137,6 +146,9 @@ void SettingsManager::save() {
     _prefs.putUChar("rc_sp3", _settings.race_split3_kmh);
     _prefs.putBool("gps_en", _settings.gps_enabled);
     _prefs.putBool("inc_en", _settings.incline_gforce_enabled);
+    _prefs.putUChar("show_gf", _settings.show_gforce);
+    _prefs.putUChar("show_inc", _settings.show_incline);
+    _prefs.putUChar("brk_mode", _settings.brake_mode);
     _prefs.putBool("wifi_en", _settings.wifi_bridge_enabled);
     _prefs.putBool("setup_done", _settings.setup_completed);
     _prefs.putUChar("theme", _settings.color_theme);

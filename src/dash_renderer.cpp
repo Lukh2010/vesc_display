@@ -1037,15 +1037,18 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _last_arc_angle = target_angle;
     }
 
-    // 1b. Top Status Header: Clock in Center (on exact same height as STATS button: y=36)
-    bool clock_changed = strcmp(_cache.clock_str, telemetry.clock_str) != 0;
+    // 1b. Top Status Header: Clock in Center (only displayed when GPS is valid and connected)
     bool gps_en_changed = (_cache.gps_enabled != telemetry.gps_enabled);
+    bool gps_clock_valid = telemetry.gps_enabled && telemetry.gps.valid && (telemetry.gps.satellites > 0);
+    bool clock_vis_changed = (_cache.clock_visible != gps_clock_valid);
+    bool clock_changed = strcmp(_cache.clock_str, telemetry.clock_str) != 0;
 
-    if (!_hyper_inited || clock_changed || gps_en_changed) {
-        strncpy(_cache.clock_str, telemetry.clock_str, sizeof(_cache.clock_str));
+    if (!_hyper_inited || clock_vis_changed || gps_en_changed || (gps_clock_valid && clock_changed)) {
+        _cache.clock_visible = gps_clock_valid;
         _cache.gps_enabled = telemetry.gps_enabled;
+        strncpy(_cache.clock_str, telemetry.clock_str, sizeof(_cache.clock_str));
 
-        if (telemetry.gps_enabled) {
+        if (gps_clock_valid) {
             // Render Clock ("14:35") in middle-center on exact same height as STATS button (zero-flash native padding)
             _canvas->setFont(&fonts::Font4);
             _canvas->setTextSize(1);
@@ -1055,7 +1058,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->drawString(telemetry.clock_str[0] ? telemetry.clock_str : "--:--", 400, 36);
             _canvas->setTextPadding(0);
         } else {
-            // Clear center top area (x=340 to 460, y=16 to 56) when GPS disabled
+            // DO NOT display clock when GPS is NOT connected or valid (!valid || satellites == 0)
             _canvas->fillRect(340, 16, 120, 40, COLOR_BG);
         }
     }
@@ -1347,21 +1350,33 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     }
 
     // 9. Bottom Left: G-Force Badge and Incline Badge
-    bool inc_changed = (_cache.incline_gforce_enabled != telemetry.incline_gforce_enabled);
-    if (!_hyper_inited || inc_changed) {
+    bool gf_on = telemetry.incline_gforce_enabled && (Settings.get().show_gforce != 0);
+    bool inc_on = telemetry.incline_gforce_enabled && (Settings.get().show_incline != 0);
+
+    bool badge_cfg_changed = (_cache.show_gforce != (gf_on ? 1 : 0)) ||
+                             (_cache.show_incline != (inc_on ? 1 : 0)) ||
+                             (_cache.incline_gforce_enabled != telemetry.incline_gforce_enabled);
+
+    if (!_hyper_inited || badge_cfg_changed) {
+        _cache.show_gforce = gf_on ? 1 : 0;
+        _cache.show_incline = inc_on ? 1 : 0;
         _cache.incline_gforce_enabled = telemetry.incline_gforce_enabled;
         _canvas->fillRect(15, 380, 135, 75, COLOR_BG); // clear bottom-left badges area
+        _cache.temp_esc = -999;
+        _cache.temp_motor = -999;
     }
 
-    if (telemetry.incline_gforce_enabled) {
+    if (gf_on) {
         int cur_g10 = (int)roundf(telemetry.g_force * 10.0f);
-        if (!_hyper_inited || inc_changed || cur_g10 != _cache.g_force_x10) {
+        if (!_hyper_inited || badge_cfg_changed || cur_g10 != _cache.g_force_x10) {
             _cache.g_force_x10 = cur_g10;
             drawGForceBadge(_canvas, telemetry.g_force, 50, 416, 28);
         }
+    }
 
+    if (inc_on) {
         int cur_inc_x10 = (int)roundf(telemetry.incline_deg * 10.0f);
-        if (!_hyper_inited || inc_changed || cur_inc_x10 != _cache.incline_deg) {
+        if (!_hyper_inited || badge_cfg_changed || cur_inc_x10 != _cache.incline_deg) {
             _cache.incline_deg = cur_inc_x10;
             drawInclineBadge(_canvas, telemetry.incline_deg, 114, 416, 28);
         }
@@ -2177,32 +2192,41 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         _canvas->setTextColor(turbOn ? COLOR_BG : COLOR_MUTED_GRAY, turbOn ? pal.primary : pal.surface);
         _canvas->drawString(turbOn ? "[ AN ]" : "[ AUS ]", 645, 240);
 
-        // Card 3: GPS & IMU HARDWARE (y: 284..356, h: 72)
+        // Card 3: COCKPIT BUTTONS (G-Force, Incline & Brake Mode) (y: 284..356, h: 72)
         drawCard(20, 284, 760, 72, COLOR_SURFACE, COLOR_BORDER);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextDatum(textdatum_t::top_left);
-        _canvas->setTextColor(pal.primary, COLOR_SURFACE);
-        _canvas->drawString("GPS UHRZEIT & IMU SENSORIK", 40, 294);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        _canvas->drawString("Satelliten-Uhrzeit, Neigungswinkel und G-Force im Cockpit.", 40, 324);
 
-        bool gpsOn = Settings.get().gps_enabled;
-        bool incOn = Settings.get().incline_gforce_enabled;
-        // GPS button (x: 520..640)
-        _canvas->fillRoundRect(520, 294, 120, 52, 10, gpsOn ? pal.primary : pal.surface);
-        _canvas->drawRoundRect(520, 294, 120, 52, 10, gpsOn ? pal.primary : pal.border);
+        // a) [ G-FORCE: AN / AUS ]
+        bool gfOn = (Settings.get().show_gforce != 0);
+        _canvas->fillRoundRect(35, 294, 235, 52, 10, gfOn ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(35, 294, 235, 52, 10, gfOn ? pal.primary : pal.border);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(gpsOn ? COLOR_BG : COLOR_MUTED_GRAY, gpsOn ? pal.primary : pal.surface);
-        _canvas->drawString(gpsOn ? "GPS: AN" : "GPS: AUS", 580, 320);
+        _canvas->setTextColor(gfOn ? COLOR_BG : COLOR_MUTED_GRAY, gfOn ? pal.primary : pal.surface);
+        _canvas->drawString(gfOn ? "[ G-FORCE: AN ]" : "[ G-FORCE: AUS ]", 152, 320);
 
-        // IMU button (x: 650..770)
-        _canvas->fillRoundRect(650, 294, 120, 52, 10, incOn ? pal.primary : pal.surface);
-        _canvas->drawRoundRect(650, 294, 120, 52, 10, incOn ? pal.primary : pal.border);
+        // b) [ NEIGUNG: AN / AUS ]
+        bool incOn = (Settings.get().show_incline != 0);
+        _canvas->fillRoundRect(282, 294, 235, 52, 10, incOn ? pal.primary : pal.surface);
+        _canvas->drawRoundRect(282, 294, 235, 52, 10, incOn ? pal.primary : pal.border);
+        _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(incOn ? COLOR_BG : COLOR_MUTED_GRAY, incOn ? pal.primary : pal.surface);
-        _canvas->drawString(incOn ? "IMU: AN" : "IMU: AUS", 710, 320);
+        _canvas->drawString(incOn ? "[ NEIGUNG: AN ]" : "[ NEIGUNG: AUS ]", 400, 320);
+
+        // c) [ BREMSEN: AUS / MILD / MAX ]
+        uint8_t bm = Settings.get().brake_mode;
+        const char *bmStr = (bm == 0) ? "[ BREMSEN: AUS ]" :
+                            ((bm == 1) ? "[ BREMSEN: MILD ]" : "[ BREMSEN: MAX ]");
+        uint16_t bmBg = (bm == 0) ? pal.surface : ((bm == 1) ? pal.secondary : pal.primary);
+        uint16_t bmBorder = (bm == 0) ? pal.border : ((bm == 1) ? pal.secondary : pal.primary);
+        uint16_t bmText = (bm == 0) ? COLOR_MUTED_GRAY : COLOR_BG;
+
+        _canvas->fillRoundRect(530, 294, 235, 52, 10, bmBg);
+        _canvas->drawRoundRect(530, 294, 235, 52, 10, bmBorder);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font2);
+        _canvas->setTextColor(bmText, bmBg);
+        _canvas->drawString(bmStr, 647, 320);
 
         // Card 4: WIFI-BRIDGE & SETUP (y: 364..436, h: 72)
         drawCard(20, 364, 760, 72, COLOR_SURFACE, COLOR_BORDER);
@@ -2225,7 +2249,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         _canvas->setFont(&fonts::Font0);
         _canvas->setTextDatum(textdatum_t::middle_center);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_BG);
-        _canvas->drawString("Echtzeit-Farbvorschau aktiv  |  Auto-Save bei [< DASH]", 400, 456);
+        _canvas->drawString("Cockpit-Anzeigen & Motorbremse  |  Auto-Save bei [< DASH]", 400, 456);
         return;
     }
 
@@ -2785,19 +2809,27 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             return true;
         }
 
-        // Card 3: GPS Button (x: 510..645, y: 285..355)
-        if (tx >= 510 && tx <= 645 && ty >= 285 && ty <= 355) {
-            Settings.get().gps_enabled = !Settings.get().gps_enabled;
+        // Card 3: G-FORCE Toggle (x: 20..275, y: 280..360)
+        if (tx >= 20 && tx < 275 && ty >= 280 && ty <= 360) {
+            Settings.get().show_gforce = Settings.get().show_gforce ? 0 : 1;
             Settings.save();
-            telemetry.gps_enabled = Settings.get().gps_enabled;
+            invalidateCache();
             _menu_dirty = true;
             return true;
         }
-        // Card 3: IMU Button (x: 646..780, y: 285..355)
-        if (tx >= 646 && tx <= 780 && ty >= 285 && ty <= 355) {
-            Settings.get().incline_gforce_enabled = !Settings.get().incline_gforce_enabled;
+        // Card 3: NEIGUNG Toggle (x: 275..525, y: 280..360)
+        if (tx >= 275 && tx < 525 && ty >= 280 && ty <= 360) {
+            Settings.get().show_incline = Settings.get().show_incline ? 0 : 1;
             Settings.save();
-            telemetry.incline_gforce_enabled = Settings.get().incline_gforce_enabled;
+            invalidateCache();
+            _menu_dirty = true;
+            return true;
+        }
+        // Card 3: BREMSEN Mode Cycle (x: 525..780, y: 280..360)
+        if (tx >= 525 && tx <= 780 && ty >= 280 && ty <= 360) {
+            Settings.get().brake_mode = (Settings.get().brake_mode + 1) % 3;
+            Settings.save();
+            invalidateCache();
             _menu_dirty = true;
             return true;
         }
