@@ -1385,37 +1385,8 @@ void testChargingAndTheftProtection() {
     Vesc.triggerFocBeep(1600.0f, 0.35f, 8.0f);
     printf("[PASS] 1. VESC FOC Motor Beep command transmitted cleanly.\n");
 
-    // 2. Charging Mode Detection & Drive Lockout
-    t.speed_kmh = 0.0f;
-    t.rpm = 0.0f;
-    t.current_amps = -3.5f; // Charging current from wall charger
-    t.voltage = 54.2f;
-    t.power_watts = t.voltage * t.current_amps;
-    t.is_charging = true;
-    t.screen = SCREEN_CHARGING_HUD;
-    t.battery_pct = 76.0f;
-    t.charge_power_watts = fabsf(t.power_watts);
-    t.charge_current_amps = fabsf(t.current_amps);
-    t.charge_est_minutes = 45.0f;
-
-    // Drive lockout during charge:
-    t.throttle_pct = 0.0f;
-    assert(t.is_charging == true);
-    assert(t.throttle_pct == 0.0f);
-    printf("[PASS] 2. Charging HUD activates and strictly enforces Drive Lockout (0A output).\n");
-
-    // 3. Navigation from Charging HUD via [< DASH]
-    Buttons.setActiveScreen(SCREEN_CHARGING_HUD);
-    simAdvanceMs(150);
-    Display.setSimTouch(true, 75, 35);
-    Buttons.update();
-    simAdvanceMs(50);
-    Display.setSimTouch(false, 0, 0);
-    Buttons.update();
-    simAdvanceMs(150);
-    NavAction act = Buttons.getNavAction();
-    assert(act == NAV_SCREEN_DASH);
-    printf("[PASS] 3. Charging HUD [< DASH] button triggers NAV_SCREEN_DASH.\n");
+    // 2. Charging Mode Permanently Purged
+    printf("[PASS] 2. Charging HUD permanently purged from firmware.\n");
 
     // 4. Theft Alarm when Locked and Vehicle Moves >= 2.0 meters
     t.is_locked = true;
@@ -1479,7 +1450,7 @@ void testColorThemesAndTurbineSound() {
     // At standstill (< 0.8 km/h and throttle < 3%) -> strictly inactive
     t.speed_kmh = 0.0f;
     t.throttle_pct = 0.0f;
-    bool is_driving_0 = (!t.is_locked && !t.is_charging && !t.theft_alarm_active && 
+    bool is_driving_0 = (!t.is_locked && !t.theft_alarm_active && 
                          (t.speed_kmh >= 0.8f || t.throttle_pct >= 3.0f));
     assert(!is_driving_0);
 
@@ -2706,23 +2677,9 @@ int main(int argc, char **argv) {
     printf("[PASS] Minimal Dashboard scenario rendered with hidden clock and hidden IMU.\n");
 
     // ----------------------------------------------------
-    // Scenario 26: Animated Battery Charging HUD with Drive Lockout
+    // Scenario 26: Charging HUD permanently removed
     // ----------------------------------------------------
-    setBaseTelemetry(t);
-    t.screen = SCREEN_CHARGING_HUD;
-    t.is_charging = true;
-    t.speed_kmh = 0.0f;
-    t.rpm = 0.0f;
-    t.throttle_pct = 0.0f;
-    t.voltage = 54.2f;
-    t.battery_pct = 76.0f;
-    t.current_amps = -3.2f;
-    t.charge_current_amps = 3.2f;
-    t.charge_power_watts = 173.0f;
-    t.charge_est_minutes = 45.0f;
-    Renderer.markScreenDirty();
-    renderAndSave("26_charging_hud", t);
-    printf("[PASS] Scenario 26: Charging HUD rendered and saved.\n");
+    printf("[PASS] Scenario 26: Charging HUD permanently removed.\n");
 
     // ----------------------------------------------------
     // Scenario 27: PIN Lockscreen with Active Theft Alarm

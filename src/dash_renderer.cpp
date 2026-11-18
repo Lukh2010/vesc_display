@@ -198,12 +198,6 @@ DashboardRenderer::DashboardRenderer()
       _last_theft_alarm(false),
       _last_ble_conn(false),
       _last_ble_bars(255),
-      _charging_inited(false),
-      _last_charge_pct(-1.0f),
-      _last_charge_angle(135.0f),
-      _last_charge_min(-1),
-      _last_charge_w(-1),
-      _last_charge_v_x10(-1),
       _pin_modal_open(false),
       _pin_modal_success(false),
       _pin_modal_success_ms(0),
@@ -561,15 +555,6 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         case SCREEN_SETUP_WIZARD:
             renderSetupWizard(telemetry);
             _screen_dirty = false;
-            break;
-
-        case SCREEN_CHARGING_HUD:
-            if (_screen_dirty) {
-                _canvas->fillScreen(COLOR_BG);
-                initChargingScreen();
-                _screen_dirty = false;
-            }
-            renderChargingScreen(telemetry);
             break;
 
         default:
@@ -4322,153 +4307,6 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
         }
     }
     return false;
-}
-
-// ==============================================================================
-// SCREEN 8: ANIMATED BATTERY CHARGING HUD WITH DRIVE LOCKOUT
-// ==============================================================================
-void DashboardRenderer::initChargingScreen() {
-    _charging_inited = true;
-    _last_charge_pct = -1.0f;
-    _last_charge_angle = 135.0f;
-    _last_charge_min = -1;
-    _last_charge_w = -1;
-    _last_charge_v_x10 = -1;
-
-    _canvas->setTextDatum(textdatum_t::top_left);
-    _canvas->setTextPadding(0);
-    _canvas->fillScreen(COLOR_BG);
-
-    // 1. Navigation Button [< DASH] at (x=20, y=14, w=110, h=42)
-    drawCard(20, 14, 110, 42, COLOR_SURFACE, COLOR_BORDER);
-    _canvas->setTextDatum(textdatum_t::middle_center);
-    _canvas->setFont(&fonts::Font2);
-    _canvas->setTextColor(COLOR_LIGHT_GRAY, COLOR_SURFACE);
-    _canvas->drawString("[< DASH]", 75, 35);
-
-    // 2. Header Badge
-    drawCard(240, 14, 320, 42, 0x0A24, COLOR_GREEN);
-    _canvas->setTextDatum(textdatum_t::middle_center);
-    _canvas->setFont(&fonts::Font4);
-    _canvas->setTextColor(COLOR_GREEN, 0x0A24);
-    _canvas->drawString("AKKU-LADEMODUS", 400, 35);
-
-    // 3. Subtitle / Lockout Notice (Comfortable vertical gap above gauge)
-    _canvas->setFont(&fonts::Font2);
-    _canvas->setTextColor(0xFCA5, COLOR_BG);
-    _canvas->drawString("FAHRSPERRE AKTIV - MOTORBLOCKIERUNG", 400, 68);
-
-    // 4. Center Circular Gauge Track (matching speedometer 270° arc!)
-    int cx = 400, cy = 224;
-    int r_in = 114, r_out = 138;
-    float mid_r = 126.0f;
-    float deg2rad = 3.14159265f / 180.0f;
-    int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
-    int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
-    int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
-    int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
-
-    const ColorThemePalette &pal = currentTheme();
-    _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
-    _canvas->fillCircle(s_cap_x, s_cap_y, 11, pal.track);
-    _canvas->fillCircle(e_cap_x, e_cap_y, 11, pal.track);
-
-    // 5. Bottom Info Card Outline
-    drawCard(120, 380, 560, 82, 0x0823, pal.border);
-}
-
-void DashboardRenderer::renderChargingScreen(const DashTelemetry &telemetry) {
-    const ColorThemePalette &pal = currentTheme();
-    int cx = 400, cy = 224;
-    int r_in = 114, r_out = 138;
-    float mid_r = 126.0f;
-    float deg2rad = 3.14159265f / 180.0f;
-    int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
-    int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
-
-    float pct = telemetry.battery_pct;
-    if (pct < 0.0f) pct = 0.0f;
-    if (pct > 100.0f) pct = 100.0f;
-    float frac = pct / 100.0f;
-
-    float target_angle = 135.0f + (frac * 270.0f);
-    if (target_angle < 135.0f) target_angle = 135.0f;
-    if (target_angle > 405.0f) target_angle = 405.0f;
-
-    uint16_t arcCol = (pct >= 99.0f) ? COLOR_GREEN : pal.primary;
-
-    // 1. Arc & Center Percentage Update
-    if (fabsf(pct - _last_charge_pct) >= 0.5f || !_charging_inited) {
-        _last_charge_pct = pct;
-
-        // Clear active arc track cleanly
-        _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
-        _canvas->fillCircle(s_cap_x, s_cap_y, 11, pal.track);
-        int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
-        int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
-        _canvas->fillCircle(e_cap_x, e_cap_y, 11, pal.track);
-
-        if (target_angle > 135.0f) {
-            _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
-            _canvas->fillCircle(s_cap_x, s_cap_y, 11, arcCol);
-        }
-
-        // 2. Center Battery Percentage & Unit (sized safely within r_in=114px)
-        _canvas->fillRect(cx - 75, cy - 50, 150, 105, COLOR_BG);
-        char pctBuf[16];
-        snprintf(pctBuf, sizeof(pctBuf), "%d", (int)(pct + 0.5f));
-        drawHeroDigitText(_canvas, pctBuf, cx, cy - 14, textdatum_t::middle_center, arcCol, COLOR_BG);
-
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextSize(1);
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setTextColor(COLOR_WHITE, COLOR_BG);
-        _canvas->drawString("%", cx, cy + 30);
-
-        // Live Voltage & Power
-        char rateBuf[48];
-        snprintf(rateBuf, sizeof(rateBuf), "%.1f V  |  %.0f W  |  %.1f A",
-                 telemetry.voltage, telemetry.charge_power_watts, telemetry.charge_current_amps);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(pal.primary, COLOR_BG);
-        _canvas->drawString(rateBuf, cx, cy + 48);
-    }
-
-    // 3. Bottom Card Update
-    int est_min = (int)(telemetry.charge_est_minutes + 0.5f);
-    int pwr_w = (int)(telemetry.charge_power_watts + 0.5f);
-    int v_x10 = (int)(telemetry.voltage * 10.0f + 0.5f);
-
-    if (est_min != _last_charge_min || pwr_w != _last_charge_w || v_x10 != _last_charge_v_x10) {
-        _last_charge_min = est_min;
-        _last_charge_w = pwr_w;
-        _last_charge_v_x10 = v_x10;
-
-        _canvas->fillRect(124, 384, 552, 74, 0x0823);
-
-        char timeBuf[64];
-        if (pct >= 99.5f) {
-            snprintf(timeBuf, sizeof(timeBuf), "AKKU VOLL GELADEN (100%%)");
-        } else if (est_min < 60) {
-            snprintf(timeBuf, sizeof(timeBuf), "RESTZEIT: ca. %d min bis voll", (est_min > 0) ? est_min : 1);
-        } else {
-            int h = est_min / 60;
-            int m = est_min % 60;
-            snprintf(timeBuf, sizeof(timeBuf), "RESTZEIT: ca. %dh %02dm bis voll", h, m);
-        }
-
-        _canvas->setTextDatum(textdatum_t::middle_center);
-        _canvas->setFont(&fonts::Font4);
-        _canvas->setTextColor(COLOR_GREEN, 0x0823);
-        _canvas->drawString(timeBuf, 400, 406);
-
-        char capBuf[80];
-        snprintf(capBuf, sizeof(capBuf), "Ladevorgang aktiv (%.0f W)  |  %.1fV  |  Wegfahrsperre aktiv",
-                 telemetry.charge_power_watts, telemetry.voltage);
-        _canvas->setFont(&fonts::Font2);
-        _canvas->setTextColor(COLOR_MUTED_GRAY, 0x0823);
-        _canvas->drawString(capBuf, 400, 436);
-    }
 }
 
 // ==============================================================================

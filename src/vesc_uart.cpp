@@ -178,7 +178,7 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     if (_sim_throttle > 0.01f) {
         sim_t = _sim_throttle;
         s_auto_drive = false; // Manual serial or touch override
-    } else if (s_auto_drive && !ModeManager::instance().isLocked() && !telemetry.is_locked && !telemetry.is_charging && telemetry.screen != SCREEN_SETUP_WIZARD) {
+    } else if (s_auto_drive && !ModeManager::instance().isLocked() && !telemetry.is_locked && telemetry.screen != SCREEN_SETUP_WIZARD) {
         // Dynamic 38-second realistic demonstration drive cycle:
         // 0..4s: Standstill / Idle at traffic light
         // 4..16s: Smooth launch and acceleration up to ~65% throttle
