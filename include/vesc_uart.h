@@ -97,6 +97,12 @@ private:
     int32_t _last_tacho;        // Most recent raw tachometer reading from VESC
     int32_t _dist_trip_offset;  // Trip odometer distance baseline offset (for COMM_GET_VALUES_SETUP)
     int32_t _last_dist;         // Most recent raw distance reading from VESC
+    int32_t _wh_trip_offset;    // Trip Watt-hour baseline offset
+    int32_t _last_wh;           // Most recent raw Watt-hour reading from VESC
+    int32_t _ah_trip_offset;    // Trip Amp-hour baseline offset
+    int32_t _last_ah;           // Most recent raw Amp-hour reading from VESC
+    bool    _wh_trip_inited;
+    bool    _ah_trip_inited;
 
     // Simulation Engine State
     float _sim_throttle;

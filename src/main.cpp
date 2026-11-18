@@ -906,6 +906,11 @@ void loop() {
     // 2b. Update Live GPS+BDS Satellite Tracker & Ground Speed Priority
     GpsTracker::instance().update(telemetry);
 
+    // 2c. Speed fusion stats sync: if active ground speed exceeds recorded max, update record
+    if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) {
+        telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
+    }
+
     telemetry.uptime_sec = (now - boot_ms) / 1000;
     telemetry.dynamic_wh_km = Battery.getDynamicWhKm();
     telemetry.est_range_km = Battery.getEstRangeKm();
@@ -1003,4 +1008,14 @@ void loop() {
                       (int)telemetry.screen, (int)telemetry.is_locked, telemetry.speed_kmh, telemetry.duty_cycle_pct, telemetry.voltage,
                       telemetry.battery_pct, telemetry.power_watts, telemetry.current_amps, telemetry.est_range_km);
     }
+
+#if !defined(NATIVE_SIMULATOR)
+    // Yield CPU Core 1 to FreeRTOS background tasks (TWAI driver, WiFi/BLE stack, FreeRTOS IDLE)
+    // This reduces chip temperature, saves power, and prevents PSRAM bus contention with the ST7262 RGB DMA channel!
+    if (millis() - last_render_ms < 5) {
+        delay(2);
+    } else {
+        yield();
+    }
+#endif
 }
