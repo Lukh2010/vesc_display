@@ -116,7 +116,10 @@ VescHandler::VescHandler()
       _bridge_vesc_to_wifi(0),
       _sync_status(SYNC_IDLE),
       _mcconf_req_ms(0),
-      _sync_ms(0) {
+      _sync_ms(0),
+      _horn_active(false),
+      _last_horn_cmd_ms(0),
+      _horn_cadence(0) {
     _wifi_client_ip[0] = '\0';
 }
 
@@ -1526,6 +1529,103 @@ void VescHandler::playFocTone(uint8_t channel, float freq, float voltage) {
 
 void VescHandler::stopFocTone(uint8_t channel) {
     playFocTone(channel, 0.0f, 0.0f);
+}
+
+void VescHandler::sendFocPlayStop() {
+    _horn_active = false;
+    char lisp_cmd[64];
+    snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-play-stop)");
+
+#if !SIMULATION_MODE || defined(NATIVE_SIMULATOR)
+    size_t slen = strlen(lisp_cmd);
+    if (slen > 60) slen = 60;
+    uint8_t payload[64];
+    payload[0] = 138; // COMM_LISP_REPL_CMD (0x8A)
+    memcpy(&payload[1], lisp_cmd, slen);
+
+    if (_transport) {
+        uint8_t packet[70];
+        packet[0] = 0x02;
+        packet[1] = (uint8_t)(slen + 1);
+        memcpy(&packet[2], payload, slen + 1);
+        uint16_t tcrc = crc16(payload, slen + 1);
+        packet[3 + slen] = (uint8_t)(tcrc >> 8);
+        packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
+        packet[5 + slen] = 0x03;
+        _transport->write(packet, slen + 6);
+    }
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (s_can_initialized) {
+        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
+        if (VESC_CAN_ID_DEFAULT != 0) {
+            sendVescCanBuffer(0, payload, slen + 1);
+        }
+    }
+#endif
+#endif
+
+    sendTerminalCommand("foc_openloop 0 0\n");
+}
+
+void VescHandler::triggerFocHorn(bool active) {
+    if (!active) {
+        if (_horn_active) {
+            _horn_active = false;
+            sendFocPlayStop();
+            Serial.println("[VESC_HORN] FOC Horn RELEASED -> (foc-play-stop)");
+        }
+        return;
+    }
+
+    uint32_t now = millis();
+    if (!_horn_active || (now - _last_horn_cmd_ms >= 140)) {
+        _horn_active = true;
+        _last_horn_cmd_ms = now;
+
+        // Piercing shrill FOC horn (dual-alternating 2800 Hz / 3200 Hz tone at 5.8V amplitude)
+        float freq = (_horn_cadence % 2 == 0) ? 2800.0f : 3200.0f;
+        _horn_cadence++;
+
+        char lisp_cmd[64];
+        snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-beep %.0f 200 5.8)", freq);
+
+#if !SIMULATION_MODE || defined(NATIVE_SIMULATOR)
+        size_t slen = strlen(lisp_cmd);
+        if (slen > 60) slen = 60;
+        uint8_t payload[64];
+        payload[0] = 138; // COMM_LISP_REPL_CMD (0x8A)
+        memcpy(&payload[1], lisp_cmd, slen);
+
+        if (_transport) {
+            uint8_t packet[70];
+            packet[0] = 0x02;
+            packet[1] = (uint8_t)(slen + 1);
+            memcpy(&packet[2], payload, slen + 1);
+            uint16_t tcrc = crc16(payload, slen + 1);
+            packet[3 + slen] = (uint8_t)(tcrc >> 8);
+            packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
+            packet[5 + slen] = 0x03;
+            _transport->write(packet, slen + 6);
+        }
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+        if (s_can_initialized) {
+            sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
+            if (VESC_CAN_ID_DEFAULT != 0) {
+                sendVescCanBuffer(0, payload, slen + 1);
+            }
+        }
+#endif
+#endif
+
+        char term_cmd[64];
+        snprintf(term_cmd, sizeof(term_cmd), "foc_openloop 5.8 %.0f\n", freq);
+        sendTerminalCommand(term_cmd);
+
+        Serial.printf("[VESC_HORN] FOC Motor Horn ACTIVE: %.0f Hz, 200 ms, 5.8 V -> '%s'\n",
+                      freq, lisp_cmd);
+    }
 }
 
 void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, float max_battery_amps, float max_phase_amps, float cutoff_start, float cutoff_end) {

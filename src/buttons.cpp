@@ -1,4 +1,5 @@
 #include "buttons.h"
+#include "vesc_uart.h"
 #include "display_driver.h"
 #include "settings_manager.h"
 #include "mode_manager.h"
@@ -39,7 +40,16 @@ ButtonHandler::ButtonHandler()
       _speed_touch_fired(false),
       _race_popup_open(false),
       _race_dyno_open(false),
-      _race_state(0) {
+      _race_state(0),
+      _action_btn_down(false),
+      _action_btn_sim_down(false),
+      _action_btn_boot_raw(false),
+      _action_btn_boot_down(false),
+      _action_btn_press_ms(0),
+      _action_btn_change_ms(0),
+      _action_btn_held_fired(false),
+      _horn_active(false),
+      _last_horn_ms(0) {
     _btn1 = { PIN_BTN_1, false, false, 0, 0, 0, false, false, 0 };
     _btn2 = { PIN_BTN_2, false, false, 0, 0, 0, false, false, 0 };
 }
@@ -50,6 +60,39 @@ void ButtonHandler::begin() {
     }
     if (_btn2.pin >= 0) {
         pinMode(_btn2.pin, INPUT_PULLUP);
+    }
+    if (PIN_BTN_BOOT >= 0) {
+        pinMode(PIN_BTN_BOOT, INPUT_PULLUP);
+    }
+}
+
+void ButtonHandler::setActionButton(bool is_down) {
+    _action_btn_sim_down = is_down;
+    checkActionButtonState(millis());
+}
+
+void ButtonHandler::checkActionButtonState(uint32_t now) {
+    bool target_down = _action_btn_sim_down || _action_btn_boot_down;
+    if (target_down != _action_btn_down) {
+        _action_btn_down = target_down;
+        if (_action_btn_down) {
+            _action_btn_press_ms = now;
+            _action_btn_held_fired = false;
+        } else {
+            uint32_t dur = now - _action_btn_press_ms;
+            if (_action_btn_held_fired) {
+                // Was held (> 400ms): Continuous horn stops immediately on release!
+                _horn_active = false;
+                _action_btn_held_fired = false;
+                Vesc.triggerFocHorn(false);
+            } else {
+                // Short tap (< 400ms): Locks vehicle back into legal Police Mode (20 km/h)
+                if (dur < 400) {
+                    _pending_action = NAV_TUNING_DISABLE;
+                    Serial.println("[BUTTON] Action Button SHORT CLICK (<400ms) -> NAV_TUNING_DISABLE (Police Mode Lock)!");
+                }
+            }
+        }
     }
 }
 
@@ -388,12 +431,40 @@ void ButtonHandler::update() {
     // 1. Process Capacitive Touch Controller (Primary Input)
     processTouch(now);
 
-    // If an action was queued from touch, return immediately
+    // 2. Process Action Button (Physical BOOT pin GPIO 0 & Simulator)
+    bool raw_boot = (PIN_BTN_BOOT >= 0) ? (digitalRead(PIN_BTN_BOOT) == LOW) : false;
+    if (raw_boot != _action_btn_boot_raw) {
+        _action_btn_boot_raw = raw_boot;
+        _action_btn_change_ms = now;
+    }
+    if ((now - _action_btn_change_ms) >= DEBOUNCE_TIME_MS) {
+        _action_btn_boot_down = raw_boot;
+    }
+    checkActionButtonState(now);
+
+    // Continuous FOC Horn while held (> 400ms)
+    if (_action_btn_down) {
+        uint32_t dur = now - _action_btn_press_ms;
+        if (dur >= 400) {
+            if (!_action_btn_held_fired) {
+                _action_btn_held_fired = true;
+                _horn_active = true;
+                _last_horn_ms = 0; // Immediate first blast
+                Serial.println("[BUTTON] Action Button HELD (>400ms) -> Continuous FOC Horn ACTIVE!");
+            }
+            if (now - _last_horn_ms >= 140) {
+                _last_horn_ms = now;
+                Vesc.triggerFocHorn(true);
+            }
+        }
+    }
+
+    // If an action was queued from touch or Action Button, return immediately
     if (_pending_action != NAV_NONE) {
         return;
     }
 
-    // 2. Process Physical Buttons (if pins are configured)
+    // 3. Process Physical Buttons (if pins are configured)
     if (_btn1.pin < 0 && _btn2.pin < 0) {
         return;
     }

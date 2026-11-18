@@ -752,6 +752,7 @@ static void drawGForceBadge(LovyanGFX *canvas, float g_force, int cx, int cy, in
         ringCol = COLOR_RED;
         textCol = COLOR_RED;
     }
+    canvas->fillRect(cx - r, cy - r, 2 * r + 1, 2 * r + 1, COLOR_BG);
     canvas->fillCircle(cx, cy, r - 2, COLOR_SURFACE);
     canvas->drawCircle(cx, cy, r, ringCol);
     canvas->drawCircle(cx, cy, r - 1, ringCol);
@@ -777,6 +778,7 @@ static void drawInclineBadge(LovyanGFX *canvas, float incline_deg, int cx, int c
     } else if (incline_deg < -15.0f) {
         ringCol = COLOR_AMBER;
     }
+    canvas->fillRect(cx - r, cy - r, 2 * r + 1, 2 * r + 1, COLOR_BG);
     canvas->fillCircle(cx, cy, r - 2, COLOR_SURFACE);
     canvas->drawCircle(cx, cy, r, ringCol);
     canvas->drawCircle(cx, cy, r - 1, ringCol);
@@ -1098,15 +1100,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         }
     }
 
-    // 4. Controller & Motor Thermals (Centered under Speedometer dial)
-    int cur_fet = (int)(telemetry.temp_esc + 0.5f);
-    int cur_mot = (int)(telemetry.temp_motor + 0.5f);
-    if (!_hyper_inited || cur_fet != _cache.temp_esc || cur_mot != _cache.temp_motor) {
-        _cache.temp_esc = cur_fet;
-        _cache.temp_motor = cur_mot;
-        _canvas->fillRect(150, 395, 180, 45, COLOR_BG);
-        drawThermalsWithDegrees(_canvas, "", telemetry.temp_esc, telemetry.temp_motor, cx, 405, true);
-    }
+    // 4. Controller & Motor Thermals (Rendered dynamically in Section 9 alongside badges)
 
     // 5. Right Column: Hero Power Readout (Only redrawn when watts change, zero-flash native padding)
     int cur_watts = (int)roundf(_anim_power);
@@ -1349,36 +1343,74 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->drawCenterString(btnLabel, 690, 404, &fonts::Font4);
     }
 
-    // 9. Bottom Left: G-Force Badge and Incline Badge
-    bool gf_on = telemetry.incline_gforce_enabled && (Settings.get().show_gforce != 0);
+    // 9. Bottom Left: Dynamic Badges & Thermals Row
+    bool gf_on  = telemetry.incline_gforce_enabled && (Settings.get().show_gforce != 0);
     bool inc_on = telemetry.incline_gforce_enabled && (Settings.get().show_incline != 0);
 
     bool badge_cfg_changed = (_cache.show_gforce != (gf_on ? 1 : 0)) ||
                              (_cache.show_incline != (inc_on ? 1 : 0)) ||
                              (_cache.incline_gforce_enabled != telemetry.incline_gforce_enabled);
 
+    int gf_x = -1;
+    int inc_x = -1;
+    int temp_x = 240;
+
+    if (gf_on && inc_on) {
+        gf_x = 62;      // Slot 1
+        inc_x = 144;    // Slot 2
+        temp_x = 224;   // Temps at x=224
+    } else if (!gf_on && inc_on) {
+        inc_x = 62;     // Neigung at Slot 1 (x=62)
+        temp_x = 144;   // Temps shift to x=144
+    } else if (gf_on && !inc_on) {
+        gf_x = 62;      // G-Force at Slot 1 (x=62)
+        temp_x = 144;   // Temps shift to x=144
+    } else {
+        temp_x = 240;   // Neither badge drawn, temps centered under dial (x=240)
+    }
+
     if (!_hyper_inited || badge_cfg_changed) {
         _cache.show_gforce = gf_on ? 1 : 0;
         _cache.show_incline = inc_on ? 1 : 0;
         _cache.incline_gforce_enabled = telemetry.incline_gforce_enabled;
-        _canvas->fillRect(15, 380, 135, 75, COLOR_BG); // clear bottom-left badges area
+        _canvas->fillRect(15, 380, 310, 75, COLOR_BG); // Clear entire bottom-left badges & thermals area
         _cache.temp_esc = -999;
         _cache.temp_motor = -999;
+        _cache.g_force_x10 = -999;
+        _cache.incline_deg = -999;
     }
 
-    if (gf_on) {
+    // Thermals (FET & MOT)
+    int cur_fet = (int)(telemetry.temp_esc + 0.5f);
+    int cur_mot = (int)(telemetry.temp_motor + 0.5f);
+    if (!_hyper_inited || badge_cfg_changed || cur_fet != _cache.temp_esc || cur_mot != _cache.temp_motor) {
+        _cache.temp_esc = cur_fet;
+        _cache.temp_motor = cur_mot;
+        if (temp_x == 240) {
+            _canvas->fillRect(150, 395, 180, 45, COLOR_BG);
+        } else if (temp_x == 224) {
+            _canvas->fillRect(173, 395, 110, 45, COLOR_BG);
+        } else if (temp_x == 144) {
+            _canvas->fillRect(91, 395, 110, 45, COLOR_BG);
+        }
+        drawThermalsWithDegrees(_canvas, "", telemetry.temp_esc, telemetry.temp_motor, temp_x, 405, true);
+    }
+
+    // G-Force Badge
+    if (gf_x > 0) {
         int cur_g10 = (int)roundf(telemetry.g_force * 10.0f);
         if (!_hyper_inited || badge_cfg_changed || cur_g10 != _cache.g_force_x10) {
             _cache.g_force_x10 = cur_g10;
-            drawGForceBadge(_canvas, telemetry.g_force, 50, 416, 28);
+            drawGForceBadge(_canvas, telemetry.g_force, gf_x, 416, 28);
         }
     }
 
-    if (inc_on) {
+    // Incline Badge
+    if (inc_x > 0) {
         int cur_inc_x10 = (int)roundf(telemetry.incline_deg * 10.0f);
         if (!_hyper_inited || badge_cfg_changed || cur_inc_x10 != _cache.incline_deg) {
             _cache.incline_deg = cur_inc_x10;
-            drawInclineBadge(_canvas, telemetry.incline_deg, 114, 416, 28);
+            drawInclineBadge(_canvas, telemetry.incline_deg, inc_x, 416, 28);
         }
     }
 

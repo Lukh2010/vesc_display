@@ -49,6 +49,9 @@ public:
     void triggerFocBeep(float freq = 1600.0f, float duration_s = 0.35f, float voltage = 8.0f);
     void playFocTone(uint8_t channel, float freq, float voltage);
     void stopFocTone(uint8_t channel = 0);
+    void triggerFocHorn(bool active);
+    void sendFocPlayStop();
+    bool isHornActive() const { return _horn_active; }
 
     // Live GPS / BDS Satellite Data Broadcast to VESC (Ubox)
     static void sendGnssData(const GpsTelemetry &gps);
@@ -130,6 +133,11 @@ private:
     VescSyncStatus _sync_status;
     uint32_t       _mcconf_req_ms;
     uint32_t       _sync_ms;
+
+    // FOC Motor Horn State
+    bool           _horn_active;
+    uint32_t       _last_horn_cmd_ms;
+    uint8_t        _horn_cadence;
 };
 
 extern VescHandler Vesc;

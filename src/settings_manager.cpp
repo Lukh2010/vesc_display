@@ -30,7 +30,7 @@ void SettingsManager::loadDefaults() {
     _settings.incline_gforce_enabled = true;
     _settings.wifi_bridge_enabled    = false;
     _settings.setup_completed        = false;
-    _settings.color_theme            = THEME_CYBER_CYAN;
+    _settings.color_theme            = THEME_CLEAN_ICE;
     _settings.turbine_sound_enabled  = true;
     _settings.ble_keyless_enabled    = true;
     _settings.ble_autolock_enabled   = true;
@@ -96,8 +96,8 @@ void SettingsManager::begin() {
         if (_settings.brake_mode > 2) _settings.brake_mode = 2;
         _settings.wifi_bridge_enabled    = _prefs.getBool("wifi_en", false);
         _settings.setup_completed        = _prefs.getBool("setup_done", false);
-        _settings.color_theme            = _prefs.getUChar("theme", THEME_CYBER_CYAN);
-        if (_settings.color_theme >= THEME_COUNT) _settings.color_theme = THEME_CYBER_CYAN;
+        _settings.color_theme            = _prefs.getUChar("theme", THEME_CLEAN_ICE);
+        if (_settings.color_theme >= THEME_COUNT) _settings.color_theme = THEME_CLEAN_ICE;
         _settings.turbine_sound_enabled  = _prefs.getBool("turb_en", true);
         _settings.ble_keyless_enabled    = _prefs.getBool("ble_en", true);
         _settings.ble_autolock_enabled   = _prefs.getBool("ble_alock", true);
