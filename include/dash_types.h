@@ -345,6 +345,14 @@ struct DashTelemetry {
     float    turbine_freq;         // Current turbine whine frequency (Hz, scales with speed)
     float    turbine_volts;        // Current turbine acoustic modulation voltage (V, scales with speed)
 
+    // Traction Control System (TCS) & Virtual TPMS
+    bool     tcs_active;                 // true when proactive traction control is intervening
+    float    tcs_slip_kmh;               // slip speed in km/h (v_vesc - v_ref)
+    float    tcs_throttle_scale;         // phase current multiplier (0.05f to 1.0f)
+    bool     tpms_warning;               // true if tire diameter dropped 4-6% for > 30s
+    float    tpms_drift_pct;             // tire diameter loss percentage
+    float    calibrated_wheel_diam_inch; // learned rolling diameter in inches
+
     // Ride Modes & Hyper Boost
     RideMode ride_mode;        // Active Ride Mode: ECO, STREET, SPORT, RACE
     RideMode saved_ride_mode;  // Restored when exiting SCREEN_RACE_TIMER

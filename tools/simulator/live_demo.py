@@ -83,6 +83,12 @@ class SimTelemetry(ctypes.Structure):
         ("turbine_volts", ctypes.c_float),
         ("brake_mode", ctypes.c_int32),
         ("horn_active", ctypes.c_int32),
+        ("tcs_active", ctypes.c_int32),
+        ("tcs_slip_kmh", ctypes.c_float),
+        ("tcs_throttle_scale", ctypes.c_float),
+        ("tpms_warning", ctypes.c_int32),
+        ("tpms_drift_pct", ctypes.c_float),
+        ("calibrated_wheel_diam_inch", ctypes.c_float),
     ]
 
 sim_lib.sim_init.restype = None

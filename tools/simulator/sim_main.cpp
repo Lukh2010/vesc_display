@@ -20,6 +20,7 @@
 #include "gps_tracker.h"
 #include "ble_keyless_manager.h"
 #include "ota_manager.h"
+#include "tcs_tpms_manager.h"
 #include "virtual_vesc/virtual_vesc.h"
 #include "virtual_vesc/vesc_tcp_server.h"
 
@@ -2616,6 +2617,320 @@ void testDashSettingsAndUiFeatures() {
     printf("=== DashSettings & Cockpit UI Features Tests PASSED! ===\n\n");
 }
 
+void testTcsAndVirtualTpms() {
+    printf("=== Running Proactive TCS & Virtual TPMS Unit Tests ===\n");
+
+    // -------------------------------------------------------------------------
+    // Test 1: Wet slip detection under throttle
+    // Sudden ERPM jump exceeding GPS/IMU ground speed (> 3 km/h slip)
+    // triggers tcs_active and clamps phase current limit in < 5ms.
+    // -------------------------------------------------------------------------
+    {
+        printf("--- Test 1: Wet slip detection under throttle (< 5ms response) ---\n");
+        TcsTpmsManager::instance().begin();
+        TcsTpmsManager::instance().clearSimulatedSlip();
+        TcsTpmsManager::instance().clearSimulatedDiameterDrop();
+
+        DashTelemetry t;
+        setBaseTelemetry(t);
+        t.gps_enabled = true;
+        t.gps.valid = true;
+        t.gps.satellites = 10;
+        t.gps.last_fix_ms = millis();
+        t.gps.speed_kmh = 20.0f;
+        t.speed_kmh = 20.0f;
+        t.vesc_motor_speed = 20.0f;
+        t.throttle_pct = 65.0f;
+        t.phase_amps = 40.0f;
+
+        // Baseline: normal grip, 0 slip
+        TcsTpmsManager::instance().update(t, 0.010f);
+        assert(!t.tcs_active);
+        assert(t.tcs_slip_kmh < 0.1f);
+        assert(t.tcs_throttle_scale == 1.0f);
+
+        // Case 1a: GPS-referenced wet slip (> 3 km/h slip)
+        // Driven wheel hits wet steel track: ERPM jumps from 20 km/h to 26.5 km/h (+6.5 km/h slip)
+        t.vesc_motor_speed = 26.5f;
+        // Single update cycle of 4ms (< 5ms response requirement)
+        TcsTpmsManager::instance().update(t, 0.004f);
+        assert(t.tcs_active == true);
+        assert(t.tcs_slip_kmh >= 6.4f && t.tcs_slip_kmh <= 6.6f);
+        assert(t.tcs_throttle_scale < 0.60f); // Aggressively clamped to suppress wheelspin
+
+        // Verify phase current clamping in < 5ms
+        float base_phase_limit = 70.0f; // e.g. SPORT / RACE phase limit
+        float clamped_phase = base_phase_limit * t.tcs_throttle_scale;
+        assert(clamped_phase < 45.0f);
+        printf("[PASS] Wet slip with GPS fix: slip=%.1f km/h triggered tcs_active=true and clamped throttle scale to %.2f (Phase %.1fA -> %.1fA in 4ms)\n",
+               t.tcs_slip_kmh, t.tcs_throttle_scale, base_phase_limit, clamped_phase);
+
+        // Case 1b: Fallback to IMU Accelerometer reference when GPS is not fixed (tunnel/wet garage)
+        TcsTpmsManager::instance().begin();
+        t.gps.valid = false;
+        t.gps.satellites = 0;
+        t.speed_kmh = 18.0f;
+        t.vesc_motor_speed = 18.0f;
+        t.g_force = 0.12f;
+        // Settle initial IMU reference
+        TcsTpmsManager::instance().update(t, 0.010f);
+
+        // Wheel suddenly breaks loose on wet leaves/puddle: ERPM jumps to 27.0 km/h (> 3 km/h slip)
+        t.vesc_motor_speed = 27.0f;
+        TcsTpmsManager::instance().update(t, 0.003f); // 3ms (< 5ms)
+        assert(t.tcs_active == true);
+        assert(t.tcs_slip_kmh > 7.0f);
+        assert(t.tcs_throttle_scale < 0.50f);
+        printf("[PASS] Wet slip with IMU reference fallback: triggered tcs_active=true and clamped scale to %.2f in 3ms\n",
+               t.tcs_throttle_scale);
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 2: Smooth recovery hysteresis
+    // As slip subsides, current limit ramps back up smoothly without hunting or oscillating.
+    // -------------------------------------------------------------------------
+    {
+        printf("--- Test 2: Smooth recovery hysteresis (no hunting/oscillating) ---\n");
+        TcsTpmsManager::instance().begin();
+
+        DashTelemetry t;
+        setBaseTelemetry(t);
+        t.gps_enabled = true;
+        t.gps.valid = true;
+        t.gps.satellites = 10;
+        t.gps.last_fix_ms = millis();
+        t.gps.speed_kmh = 22.0f;
+        t.throttle_pct = 70.0f;
+        t.phase_amps = 45.0f;
+
+        // Trigger TCS into active state (slip = 6.0 km/h)
+        t.vesc_motor_speed = 28.0f;
+        TcsTpmsManager::instance().update(t, 0.004f);
+        assert(t.tcs_active == true);
+        float clamped_scale = t.tcs_throttle_scale;
+        assert(clamped_scale < 0.60f);
+
+        // Sub-phase 2a: Slip subsides partially into the hysteresis deadband (1.5 km/h < slip <= 3.0 km/h)
+        t.vesc_motor_speed = 24.2f; // slip = 2.2 km/h
+        TcsTpmsManager::instance().update(t, 0.010f);
+        // Hysteresis deadband: MUST stay active, preventing hunting/chattering!
+        assert(t.tcs_active == true);
+        assert(t.tcs_slip_kmh >= 2.1f && t.tcs_slip_kmh <= 2.3f);
+        printf("[PASS] Hysteresis deadband (slip=2.2 km/h): tcs_active held TRUE, hunting prevented.\n");
+
+        // Sub-phase 2b: Slip subsides below 1.5 km/h (full traction regained)
+        t.vesc_motor_speed = 22.4f; // slip = 0.4 km/h <= 1.5 km/h
+        TcsTpmsManager::instance().update(t, 0.010f);
+        assert(t.tcs_active == false); // TCS cleanly disengages
+
+        // Sub-phase 2c: Verify smooth monotonic ramp-up without oscillating
+        float prev_scale = t.tcs_throttle_scale;
+        for (int step = 0; step < 40; step++) {
+            TcsTpmsManager::instance().update(t, 0.015f);
+            assert(t.tcs_active == false); // Must not chatter back to true
+            assert(t.tcs_throttle_scale >= prev_scale - 1e-5f); // Monotonically increasing!
+            assert(t.tcs_throttle_scale <= 1.0f + 1e-4f); // No overshoot
+            prev_scale = t.tcs_throttle_scale;
+        }
+        assert(fabsf(t.tcs_throttle_scale - 1.0f) < 0.01f);
+        printf("[PASS] Smooth recovery hysteresis: scale ramped back up monotonically to 1.0 without hunting.\n");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 3: False positive rejection
+    // Hard acceleration with full traction does NOT trigger TCS.
+    // -------------------------------------------------------------------------
+    {
+        printf("--- Test 3: False positive rejection under hard acceleration ---\n");
+        TcsTpmsManager::instance().begin();
+
+        DashTelemetry t;
+        setBaseTelemetry(t);
+        t.gps_enabled = true;
+        t.gps.valid = true;
+        t.gps.satellites = 12;
+        t.throttle_pct = 100.0f;
+        t.phase_amps = 85.0f;
+        t.g_force = 0.70f; // Maximum forward acceleration
+
+        // Simulate aggressive drag launch 5 km/h -> 48 km/h on dry asphalt
+        // Micro-slip on pneumatic rubber is 0.5 - 1.2 km/h (< 3.0 km/h)
+        float cur_spd = 5.0f;
+        for (int step = 0; step < 40; step++) {
+            cur_spd += 1.1f;
+            t.gps.speed_kmh = cur_spd;
+            t.speed_kmh = cur_spd;
+            t.vesc_motor_speed = cur_spd + 0.9f; // Micro-slip = 0.9 km/h
+            t.gps.last_fix_ms = millis();
+
+            TcsTpmsManager::instance().update(t, 0.040f);
+
+            assert(t.tcs_active == false);
+            assert(t.tcs_throttle_scale == 1.0f);
+        }
+        printf("[PASS] Full throttle launch (0.7G, 85A phase): 0 false positives, tcs_active=false, scale=1.00.\n");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 4: Autonomous GPS tire diameter calibration
+    // Steady cruising >= 15 km/h with >= 8 sats accurately calibrates effective rolling circumference.
+    // -------------------------------------------------------------------------
+    {
+        printf("--- Test 4: Autonomous GPS tire diameter calibration ---\n");
+        Settings.get().wheel_diameter_in = 11.0f;
+        Settings.get().wheel_gps_calibrated = false;
+        Settings.save();
+
+        TcsTpmsManager::instance().begin();
+
+        DashTelemetry t;
+        setBaseTelemetry(t);
+        t.gps_enabled = true;
+        t.gps.valid = true;
+        t.gps.last_fix_ms = millis();
+        t.incline_deg = 0.0f;
+        t.phase_amps = 12.0f; // Normal cruising current
+
+        // Negative check 4a: Speed < 15 km/h (12 km/h)
+        t.gps.satellites = 10;
+        t.gps.speed_kmh = 12.0f;
+        t.vesc_motor_speed = 12.0f;
+        t.g_force = 0.02f;
+        for (int i = 0; i < 120; i++) TcsTpmsManager::instance().update(t, 0.050f);
+        assert(!Settings.get().wheel_gps_calibrated); // Not calibrated below 15 km/h
+
+        // Negative check 4b: Satellites < 8 (6 sats)
+        t.gps.satellites = 6;
+        t.gps.speed_kmh = 24.0f;
+        t.vesc_motor_speed = 24.0f;
+        for (int i = 0; i < 120; i++) TcsTpmsManager::instance().update(t, 0.050f);
+        assert(!Settings.get().wheel_gps_calibrated); // Not calibrated with < 8 sats
+
+        // Negative check 4c: High G-Force / cornering (|G| >= 0.08G)
+        t.gps.satellites = 10;
+        t.g_force = 0.15f;
+        for (int i = 0; i < 120; i++) TcsTpmsManager::instance().update(t, 0.050f);
+        assert(!Settings.get().wheel_gps_calibrated); // Not calibrated during cornering
+
+        // Positive check 4d: Steady straight cruising >= 15 km/h, >= 8 sats, |G| < 0.08G for >= 5s
+        // Target physical rolling diameter: 10.4 inches (worn Segway G3 Max tire under rider load)
+        const float TARGET_DIAM_IN = 10.4f;
+        const float TARGET_DIAM_M = TARGET_DIAM_IN * 0.0254f;
+        const float CIRCUM_M = TARGET_DIAM_M * (float)M_PI;
+        const float SPEED_KMH = 25.0f;
+        const float V_M_S = SPEED_KMH / 3.6f;
+        const float TARGET_RPM = (V_M_S / CIRCUM_M) * 60.0f;
+
+        t.gps.satellites = 12;
+        t.gps.speed_kmh = SPEED_KMH;
+        t.vesc_motor_speed = SPEED_KMH;
+        t.speed_kmh = SPEED_KMH;
+        t.g_force = 0.02f;
+        t.rpm = TARGET_RPM;
+
+        // Run for 5.0s (qualifying duration) + 8.0s (EMA convergence)
+        for (int i = 0; i < 260; i++) {
+            t.gps.last_fix_ms = millis();
+            TcsTpmsManager::instance().update(t, 0.050f);
+        }
+
+        assert(Settings.get().wheel_gps_calibrated == true);
+        assert(fabsf(Settings.get().wheel_diameter_in - TARGET_DIAM_IN) <= 0.15f);
+        assert(fabsf(t.calibrated_wheel_diam_inch - TARGET_DIAM_IN) <= 0.15f);
+        printf("[PASS] Autonomous GPS calibration: Calibrated diameter = %.1f in (target: %.1f in, calibrated=%s)\n",
+               Settings.get().wheel_diameter_in, TARGET_DIAM_IN,
+               Settings.get().wheel_gps_calibrated ? "TRUE" : "FALSE");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 5: Virtual TPMS pressure loss alert
+    // 5% diameter reduction over > 30s triggers tpms_warning with exact drift percentage.
+    // -------------------------------------------------------------------------
+    {
+        printf("--- Test 5: Virtual TPMS pressure loss alert (5%% drop > 30s) ---\n");
+        // Establish baseline of 11.0 inches
+        TcsTpmsManager::instance().begin();
+        TcsTpmsManager::instance().setBaselineDiameter(11.0f);
+        Settings.get().wheel_diameter_in = 11.0f;
+        Settings.get().wheel_gps_calibrated = true;
+
+        DashTelemetry t;
+        setBaseTelemetry(t);
+        t.gps_enabled = true;
+        t.gps.valid = true;
+        t.gps.satellites = 10;
+        t.gps.speed_kmh = 24.0f;
+        t.vesc_motor_speed = 24.0f;
+        t.speed_kmh = 24.0f;
+        t.g_force = 0.02f;
+
+        // Apply 5.0% tire deflation
+        TcsTpmsManager::instance().setSimulatedDiameterDropPct(5.0f);
+
+        // Sub-test 5a: < 30 seconds elapsed (e.g. 15s)
+        for (int i = 0; i < 300; i++) {
+            t.gps.last_fix_ms = millis();
+            TcsTpmsManager::instance().update(t, 0.050f);
+        }
+        assert(t.tpms_warning == false); // Debounce duration: must NOT alert prematurely!
+        assert(t.tpms_drift_pct >= 4.7f && t.tpms_drift_pct <= 5.3f);
+        printf("[PASS] Duration < 30s (t=15s): tpms_warning=false, drift=%.1f%% (debouncing confirmed).\n",
+               t.tpms_drift_pct);
+
+        // Sub-test 5b: > 30 seconds elapsed (another 17s -> total 32s)
+        for (int i = 0; i < 340; i++) {
+            t.gps.last_fix_ms = millis();
+            TcsTpmsManager::instance().update(t, 0.050f);
+        }
+        assert(t.tpms_warning == true); // > 30s triggers warning!
+        assert(t.tpms_drift_pct >= 4.7f && t.tpms_drift_pct <= 5.3f);
+        printf("[PASS] Duration > 30s (t=32s): tpms_warning=true, drift=%.1f%% (exact match to 5.0%% loss).\n",
+               t.tpms_drift_pct);
+
+        // Sub-test 5c: Recovery hysteresis when tire is reinflated
+        TcsTpmsManager::instance().setSimulatedDiameterDropPct(0.0f);
+        // Step for 2 seconds (< 5s recovery threshold)
+        for (int i = 0; i < 40; i++) {
+            t.gps.last_fix_ms = millis();
+            TcsTpmsManager::instance().update(t, 0.050f);
+        }
+        assert(t.tpms_warning == true); // Recovery hysteresis: stays on during brief fluctuations
+
+        // Step for another 4 seconds (total 6s > 5s recovery threshold)
+        for (int i = 0; i < 80; i++) {
+            t.gps.last_fix_ms = millis();
+            TcsTpmsManager::instance().update(t, 0.050f);
+        }
+        assert(t.tpms_warning == false); // Clean recovery
+        assert(t.tpms_drift_pct < 1.0f);
+        TcsTpmsManager::instance().clearSimulatedDiameterDrop();
+        printf("[PASS] Reinflation recovery: warning cleared after sustained normal pressure (> 5s).\n");
+
+        // Sub-test 5d: Verify live physics calculation (RPM vs GPS without simulation override)
+        // Deflated tire (10.45" vs 11.0" nominal = exactly 5.0% smaller rolling circumference)
+        // Wheel must rotate faster for same ground speed: RPM_deflated = (24 km/h) / (pi * 10.45" * 0.0254m) * 60
+        const float DEFLATED_CIRCUM_M = (11.0f * 0.95f * 0.0254f) * (float)M_PI;
+        t.rpm = ((24.0f / 3.6f) / DEFLATED_CIRCUM_M) * 60.0f;
+        TcsTpmsManager::instance().clearSimulatedDiameterDrop();
+
+        for (int i = 0; i < 660; i++) { // 33 seconds
+            t.gps.last_fix_ms = millis();
+            TcsTpmsManager::instance().update(t, 0.050f);
+        }
+        assert(t.tpms_warning == true);
+        assert(fabsf(t.tpms_drift_pct - 5.0f) <= 0.4f);
+        printf("[PASS] Pure physical calculation (RPM vs GPS ground speed): drift=%.1f%% -> tpms_warning=true.\n",
+               t.tpms_drift_pct);
+
+        // Reset to default
+        Settings.get().wheel_diameter_in = 11.0f;
+        Settings.get().wheel_gps_calibrated = false;
+        Settings.save();
+    }
+
+    printf("=== All Proactive TCS & Virtual TPMS Unit Tests PASSED! ===\n\n");
+}
+
 int main(int argc, char **argv) {
     printf("==================================================\n");
     printf("   VESC 4.3\" Touch LCD Emulator & Renderer (800x480) \n");
@@ -2648,6 +2963,7 @@ int main(int argc, char **argv) {
     testColorThemesAndTurbineSound();
     testKeylessGoAndProximityAutoLock();
     testDashSettingsAndUiFeatures();
+    testTcsAndVirtualTpms();
 
     DashTelemetry t;
     setBaseTelemetry(t);

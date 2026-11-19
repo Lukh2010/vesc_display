@@ -44,6 +44,7 @@ public:
 
     // Dynamic Live Limit Control (Captive Portal & Ride Modes)
     void sendModeLimits(float max_speed_kmh, float max_power_watts, float max_battery_amps, float max_phase_amps, float cutoff_start = 0.0f, float cutoff_end = 0.0f);
+    void sendTcsPhaseLimit(float max_phase_amps);
     void sendCurrentBrake(float brake_amps);
     void sendTerminalCommand(const char *cmd);
     void triggerFocBeep(float freq = 1600.0f, float duration_s = 0.35f, float voltage = 8.0f);
