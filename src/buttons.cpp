@@ -406,29 +406,29 @@ void ButtonHandler::processTouch(uint32_t now) {
                         if (_last_tap_x <= 135 && _last_tap_y <= 65) {
                             _pending_action = NAV_SCREEN_STATS;
                         }
-                        // 2. Action Buttons on Ride Dash (Bottom Right)
-                        else if (_last_tap_y >= 360 && _last_tap_y <= 465) {
+                        // 2. Interactive Headlight Badge Touch Toggle (Top Slot 50,354 or Bottom Slot 50,416)
+                        else if (Settings.get().show_light_btn != 0 && ({
+                            bool both_gf_inc = Settings.get().incline_gforce_enabled && 
+                                               (Settings.get().show_gforce != 0) && 
+                                               (Settings.get().show_incline != 0);
+                            int target_ly = both_gf_inc ? 354 : 416;
+                            int dx = (int)_last_tap_x - 50;
+                            int dy = (int)_last_tap_y - target_ly;
+                            (dx * dx + dy * dy <= 34 * 34);
+                        })) {
+                            _pending_action = NAV_LIGHT_TOGGLE;
+                        }
+                        // 3. Action Buttons on Ride Dash (Bottom Right: BOOST & MODE)
+                        else if (_last_tap_y >= 360 && _last_tap_y <= 465 && _last_tap_x >= 430) {
                             if (_last_tap_x >= 430 && _last_tap_x <= 605) {
                                 _pending_action = NAV_BOOST_TOGGLE;
                             } else if (_last_tap_x >= 605 && _last_tap_x <= 775) {
                                 _pending_action = NAV_MODE_CYCLE;
                             }
                         }
-                        // 3. Top Right Badge -> Open Settings Menu
+                        // 4. Top Right Badge -> Open Settings Menu
                         else if (_last_tap_y < 65 && _last_tap_x > 620) {
                             _pending_action = NAV_BTN1_LONG;
-                        }
-                        // 4. Interactive Headlight Badge Touch Toggle
-                        else if (Settings.get().show_light_btn != 0) {
-                            bool gf_on = (Settings.get().show_gforce != 0);
-                            bool inc_on = (Settings.get().show_incline != 0);
-                            int lx = 50;
-                            int ly = (gf_on && inc_on) ? 354 : 416;
-                            int dx = (int)_last_tap_x - lx;
-                            int dy = (int)_last_tap_y - ly;
-                            if (dx * dx + dy * dy <= 32 * 32) {
-                                _pending_action = NAV_LIGHT_TOGGLE;
-                            }
                         }
                     }
                 }
