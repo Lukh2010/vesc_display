@@ -390,6 +390,7 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
 // ==============================================================================
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
 static bool s_can_initialized = false;
+static uint8_t s_primary_vesc_id = VESC_CAN_ID_DEFAULT;
 
 void VescHandler::initCanBus() {
     if (s_can_initialized) return;
@@ -440,7 +441,6 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         uint8_t controller_id = (uint8_t)(msg.identifier & 0xFF);
         uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
 
-        static uint8_t s_primary_vesc_id = VESC_CAN_ID_DEFAULT;
         static bool s_has_primary = false;
         static bool s_has_76 = false;
         static bool s_first_frame_logged = false;
@@ -1357,8 +1357,8 @@ static void sendVescCanBuffer(uint8_t controller_id, const uint8_t *data, size_t
 void VescHandler::sendCurrent(float current_amps) {
     UartLock lock;
     if (current_amps < 0.0f) current_amps = 0.0f;
-    // Hard clamp to 10.0A max for test bench safety
-    if (current_amps > 10.0f) current_amps = 10.0f;
+    // Safety clamp to 60.0A max for bench test
+    if (current_amps > 60.0f) current_amps = 60.0f;
 
     int32_t current_mA = (int32_t)roundf(current_amps * 1000.0f);
 
@@ -1386,7 +1386,7 @@ void VescHandler::sendCurrent(float current_amps) {
         // CAN_PACKET_SET_CURRENT (ID 1)
         twai_message_t can_cur;
         can_cur.extd = 1;
-        can_cur.identifier = (1 << 8) | VESC_CAN_ID_DEFAULT;
+        can_cur.identifier = (1 << 8) | s_primary_vesc_id;
         can_cur.data_length_code = 4;
         can_cur.data[0] = payload[1];
         can_cur.data[1] = payload[2];
@@ -1394,9 +1394,19 @@ void VescHandler::sendCurrent(float current_amps) {
         can_cur.data[3] = payload[4];
         twai_transmit(&can_cur, pdMS_TO_TICKS(5));
 
-        if (VESC_CAN_ID_DEFAULT != 0) {
+        if (s_primary_vesc_id != 0) {
             can_cur.identifier = (1 << 8) | 0;
             twai_transmit(&can_cur, pdMS_TO_TICKS(5));
+        }
+        if (s_primary_vesc_id != 1) {
+            can_cur.identifier = (1 << 8) | 1;
+            twai_transmit(&can_cur, pdMS_TO_TICKS(5));
+        }
+
+        // Also transmit via COMM_SET_CURRENT (Short buffer ID 8) for maximum compatibility
+        sendVescCanBuffer(s_primary_vesc_id, payload, 5);
+        if (s_primary_vesc_id != 0) {
+            sendVescCanBuffer(0, payload, 5);
         }
     }
 #endif
@@ -1405,7 +1415,7 @@ void VescHandler::sendCurrent(float current_amps) {
 void VescHandler::sendDuty(float duty) {
     UartLock lock;
     if (duty < 0.0f) duty = 0.0f;
-    if (duty > 0.20f) duty = 0.20f; // bench safety: clamp to max 20% duty
+    if (duty > 0.90f) duty = 0.90f; // clamp to max 90% duty
 
     int32_t duty_int = (int32_t)roundf(duty * 100000.0f);
 
@@ -1433,7 +1443,7 @@ void VescHandler::sendDuty(float duty) {
         // CAN_PACKET_SET_DUTY (ID 0)
         twai_message_t can_duty;
         can_duty.extd = 1;
-        can_duty.identifier = (0 << 8) | VESC_CAN_ID_DEFAULT;
+        can_duty.identifier = (0 << 8) | s_primary_vesc_id;
         can_duty.data_length_code = 4;
         can_duty.data[0] = payload[1];
         can_duty.data[1] = payload[2];
@@ -1441,9 +1451,19 @@ void VescHandler::sendDuty(float duty) {
         can_duty.data[3] = payload[4];
         twai_transmit(&can_duty, pdMS_TO_TICKS(5));
 
-        if (VESC_CAN_ID_DEFAULT != 0) {
+        if (s_primary_vesc_id != 0) {
             can_duty.identifier = (0 << 8) | 0;
             twai_transmit(&can_duty, pdMS_TO_TICKS(5));
+        }
+        if (s_primary_vesc_id != 1) {
+            can_duty.identifier = (0 << 8) | 1;
+            twai_transmit(&can_duty, pdMS_TO_TICKS(5));
+        }
+
+        // Also transmit via COMM_SET_DUTY (Short buffer ID 8)
+        sendVescCanBuffer(s_primary_vesc_id, payload, 5);
+        if (s_primary_vesc_id != 0) {
+            sendVescCanBuffer(0, payload, 5);
         }
     }
 #endif
@@ -1491,7 +1511,7 @@ void VescHandler::sendCurrentBrake(float brake_amps) {
         // CAN_PACKET_SET_CURRENT_BRAKE (ID 2)
         twai_message_t can_brake;
         can_brake.extd = 1;
-        can_brake.identifier = (2 << 8) | VESC_CAN_ID_DEFAULT;
+        can_brake.identifier = (2 << 8) | s_primary_vesc_id;
         can_brake.data_length_code = 4;
         can_brake.data[0] = payload[1];
         can_brake.data[1] = payload[2];
@@ -1499,9 +1519,18 @@ void VescHandler::sendCurrentBrake(float brake_amps) {
         can_brake.data[3] = payload[4];
         twai_transmit(&can_brake, pdMS_TO_TICKS(5));
 
-        if (VESC_CAN_ID_DEFAULT != 0) {
+        if (s_primary_vesc_id != 0) {
             can_brake.identifier = (2 << 8) | 0;
             twai_transmit(&can_brake, pdMS_TO_TICKS(5));
+        }
+        if (s_primary_vesc_id != 1) {
+            can_brake.identifier = (2 << 8) | 1;
+            twai_transmit(&can_brake, pdMS_TO_TICKS(5));
+        }
+
+        sendVescCanBuffer(s_primary_vesc_id, payload, 5);
+        if (s_primary_vesc_id != 0) {
+            sendVescCanBuffer(0, payload, 5);
         }
     }
 #endif
