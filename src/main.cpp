@@ -195,15 +195,43 @@ void loop() {
     // Interactive Serial Command Console via USB (115200 Baud)
     // Active both in SIMULATION_MODE and on real hardware (when USB bridge is inactive)
     static uint32_t s_test_gas_until = 0;
+    static float s_test_gas_current = 0.0f;
+    static float s_test_gas_duty = 0.0f;
+    static bool s_test_gas_is_duty = false;
+    static uint32_t s_last_test_gas_stream_ms = 0;
+    static uint32_t s_last_test_telem_log_ms = 0;
     static String s_cmd_line = "";
 
-    // Auto-stop safety timeout for test gas
-    if (s_test_gas_until > 0 && now >= s_test_gas_until) {
-        s_test_gas_until = 0;
-        Vesc.sendCurrent(0.0f);
-        Vesc.setSimThrottle(0.0f);
-        Renderer.markScreenDirty();
-        Serial.println("[GAS SAFETY] Test-Gas Timer abgelaufen -> Motor 0.0A gestoppt.");
+    // Continuous drive stream while test gas active (every 30ms = ~33Hz refresh for VESC watchdog)
+    if (s_test_gas_until > 0) {
+        if (now < s_test_gas_until) {
+            if (now - s_last_test_gas_stream_ms >= 30) {
+                s_last_test_gas_stream_ms = now;
+                if (s_test_gas_is_duty) {
+                    Vesc.sendDuty(s_test_gas_duty);
+                } else {
+                    Vesc.sendCurrent(s_test_gas_current);
+                }
+            }
+            if (now - s_last_test_telem_log_ms >= 200) {
+                s_last_test_telem_log_ms = now;
+                Serial.printf("[TEST TELEM] Spd: %.1f km/h | ERPM: %.0f | MotI: %.1fA | BatI: %.1fA | Duty: %.1f%%\n",
+                              telemetry.vesc_motor_speed, telemetry.rpm * 15.0f, telemetry.phase_amps, telemetry.current_amps, telemetry.duty_cycle_pct);
+            }
+        } else {
+            // Auto-stop safety timeout expired
+            s_test_gas_until = 0;
+            s_test_gas_current = 0.0f;
+            s_test_gas_duty = 0.0f;
+            s_test_gas_is_duty = false;
+            Vesc.sendCurrent(0.0f);
+            Vesc.sendDuty(0.0f);
+            Vesc.setSimThrottle(0.0f);
+            Renderer.markScreenDirty();
+            Serial.println("[GAS SAFETY] Test-Gas Timer abgelaufen -> Motor 0.0A gestoppt.");
+            Serial.printf("[FINAL TELEM] Spd: %.1f km/h | ERPM: %.0f | MotI: %.1fA | BatI: %.1fA\n",
+                          telemetry.vesc_motor_speed, telemetry.rpm * 15.0f, telemetry.phase_amps, telemetry.current_amps);
+        }
     }
 
     if (!Vesc.isUsbBridgeActive()) {
@@ -260,15 +288,21 @@ void loop() {
                     if (telemetry.is_locked) {
                         Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben (z. B. '1234') vor Gas geben.");
                     } else {
-                        float test_amps = 3.0f;
+                        float test_amps = 5.0f;
+                        s_test_gas_current = test_amps;
+                        s_test_gas_duty = 0.0f;
+                        s_test_gas_is_duty = false;
+                        s_test_gas_until = millis() + 1500; // Auto-cutoff 1.5s
                         Vesc.sendCurrent(test_amps);
                         Vesc.setSimThrottle(25.0f);
-                        s_test_gas_until = millis() + 1500; // Auto-cutoff 1.5s
                         Renderer.markScreenDirty();
                         Serial.printf("[TEST GAS] Motor-Strom %.1fA gesendet (Auto-Cutoff in 1.5s)!\n", test_amps);
                     }
                 } else if (c == ' ' || c == '-') {
                     s_test_gas_until = 0;
+                    s_test_gas_current = 0.0f;
+                    s_test_gas_duty = 0.0f;
+                    s_test_gas_is_duty = false;
                     Vesc.sendCurrent(0.0f);
                     Vesc.sendDuty(0.0f);
                     Vesc.sendCurrentBrake(0.0f);
@@ -340,20 +374,83 @@ void loop() {
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
                         Serial.println("[PIN] System LOCKED via Serial Command.");
+                    } else if (s_cmd_line.equalsIgnoreCase("tuning on") || s_cmd_line.equalsIgnoreCase("tuning")) {
+                        telemetry.tuning_mode = true;
+                        ModeManager::instance().setTuningMode(true);
+                        Buttons.setTuningMode(true);
+                        Renderer.markScreenDirty();
+                        Renderer.invalidateCache();
+                        Serial.println("[MODE] TUNING-MODUS AKTIVIERT (Offener Modus, Drossel aus)!");
+                    } else if (s_cmd_line.equalsIgnoreCase("tuning off") || s_cmd_line.equalsIgnoreCase("legal")) {
+                        telemetry.tuning_mode = false;
+                        ModeManager::instance().setTuningMode(false);
+                        Buttons.setTuningMode(false);
+                        Renderer.markScreenDirty();
+                        Renderer.invalidateCache();
+                        Serial.println("[MODE] LEGALER POLIZEI-MODUS AKTIVIERT (20 km/h gedrosselt)!");
+                    } else if (s_cmd_line.equalsIgnoreCase("mode eco")) {
+                        ModeManager::instance().setRideMode(MODE_ECO);
+                        Renderer.markScreenDirty();
+                        Serial.println("[MODE] Ride-Mode -> ECO");
+                    } else if (s_cmd_line.equalsIgnoreCase("mode sport")) {
+                        ModeManager::instance().setRideMode(MODE_SPORT);
+                        Renderer.markScreenDirty();
+                        Serial.println("[MODE] Ride-Mode -> SPORT");
+                    } else if (s_cmd_line.equalsIgnoreCase("mode race")) {
+                        ModeManager::instance().setRideMode(MODE_RACE);
+                        Renderer.markScreenDirty();
+                        Serial.println("[MODE] Ride-Mode -> RACE");
+                    } else if (s_cmd_line.equalsIgnoreCase("vollgas") || s_cmd_line.equalsIgnoreCase("max")) {
+                        if (telemetry.is_locked) {
+                            Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben.");
+                        } else {
+                            ModeLimits lim = ModeManager::instance().getActiveLimits();
+                            float mode_phase = lim.max_phase_amps;
+                            if (mode_phase > 60.0f) mode_phase = 60.0f; // safety max for bench
+                            s_test_gas_current = mode_phase;
+                            s_test_gas_duty = 0.0f;
+                            s_test_gas_is_duty = false;
+                            s_test_gas_until = millis() + 3000; // 3.0s full throttle
+                            Vesc.sendCurrent(mode_phase);
+                            Vesc.setSimThrottle(100.0f);
+                            Renderer.markScreenDirty();
+                            Serial.printf("[VOLLGAS] Sende %.1fA Phasenstrom (3.0s Vollgas im Modus %s, Tuning=%s)!\n",
+                                          mode_phase, ModeManager::instance().getActiveModeName(),
+                                          telemetry.tuning_mode ? "AN" : "AUS");
+                        }
                     } else if (s_cmd_line.startsWith("gas ") || s_cmd_line.startsWith("cur ")) {
                         if (telemetry.is_locked) {
                             Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben.");
                         } else {
-                            float amps = s_cmd_line.substring(4).toFloat();
-                            if (amps > 5.0f) amps = 5.0f; // bench safety clamp
+                            String param = s_cmd_line.substring(4);
+                            param.trim();
+                            int space_idx = param.indexOf(' ');
+                            float amps = param.toFloat();
+                            float secs = 1.5f;
+                            if (space_idx > 0) {
+                                amps = param.substring(0, space_idx).toFloat();
+                                secs = param.substring(space_idx + 1).toFloat();
+                                if (secs > 5.0f) secs = 5.0f;
+                                if (secs < 0.2f) secs = 0.2f;
+                            }
+                            if (amps > 60.0f) amps = 60.0f;
                             if (amps < 0.0f) amps = 0.0f;
-                            Vesc.sendCurrent(amps);
-                            Vesc.setSimThrottle(amps * 10.0f);
                             if (amps > 0.0f) {
-                                s_test_gas_until = millis() + 1500;
-                                Serial.printf("[TEST GAS] Motor-Strom %.1fA fuer 1.5s gesendet!\n", amps);
+                                s_test_gas_current = amps;
+                                s_test_gas_duty = 0.0f;
+                                s_test_gas_is_duty = false;
+                                s_test_gas_until = millis() + (uint32_t)(secs * 1000.0f);
+                                Vesc.sendCurrent(amps);
+                                Vesc.setSimThrottle(amps * 2.0f);
+                                Serial.printf("[TEST GAS] Motor-Strom %.1fA fuer %.1fs gesendet!\n", amps, secs);
                             } else {
                                 s_test_gas_until = 0;
+                                s_test_gas_current = 0.0f;
+                                s_test_gas_duty = 0.0f;
+                                s_test_gas_is_duty = false;
+                                Vesc.sendCurrent(0.0f);
+                                Vesc.sendDuty(0.0f);
+                                Vesc.setSimThrottle(0.0f);
                                 Serial.println("[TEST GAS] Motor 0.0A gestoppt.");
                             }
                         }
@@ -361,22 +458,45 @@ void loop() {
                         if (telemetry.is_locked) {
                             Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben.");
                         } else {
-                            float duty_pct = s_cmd_line.substring(5).toFloat();
-                            if (duty_pct > 15.0f) duty_pct = 15.0f; // bench safety clamp max 15%
+                            String param = s_cmd_line.substring(5);
+                            param.trim();
+                            int space_idx = param.indexOf(' ');
+                            float duty_pct = param.toFloat();
+                            float secs = 1.5f;
+                            if (space_idx > 0) {
+                                duty_pct = param.substring(0, space_idx).toFloat();
+                                secs = param.substring(space_idx + 1).toFloat();
+                                if (secs > 5.0f) secs = 5.0f;
+                                if (secs < 0.2f) secs = 0.2f;
+                            }
+                            float max_duty = telemetry.tuning_mode ? 85.0f : 20.0f;
+                            if (duty_pct > max_duty) duty_pct = max_duty;
                             if (duty_pct < 0.0f) duty_pct = 0.0f;
                             float duty_frac = duty_pct / 100.0f;
-                            Vesc.sendDuty(duty_frac);
-                            Vesc.setSimThrottle(duty_pct);
                             if (duty_frac > 0.0f) {
-                                s_test_gas_until = millis() + 1500;
-                                Serial.printf("[TEST DUTY] Motor Duty %.1f%% (%.3f) fuer 1.5s gesendet!\n", duty_pct, duty_frac);
+                                s_test_gas_duty = duty_frac;
+                                s_test_gas_current = 0.0f;
+                                s_test_gas_is_duty = true;
+                                s_test_gas_until = millis() + (uint32_t)(secs * 1000.0f);
+                                Vesc.sendDuty(duty_frac);
+                                Vesc.setSimThrottle(duty_pct);
+                                Serial.printf("[TEST DUTY] Motor Duty %.1f%% (%.3f) fuer %.1fs gesendet!\n", duty_pct, duty_frac, secs);
                             } else {
                                 s_test_gas_until = 0;
+                                s_test_gas_current = 0.0f;
+                                s_test_gas_duty = 0.0f;
+                                s_test_gas_is_duty = false;
+                                Vesc.sendCurrent(0.0f);
+                                Vesc.sendDuty(0.0f);
+                                Vesc.setSimThrottle(0.0f);
                                 Serial.println("[TEST DUTY] Motor 0% gestoppt.");
                             }
                         }
                     } else if (s_cmd_line.equalsIgnoreCase("stop") || s_cmd_line.equalsIgnoreCase("s")) {
                         s_test_gas_until = 0;
+                        s_test_gas_current = 0.0f;
+                        s_test_gas_duty = 0.0f;
+                        s_test_gas_is_duty = false;
                         Vesc.sendCurrent(0.0f);
                         Vesc.sendDuty(0.0f);
                         Vesc.sendCurrentBrake(0.0f);
