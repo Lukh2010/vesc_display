@@ -258,7 +258,7 @@ struct DashSettings {
           wifi_bridge_enabled(false),
           setup_completed(false),
           color_theme(THEME_CLEAN_ICE),
-          turbine_sound_enabled(true),
+          turbine_sound_enabled(false),
           ble_keyless_enabled(true),
           ble_autolock_enabled(true),
           ble_paired(false),

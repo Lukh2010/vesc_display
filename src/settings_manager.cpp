@@ -31,7 +31,7 @@ void SettingsManager::loadDefaults() {
     _settings.wifi_bridge_enabled    = false;
     _settings.setup_completed        = false;
     _settings.color_theme            = THEME_CLEAN_ICE;
-    _settings.turbine_sound_enabled  = true;
+    _settings.turbine_sound_enabled  = false;
     _settings.ble_keyless_enabled    = true;
     _settings.ble_autolock_enabled   = true;
     _settings.ble_paired             = false;
@@ -101,7 +101,7 @@ void SettingsManager::begin() {
         _settings.setup_completed        = _prefs.getBool("setup_done", false);
         _settings.color_theme            = _prefs.getUChar("theme", THEME_CLEAN_ICE);
         if (_settings.color_theme >= THEME_COUNT) _settings.color_theme = THEME_CLEAN_ICE;
-        _settings.turbine_sound_enabled  = _prefs.getBool("turb_en", true);
+        _settings.turbine_sound_enabled  = _prefs.getBool("turb_en", false);
         _settings.ble_keyless_enabled    = _prefs.getBool("ble_en", true);
         _settings.ble_autolock_enabled   = _prefs.getBool("ble_alock", true);
         _settings.ble_paired             = _prefs.getBool("ble_pair", false);

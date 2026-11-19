@@ -1476,11 +1476,6 @@ void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
 #endif
 #endif
 
-    // Fallback: Also broadcast as terminal command
-    char term_cmd[64];
-    snprintf(term_cmd, sizeof(term_cmd), "foc_openloop 5 %.0f\n", freq);
-    sendTerminalCommand(term_cmd);
-
     Serial.printf("[VESC_ALARM] FOC Motor Siren Beep: %.0f Hz, %.2f s, %.1f V -> '%s'\n",
                   freq, duration_s, voltage, lisp_cmd);
 }
@@ -1528,7 +1523,8 @@ void VescHandler::playFocTone(uint8_t channel, float freq, float voltage) {
 }
 
 void VescHandler::stopFocTone(uint8_t channel) {
-    playFocTone(channel, 0.0f, 0.0f);
+    (void)channel;
+    sendFocPlayStop();
 }
 
 void VescHandler::sendFocPlayStop() {
@@ -1618,10 +1614,6 @@ void VescHandler::triggerFocHorn(bool active) {
         }
 #endif
 #endif
-
-        char term_cmd[64];
-        snprintf(term_cmd, sizeof(term_cmd), "foc_openloop 5.8 %.0f\n", freq);
-        sendTerminalCommand(term_cmd);
 
         Serial.printf("[VESC_HORN] FOC Motor Horn ACTIVE: %.0f Hz, 200 ms, 5.8 V -> '%s'\n",
                       freq, lisp_cmd);
