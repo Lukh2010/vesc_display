@@ -1,4 +1,6 @@
 #include "tcs_tpms_manager.h"
+#include "vesc_uart.h"
+#include "mode_manager.h"
 #include <math.h>
 
 TcsTpmsManager::TcsTpmsManager() {
@@ -6,6 +8,7 @@ TcsTpmsManager::TcsTpmsManager() {
 }
 
 void TcsTpmsManager::reset() {
+    _tcs_enabled = false;
     _tcs_active = false;
     _slip_speed_kmh = 0.0f;
     _slip_ratio = 0.0f;
@@ -30,6 +33,14 @@ void TcsTpmsManager::reset() {
     _tpms_drop_duration_sec = 0.0f;
     _tpms_recovery_duration_sec = 0.0f;
     _sim_drop_pct_override = -1.0f;
+}
+
+void TcsTpmsManager::setTcsEnabled(bool enabled) {
+    _tcs_enabled = enabled;
+    if (!enabled) {
+        _tcs_active = false;
+        _throttle_scale = 1.0f;
+    }
 }
 
 void TcsTpmsManager::begin() {
@@ -102,46 +113,51 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
     // =========================================================================
     // 2. Proactive Traction Control (TCS) Fast Intervention & Recovery Hysteresis
     // =========================================================================
-    // Condition: under acceleration (throttle > 5% or phase amps > 5A)
-    bool under_accel = (telemetry.throttle_pct > 5.0f || telemetry.phase_amps > 5.0f);
-    const float SLIP_TRIGGER_KMH = 3.0f;
-    const float SLIP_RECOVERY_KMH = 1.5f;
-
-    if (under_accel && (slip > SLIP_TRIGGER_KMH)) {
-        // Wheel spin detected under acceleration!
-        _tcs_active = true;
-        _last_slip_active_ms = now;
-
-        float excess_slip = slip - SLIP_TRIGGER_KMH;
-        // Aggressive non-linear reduction targeting < 5ms wheel spin suppression
-        // Scales down phase current limit smoothly based on excess slip speed
-        float target_scale = 1.0f - (excess_slip / (excess_slip + 2.5f)) * 0.85f;
-        if (target_scale < 0.15f) target_scale = 0.15f; // Clamp to retain steerability/control
-
-        // Instant drop (< 5ms response time): cut current without rate limiting downward
-        if (target_scale < _throttle_scale) {
-            _throttle_scale = target_scale;
-        } else {
-            _throttle_scale += (target_scale - _throttle_scale) * (dt_sec * 6.0f);
-        }
-    } else if (!under_accel || slip <= SLIP_RECOVERY_KMH) {
-        // Wheel has regained traction or throttle has been released
+    if (!_tcs_enabled) {
         _tcs_active = false;
-        if (_throttle_scale < 1.0f) {
-            // Smooth recovery hysteresis: ramps phase current back up smoothly (takes ~0.5s)
-            const float RAMP_UP_RATE = 1.8f; // scale units per second
-            _throttle_scale += RAMP_UP_RATE * dt_sec;
-            if (_throttle_scale > 1.0f) _throttle_scale = 1.0f;
-        }
+        _throttle_scale = 1.0f;
     } else {
-        // Hysteresis deadband between 1.5 km/h and 3.0 km/h:
-        // If TCS was already triggered, stay active and gently hold/ramp
-        if (_tcs_active) {
-            _throttle_scale += (0.85f - _throttle_scale) * (dt_sec * 2.5f);
-        } else {
+        // Condition: under acceleration (throttle > 5% or phase amps > 5A)
+        bool under_accel = (telemetry.throttle_pct > 5.0f || telemetry.phase_amps > 5.0f);
+        const float SLIP_TRIGGER_KMH = 3.0f;
+        const float SLIP_RECOVERY_KMH = 1.5f;
+
+        if (under_accel && (slip > SLIP_TRIGGER_KMH)) {
+            // Wheel spin detected under acceleration!
+            _tcs_active = true;
+            _last_slip_active_ms = now;
+
+            float excess_slip = slip - SLIP_TRIGGER_KMH;
+            // Aggressive non-linear reduction targeting < 5ms wheel spin suppression
+            // Scales down phase current limit smoothly based on excess slip speed
+            float target_scale = 1.0f - (excess_slip / (excess_slip + 2.5f)) * 0.85f;
+            if (target_scale < 0.15f) target_scale = 0.15f; // Clamp to retain steerability/control
+
+            // Instant drop (< 5ms response time): cut current without rate limiting downward
+            if (target_scale < _throttle_scale) {
+                _throttle_scale = target_scale;
+            } else {
+                _throttle_scale += (target_scale - _throttle_scale) * (dt_sec * 6.0f);
+            }
+        } else if (!under_accel || slip <= SLIP_RECOVERY_KMH) {
+            // Wheel has regained traction or throttle has been released
+            _tcs_active = false;
             if (_throttle_scale < 1.0f) {
-                _throttle_scale += 1.8f * dt_sec;
+                // Smooth recovery hysteresis: ramps phase current back up smoothly (takes ~0.5s)
+                const float RAMP_UP_RATE = 1.8f; // scale units per second
+                _throttle_scale += RAMP_UP_RATE * dt_sec;
                 if (_throttle_scale > 1.0f) _throttle_scale = 1.0f;
+            }
+        } else {
+            // Hysteresis deadband between 1.5 km/h and 3.0 km/h:
+            // If TCS was already triggered, stay active and gently hold/ramp
+            if (_tcs_active) {
+                _throttle_scale += (0.85f - _throttle_scale) * (dt_sec * 2.5f);
+            } else {
+                if (_throttle_scale < 1.0f) {
+                    _throttle_scale += 1.8f * dt_sec;
+                    if (_throttle_scale > 1.0f) _throttle_scale = 1.0f;
+                }
             }
         }
     }
@@ -194,11 +210,16 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
                         Settings.get().wheel_gps_calibrated = true;
                         Settings.save();
                         _baseline_diam_in = rounded;
+
+                        // Synchronize calibrated wheel diameter directly to VESC and recalculate max_erpm
+                        VescHandler::instance().syncWheelDiameterToVesc(rounded);
+                        ModeManager::instance().applyCurrentMode();
+                        telemetry.calibrated_wheel_diam_inch = rounded;
 #if !defined(NATIVE_SIMULATOR)
-                        Serial.printf("[TCS_TPMS] Autonomous Tire Diameter Calibrated: %.1f in (D_eff=%.2f in)\n",
+                        Serial.printf("[TCS_TPMS] Autonomous Tire Diameter Calibrated: %.1f in (D_eff=%.2f in) -> Synchronized to VESC\n",
                                       rounded, d_eff_in);
 #else
-                        printf("[TCS_TPMS] Autonomous Tire Diameter Calibrated: %.1f in (D_eff=%.2f in)\n",
+                        printf("[TCS_TPMS] Autonomous Tire Diameter Calibrated: %.1f in (D_eff=%.2f in) -> Synchronized to VESC\n",
                                rounded, d_eff_in);
 #endif
                     }

@@ -107,6 +107,7 @@ struct VirtualVescTelemetry {
     uint8_t fault_code;      // mc_fault_code
     float throttle_pct;      // Throttle (0 - 100%)
     float brake_pct;         // Brake (0 - 100%)
+    float wheel_diameter_m;  // SI wheel diameter (m)
 
     VirtualVescTelemetry()
         : temp_mos(34.5f),
@@ -129,7 +130,8 @@ struct VirtualVescTelemetry {
           odo_km(142.0f),
           fault_code(0),
           throttle_pct(0.0f),
-          brake_pct(0.0f) {}
+          brake_pct(0.0f),
+          wheel_diameter_m(0.2794f) {}
 };
 
 /**

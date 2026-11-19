@@ -2250,6 +2250,17 @@ void testVirtualVescEmulator() {
         virtual_vesc.process();
         assert(virtual_vesc.getLimits().max_phase_amps == 250.0f);
 
+        // 9c: Terminal command "conf_set si_wheel_diameter 0.2642"
+        const char *wcmd = "conf_set si_wheel_diameter 0.2642";
+        uint8_t w_payload[64];
+        w_payload[0] = COMM_TERMINAL_CMD;
+        size_t w_len = strlen(wcmd);
+        memcpy(&w_payload[1], wcmd, w_len);
+        len = vesc_encode_packet(w_payload, w_len + 1, packet, sizeof(packet));
+        loopback.getSideA().write(packet, len);
+        virtual_vesc.process();
+        assert(fabsf(virtual_vesc.getPhysicsTelemetry().wheel_diameter_m - 0.2642f) < 0.001f);
+
         // Verify COMM_PRINT terminal response
         {
             VescPacketParser term_parser;
@@ -2621,13 +2632,41 @@ void testTcsAndVirtualTpms() {
     printf("=== Running Proactive TCS & Virtual TPMS Unit Tests ===\n");
 
     // -------------------------------------------------------------------------
-    // Test 1: Wet slip detection under throttle
+    // Test 0: TCS disabled by default verification
+    // Active slip control is OFF by default; wheel slip does NOT throttle or clamp current.
+    // -------------------------------------------------------------------------
+    {
+        printf("--- Test 0: TCS disabled by default (no current clamping) ---\n");
+        TcsTpmsManager::instance().begin();
+        assert(TcsTpmsManager::instance().isTcsEnabled() == false);
+
+        DashTelemetry t;
+        setBaseTelemetry(t);
+        t.gps_enabled = true;
+        t.gps.valid = true;
+        t.gps.satellites = 10;
+        t.gps.last_fix_ms = millis();
+        t.gps.speed_kmh = 20.0f;
+        t.speed_kmh = 20.0f;
+        t.vesc_motor_speed = 30.0f; // 10 km/h wheel spin!
+        t.throttle_pct = 70.0f;
+        t.phase_amps = 50.0f;
+
+        TcsTpmsManager::instance().update(t, 0.010f);
+        assert(!t.tcs_active);
+        assert(t.tcs_throttle_scale == 1.0f);
+        printf("[PASS] TCS disabled by default: 10 km/h slip does NOT trigger intervention (scale=1.00).\n");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 1: Wet slip detection under throttle (when TCS enabled)
     // Sudden ERPM jump exceeding GPS/IMU ground speed (> 3 km/h slip)
     // triggers tcs_active and clamps phase current limit in < 5ms.
     // -------------------------------------------------------------------------
     {
-        printf("--- Test 1: Wet slip detection under throttle (< 5ms response) ---\n");
+        printf("--- Test 1: Wet slip detection under throttle (< 5ms response, TCS enabled) ---\n");
         TcsTpmsManager::instance().begin();
+        TcsTpmsManager::instance().setTcsEnabled(true);
         TcsTpmsManager::instance().clearSimulatedSlip();
         TcsTpmsManager::instance().clearSimulatedDiameterDrop();
 
@@ -2667,6 +2706,7 @@ void testTcsAndVirtualTpms() {
 
         // Case 1b: Fallback to IMU Accelerometer reference when GPS is not fixed (tunnel/wet garage)
         TcsTpmsManager::instance().begin();
+        TcsTpmsManager::instance().setTcsEnabled(true);
         t.gps.valid = false;
         t.gps.satellites = 0;
         t.speed_kmh = 18.0f;
@@ -2692,6 +2732,7 @@ void testTcsAndVirtualTpms() {
     {
         printf("--- Test 2: Smooth recovery hysteresis (no hunting/oscillating) ---\n");
         TcsTpmsManager::instance().begin();
+        TcsTpmsManager::instance().setTcsEnabled(true);
 
         DashTelemetry t;
         setBaseTelemetry(t);
@@ -2743,6 +2784,7 @@ void testTcsAndVirtualTpms() {
     {
         printf("--- Test 3: False positive rejection under hard acceleration ---\n");
         TcsTpmsManager::instance().begin();
+        TcsTpmsManager::instance().setTcsEnabled(true);
 
         DashTelemetry t;
         setBaseTelemetry(t);
@@ -2769,6 +2811,7 @@ void testTcsAndVirtualTpms() {
             assert(t.tcs_throttle_scale == 1.0f);
         }
         printf("[PASS] Full throttle launch (0.7G, 85A phase): 0 false positives, tcs_active=false, scale=1.00.\n");
+        TcsTpmsManager::instance().setTcsEnabled(false);
     }
 
     // -------------------------------------------------------------------------
