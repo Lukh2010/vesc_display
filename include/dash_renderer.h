@@ -306,6 +306,7 @@ private:
         int live_v_x10;
         int max_temp_mot;
         int max_temp_esc;
+        int8_t tuning_mode;
 
         void invalidate() {
             trip_x10 = -1;
@@ -326,6 +327,7 @@ private:
             live_v_x10 = -1;
             max_temp_mot = -999;
             max_temp_esc = -999;
+            tuning_mode = -1;
         }
     } _stats_cache;
 

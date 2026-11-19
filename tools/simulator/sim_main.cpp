@@ -1187,6 +1187,41 @@ void testStatsCalculationAndLiveUpdates() {
     Battery.resetTrip();
     assert(Battery.getDynamicWhKm() == 22.0f);
     printf("[PASS] Battery.resetTrip() cleanly resets rolling window and restores baseline 22.0 Wh/km.\n");
+
+    // 6. Police Mode (tuning_mode == false) Stats Display Masking vs Tuning Mode
+    t.tuning_mode = false;
+    t.speed_kmh = 45.0f;
+    t.stats.max_speed_kmh = 88.5f;
+    t.stats.avg_speed_kmh = 36.0f;
+    t.stats.peak_power_watts = 7500.0f;
+    t.stats.peak_current_amps = 85.0f;
+    t.stats.peak_phase_amps = 180.0f;
+    t.screen = SCREEN_RT_GRAPHS;
+    Renderer.markScreenDirty();
+    Renderer.render(t);
+
+    float pol_max = t.tuning_mode ? t.stats.max_speed_kmh : std::min(t.stats.max_speed_kmh, 22.0f);
+    float pol_live = t.tuning_mode ? t.speed_kmh : std::min(t.speed_kmh, 22.0f);
+    float pol_avg = t.tuning_mode ? t.stats.avg_speed_kmh : std::min(t.stats.avg_speed_kmh, 20.0f);
+    float pol_pwr = t.tuning_mode ? t.stats.peak_power_watts : std::min(t.stats.peak_power_watts, 500.0f);
+    float pol_bat = t.tuning_mode ? t.stats.peak_current_amps : std::min(t.stats.peak_current_amps, 20.0f);
+    float pol_pha = t.tuning_mode ? t.stats.peak_phase_amps : std::min(t.stats.peak_phase_amps, 45.0f);
+    assert(pol_max == 22.0f);
+    assert(pol_live == 22.0f);
+    assert(pol_avg == 20.0f);
+    assert(pol_pwr == 500.0f);
+    assert(pol_bat == 20.0f);
+    assert(pol_pha == 45.0f);
+
+    // Switching to tuning_mode == true restores uncapped display
+    t.tuning_mode = true;
+    Renderer.markScreenDirty();
+    Renderer.render(t);
+    float tune_max = t.tuning_mode ? t.stats.max_speed_kmh : std::min(t.stats.max_speed_kmh, 22.0f);
+    float tune_pwr = t.tuning_mode ? t.stats.peak_power_watts : std::min(t.stats.peak_power_watts, 500.0f);
+    assert(tune_max == 88.5f);
+    assert(tune_pwr == 7500.0f);
+    printf("[PASS] Police Mode strictly masks Stats (<=22 km/h, <=500 W, <=20 A, <=45 A), and Tuning Mode restores full values.\n");
     printf("=== Statistics Calculation & Live Updates Tests PASSED! ===\n\n");
 }
 

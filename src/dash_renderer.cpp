@@ -1683,6 +1683,7 @@ void DashboardRenderer::initRtGraphsScreen(const DashTelemetry &telemetry) {
     _canvas->drawString("Motor / Inverter FETs", 548, 422);
 
     _stats_cache.invalidate();
+    _stats_cache.tuning_mode = telemetry.tuning_mode ? 1 : 0;
     _stats_inited = false;
 }
 
@@ -1749,6 +1750,35 @@ void DashboardRenderer::drawWaveformGraph(int x, int y, int w, int h, const floa
 void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
     _canvas->setTextDatum(textdatum_t::top_left);
 
+    int8_t cur_tm = telemetry.tuning_mode ? 1 : 0;
+    if (_stats_cache.tuning_mode != cur_tm) {
+        _stats_cache.invalidate();
+        _stats_cache.tuning_mode = cur_tm;
+
+        // Toggle [ RACE ] button in top bar (x: 140..240, y: 12..48)
+        if (cur_tm) {
+            _canvas->fillRoundRect(140, 12, 100, 36, 18, 0x9000);
+            _canvas->drawRoundRect(140, 12, 100, 36, 18, COLOR_RED);
+            _canvas->setTextColor(COLOR_WHITE, 0x9000);
+            _canvas->setFont(&fonts::Font2);
+            _canvas->setTextDatum(textdatum_t::middle_center);
+            _canvas->drawString("RACE", 190, 30);
+            _canvas->setTextDatum(textdatum_t::top_left);
+        } else {
+            _canvas->fillRect(140, 12, 100, 36, COLOR_BG);
+        }
+    }
+
+    // Police Mode Masking: When tuning_mode == false, limit high-performance stats
+    // to strictly legal-compliant values (Max 22 km/h, 500 W peak, 20 A battery, 45 A phase, 20 km/h avg).
+    // In tuning_mode == true, show full uncapped physical values.
+    float disp_max_spd   = telemetry.tuning_mode ? telemetry.stats.max_speed_kmh   : std::min(telemetry.stats.max_speed_kmh, 22.0f);
+    float disp_live_spd  = telemetry.tuning_mode ? telemetry.speed_kmh             : std::min(telemetry.speed_kmh, 22.0f);
+    float disp_avg_spd   = telemetry.tuning_mode ? telemetry.stats.avg_speed_kmh   : std::min(telemetry.stats.avg_speed_kmh, 20.0f);
+    float disp_peak_pwr  = telemetry.tuning_mode ? telemetry.stats.peak_power_watts: std::min(telemetry.stats.peak_power_watts, 500.0f);
+    float disp_peak_curr = telemetry.tuning_mode ? telemetry.stats.peak_current_amps: std::min(telemetry.stats.peak_current_amps, 20.0f);
+    float disp_peak_pha  = telemetry.tuning_mode ? telemetry.stats.peak_phase_amps : std::min(telemetry.stats.peak_phase_amps, 45.0f);
+
     // Col 1: STRECKE (Trip km & ODO km)
     int cur_trip = (int)(telemetry.trip_km * 10.0f + 0.5f);
     int cur_odo  = (int)(telemetry.odo_km * 10.0f + 0.5f);
@@ -1768,7 +1798,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
 
     // Col 2: FAHRZEIT (Ride time & Avg speed)
     uint32_t sec = telemetry.stats.ride_time_sec;
-    int cur_avg = (int)(telemetry.stats.avg_speed_kmh * 10.0f + 0.5f);
+    int cur_avg = (int)(disp_avg_spd * 10.0f + 0.5f);
     if (!_stats_inited || sec != _stats_cache.ride_sec || cur_avg != _stats_cache.avg_spd_x10) {
         _stats_cache.ride_sec = sec;
         _stats_cache.avg_spd_x10 = cur_avg;
@@ -1784,24 +1814,24 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _canvas->drawString(timeBuf, 225, 86);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        char avgSpd[16]; snprintf(avgSpd, sizeof(avgSpd), "Avg: %.1f km/h", telemetry.stats.avg_speed_kmh);
+        char avgSpd[16]; snprintf(avgSpd, sizeof(avgSpd), "Avg: %.1f km/h", disp_avg_spd);
         _canvas->drawString(avgSpd, 225, 122);
     }
 
     // Col 3: MAX SPEED (Max speed & Live speed)
-    int cur_max_spd  = (int)(telemetry.stats.max_speed_kmh * 10.0f + 0.5f);
-    int cur_live_spd = (int)(telemetry.speed_kmh * 10.0f + 0.5f);
+    int cur_max_spd  = (int)(disp_max_spd * 10.0f + 0.5f);
+    int cur_live_spd = (int)(disp_live_spd * 10.0f + 0.5f);
     if (!_stats_inited || cur_max_spd != _stats_cache.max_spd_x10 || cur_live_spd != _stats_cache.live_spd_x10) {
         _stats_cache.max_spd_x10 = cur_max_spd;
         _stats_cache.live_spd_x10 = cur_live_spd;
         _canvas->fillRect(415, 86, 170, 56, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        char maxSpd[16]; snprintf(maxSpd, sizeof(maxSpd), "%.1f km/h", telemetry.stats.max_speed_kmh);
+        char maxSpd[16]; snprintf(maxSpd, sizeof(maxSpd), "%.1f km/h", disp_max_spd);
         _canvas->drawString(maxSpd, 415, 86);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        char liveSpd[16]; snprintf(liveSpd, sizeof(liveSpd), "Live: %.1f km/h", telemetry.speed_kmh);
+        char liveSpd[16]; snprintf(liveSpd, sizeof(liveSpd), "Live: %.1f km/h", disp_live_spd);
         _canvas->drawString(liveSpd, 415, 122);
     }
 
@@ -1823,16 +1853,16 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
     }
 
     // Tile 1: MAX LEISTUNG (PEAK WATT & PS)
-    int cur_pwr = (int)(telemetry.stats.peak_power_watts + 0.5f);
+    int cur_pwr = (int)(disp_peak_pwr + 0.5f);
     if (!_stats_inited || cur_pwr != _stats_cache.peak_watts) {
         _stats_cache.peak_watts = cur_pwr;
         _canvas->fillRect(32, 202, 220, 60, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        char pwrBuf[16]; snprintf(pwrBuf, sizeof(pwrBuf), "%.0f W", telemetry.stats.peak_power_watts);
+        char pwrBuf[16]; snprintf(pwrBuf, sizeof(pwrBuf), "%.0f W", disp_peak_pwr);
         _canvas->drawString(pwrBuf, 32, 202);
 
-        float ps_stat = telemetry.stats.peak_power_watts * 0.00135962f;
+        float ps_stat = disp_peak_pwr * 0.00135962f;
         char psBuf[16]; snprintf(psBuf, sizeof(psBuf), "%.1f PS", ps_stat);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_AMBER, COLOR_SURFACE);
@@ -1840,24 +1870,24 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
     }
 
     // Tile 2: PEAK AKKU-STROM
-    int cur_curr = (int)(telemetry.stats.peak_current_amps * 10.0f + 0.5f);
+    int cur_curr = (int)(disp_peak_curr * 10.0f + 0.5f);
     if (!_stats_inited || cur_curr != _stats_cache.peak_curr_x10) {
         _stats_cache.peak_curr_x10 = cur_curr;
         _canvas->fillRect(290, 202, 220, 42, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        char curBuf[16]; snprintf(curBuf, sizeof(curBuf), "%.1f A", telemetry.stats.peak_current_amps);
+        char curBuf[16]; snprintf(curBuf, sizeof(curBuf), "%.1f A", disp_peak_curr);
         _canvas->drawString(curBuf, 290, 202);
     }
 
     // Tile 3: PEAK PHASENSTROM
-    int cur_pha = (int)(telemetry.stats.peak_phase_amps * 10.0f + 0.5f);
+    int cur_pha = (int)(disp_peak_pha * 10.0f + 0.5f);
     if (!_stats_inited || cur_pha != _stats_cache.peak_phase_x10) {
         _stats_cache.peak_phase_x10 = cur_pha;
         _canvas->fillRect(548, 202, 220, 42, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        char phaBuf[16]; snprintf(phaBuf, sizeof(phaBuf), "%.1f A", telemetry.stats.peak_phase_amps);
+        char phaBuf[16]; snprintf(phaBuf, sizeof(phaBuf), "%.1f A", disp_peak_pha);
         _canvas->drawString(phaBuf, 548, 202);
     }
 
