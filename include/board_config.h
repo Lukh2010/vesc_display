@@ -119,7 +119,9 @@
 
 // ATGM336H / NEO-M8N GPS Module (NMEA 9600 Baud)
 // Connect GPS Module TX -> Waveshare UART Header Pin RX (GPIO 44)
-#define PIN_GPS_RX          44
+// Note: GPIO 44 is shared with USB UART0 RX on the Waveshare board.
+// Set to -1 during USB serial debugging / commands to avoid breaking Serial input.
+#define PIN_GPS_RX          -1
 #define PIN_GPS_TX          -1   // RX-only listening mode
 
 // ==============================================================================

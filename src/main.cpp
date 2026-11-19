@@ -192,96 +192,226 @@ void loop() {
     static uint32_t boot_ms = millis();
     uint32_t now = millis();
 
-#if SIMULATION_MODE
-    static bool s_sim_vesc_app_connected = false;
-    // Interactive Serial Keyboard Controls via USB (115200 Baud)
-    while (Serial.available()) {
-        char c = (char)Serial.read();
-        if (c == 'w' || c == 'W' || c == '+') {
-            float t = Vesc.getSimThrottle() + 15.0f;
-            if (t > 100.0f) t = 100.0f;
-            Vesc.setSimThrottle(t);
-            Serial.printf("[SIM] Gas gegeben: %.0f%%\n", t);
-        } else if (c == 's' || c == 'S' || c == '-') {
-            float t = Vesc.getSimThrottle() - 20.0f;
-            if (t < 0.0f) t = 0.0f;
-            Vesc.setSimThrottle(t);
-            Serial.printf("[SIM] Gebremst / Gas verringert: %.0f%%\n", t);
-        } else if (c == ' ') {
-            telemetry.boost_active = !telemetry.boost_active;
-            Renderer.markScreenDirty();
-            Serial.printf("[SIM] Boost: %s\n", telemetry.boost_active ? "AN" : "AUS");
-        } else if (c == 'p' || c == 'P') {
-            telemetry.is_locked = !telemetry.is_locked;
-            ModeManager::instance().setLocked(telemetry.is_locked);
-            telemetry.theft_alarm_active = false;
-            Renderer.markScreenDirty();
-            Renderer.invalidateCache();
-            if (!telemetry.is_locked) Renderer.triggerNeedleSweep();
-            Serial.printf("[SIM] PIN-Lockscreen: %s\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
-        } else if (c == 't' || c == 'T') {
-            uint8_t th = (Settings.get().color_theme + 1) % THEME_COUNT;
-            Settings.get().color_theme = th;
-            Settings.save();
-            telemetry.color_theme = th;
-            Renderer.invalidateCache();
-            Renderer.markScreenDirty();
-            Serial.printf("[SIM] Farb-Theme: %s\n", DashboardRenderer::getThemePalette(th).name);
-        } else if (c == 'u' || c == 'U') {
-            Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
-            Settings.save();
-            Serial.printf("[SIM] FOC Turbinensound: %s\n", Settings.get().turbine_sound_enabled ? "AN" : "AUS");
-        } else if (c == 'v' || c == 'V') {
-            s_sim_vesc_app_connected = !s_sim_vesc_app_connected;
-            Renderer.markScreenDirty();
-            Renderer.invalidateCache();
-            Serial.printf("[SIM] VESC-App Verbindung: %s\n", s_sim_vesc_app_connected ? "VERBUNDEN" : "GETRENNT");
-            if (s_sim_vesc_app_connected && telemetry.is_locked) {
-                telemetry.is_locked = false;
-                ModeManager::instance().setLocked(false);
-                Renderer.markScreenDirty();
-                Renderer.invalidateCache();
-                Renderer.triggerNeedleSweep();
-                Serial.println("[SECURITY] Durch VESC-App Verbindung automatisch entsperrt!");
+    // Interactive Serial Command Console via USB (115200 Baud)
+    // Active both in SIMULATION_MODE and on real hardware (when USB bridge is inactive)
+    static uint32_t s_test_gas_until = 0;
+    static String s_cmd_line = "";
+
+    // Auto-stop safety timeout for test gas
+    if (s_test_gas_until > 0 && now >= s_test_gas_until) {
+        s_test_gas_until = 0;
+        Vesc.sendCurrent(0.0f);
+        Vesc.setSimThrottle(0.0f);
+        Renderer.markScreenDirty();
+        Serial.println("[GAS SAFETY] Test-Gas Timer abgelaufen -> Motor 0.0A gestoppt.");
+    }
+
+    if (!Vesc.isUsbBridgeActive()) {
+        while (Serial.available()) {
+            char c = (char)Serial.read();
+
+            // 1. PIN Digit Direct Entry while Locked
+            if (telemetry.is_locked && (c >= '0' && c <= '9')) {
+                int len = strlen(telemetry.pin_entry);
+                if (len < 4) {
+                    telemetry.pin_entry[len] = c;
+                    telemetry.pin_entry[len + 1] = '\0';
+                    telemetry.pin_error = false;
+                    len++;
+                    Renderer.markScreenDirty();
+                    Serial.printf("[SERIAL PIN] Ziffer '%c' eingetippt -> Aktuell: '%s' (%d/4)\n", c, telemetry.pin_entry, len);
+
+                    if (len == 4) {
+                        if (strcmp(telemetry.pin_entry, Settings.get().pin_code) == 0) {
+                            telemetry.is_locked = false;
+                            telemetry.theft_alarm_active = false;
+                            telemetry.locked_moved_meters = 0.0f;
+                            telemetry.pin_error = false;
+                            telemetry.pin_entry[0] = '\0';
+                            ModeManager::instance().setLocked(false);
+                            Vesc.sendFocPlayStop();
+                            Vesc.sendCurrentBrake(0.0f);
+                            Renderer.markScreenDirty();
+                            Renderer.invalidateCache();
+                            Renderer.triggerNeedleSweep();
+                            Serial.println("[PIN] System ERFOLGREICH ENTSPERRT via Serial PIN-Eingabe! Alarm deaktiviert.");
+                        } else {
+                            telemetry.pin_error = true;
+                            telemetry.pin_error_end_ms = millis() + 800;
+                            Renderer.markScreenDirty();
+                            Serial.printf("[PIN] Falscher PIN-Code '%s' eingegeben! (Erwartet: '%s')\n",
+                                          telemetry.pin_entry, Settings.get().pin_code);
+                        }
+                    }
+                }
+            } else if (telemetry.is_locked && (c == '<' || c == '\b' || c == 127)) {
+                int len = strlen(telemetry.pin_entry);
+                if (len > 0) {
+                    telemetry.pin_entry[len - 1] = '\0';
+                    telemetry.pin_error = false;
+                    Renderer.markScreenDirty();
+                    Serial.printf("[SERIAL PIN] Ziffer geloescht -> Aktuell: '%s'\n", telemetry.pin_entry);
+                }
             }
-        } else if (c == 'r' || c == 'R') {
-            strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
-            Settings.save();
-            telemetry.is_locked = false;
-            telemetry.pin_error = false;
-            telemetry.pin_entry[0] = '\0';
-            ModeManager::instance().setLocked(false);
-            Renderer.markScreenDirty();
-            Renderer.invalidateCache();
-            Renderer.triggerNeedleSweep();
-            Serial.println("[SERIAL] PIN wurde auf '1234' zurueckgesetzt & Display entsperrt!");
-        } else if (c == 'i' || c == 'I') {
-            Serial.println("=== SYSTEM STATUS ===");
-            Serial.printf("  PIN-Code: '%s' (Lock: %s)\n", Settings.get().pin_code, telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
-            Serial.printf("  PIN-Sperre: %s\n", Settings.get().pin_lock_enabled ? "AN" : "AUS");
-            Serial.printf("  VESC Connected: %s\n", telemetry.vesc_connected ? "JA" : "NEIN");
-            Serial.printf("  WiFi Bridge: %s (Client: %s)\n",
-                          Vesc.isWifiBridgeActive() ? "AKTIV" : "INAKTIV",
-                          Vesc.isWifiClientConnected() ? Vesc.getWifiClientIp() : "KEINER");
-            Serial.printf("  USB Bridge: %s\n", Vesc.isUsbBridgeActive() ? "AKTIV" : "INAKTIV");
-            Serial.printf("  Sim VESC-App: %s\n", s_sim_vesc_app_connected ? "VERBUNDEN" : "GETRENNT");
-            Serial.println("=====================");
-        } else if (c == 'h' || c == 'H' || c == '?') {
-            Serial.println("=== VESC Standalone Simulator Tasten ===");
-            Serial.println("  w / + : Gas geben (+15%)");
-            Serial.println("  s / - : Bremsen (-20%)");
-            Serial.println("  Space : Boost (10s Peak)");
-            Serial.println("  c     : Lade-HUD (Charging) umschalten");
-            Serial.println("  p     : PIN Lockscreen sperren / entsperren");
-            Serial.println("  r     : PIN auf 1234 zuruecksetzen & entsperren");
-            Serial.println("  i     : System Info & PIN Status anzeigen");
-            Serial.println("  v     : VESC-App Verbindung simulieren (Auto-Unlock)");
-            Serial.println("  t     : Farb-Theme weiterschalten");
-            Serial.println("  u     : Turbinensound umschalten");
-            Serial.println("========================================");
+
+            // 2. Single Key Shortcuts (when not typing a longer word)
+            if (s_cmd_line.length() == 0) {
+                if (c == 'w' || c == 'W' || c == '+') {
+                    if (telemetry.is_locked) {
+                        Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben (z. B. '1234') vor Gas geben.");
+                    } else {
+                        float test_amps = 3.0f;
+                        Vesc.sendCurrent(test_amps);
+                        Vesc.setSimThrottle(25.0f);
+                        s_test_gas_until = millis() + 1500; // Auto-cutoff 1.5s
+                        Renderer.markScreenDirty();
+                        Serial.printf("[TEST GAS] Motor-Strom %.1fA gesendet (Auto-Cutoff in 1.5s)!\n", test_amps);
+                    }
+                } else if (c == ' ' || c == '-') {
+                    s_test_gas_until = 0;
+                    Vesc.sendCurrent(0.0f);
+                    Vesc.sendDuty(0.0f);
+                    Vesc.sendCurrentBrake(0.0f);
+                    Vesc.setSimThrottle(0.0f);
+                    Renderer.markScreenDirty();
+                    Serial.println("[TEST STOP] Motor sofort gestoppt (0.0A Freilauf).");
+                } else if (c == 'p' || c == 'P') {
+                    telemetry.is_locked = !telemetry.is_locked;
+                    ModeManager::instance().setLocked(telemetry.is_locked);
+                    telemetry.theft_alarm_active = false;
+                    Renderer.markScreenDirty();
+                    Renderer.invalidateCache();
+                    if (!telemetry.is_locked) {
+                        Vesc.sendFocPlayStop();
+                        Vesc.sendCurrentBrake(0.0f);
+                        Renderer.triggerNeedleSweep();
+                    }
+                    Serial.printf("[SERIAL] PIN-Lockscreen: %s\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
+                } else if (c == 'r' || c == 'R') {
+                    strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
+                    Settings.save();
+                    telemetry.is_locked = false;
+                    telemetry.pin_error = false;
+                    telemetry.pin_entry[0] = '\0';
+                    ModeManager::instance().setLocked(false);
+                    Vesc.sendFocPlayStop();
+                    Vesc.sendCurrentBrake(0.0f);
+                    Renderer.markScreenDirty();
+                    Renderer.invalidateCache();
+                    Renderer.triggerNeedleSweep();
+                    Serial.println("[SERIAL] PIN auf '1234' resetet & System entsperrt!");
+                } else if (c == 'h' || c == 'H' || c == '?') {
+                    Serial.println("=== DISPLAY SERIAL COMMANDS ===");
+                    Serial.println("  0-9       : PIN Ziffer eintippen (1234 zum Entsperren)");
+                    Serial.println("  < / bksp  : PIN Ziffer loeschen");
+                    Serial.println("  w / +     : Test-Gas geben (3.0A, 1.5s Auto-Cutoff)");
+                    Serial.println("  gas <A>   : Test-Gas mit Amps geben (z.B. 'gas 3.5')");
+                    Serial.println("  duty <% > : Test-Duty cycle geben (z.B. 'duty 5' = 5%)");
+                    Serial.println("  s / space : Motor stoppen (0.0A / 0% Duty)");
+                    Serial.println("  p / lock  : Sperren / Entsperren toggeln");
+                    Serial.println("  r         : PIN auf 1234 resetten & entsperren");
+                    Serial.println("  status    : System Telemetrie anzeigen");
+                    Serial.println("  theme     : Farb-Theme umschalten");
+                    Serial.println("  unlock    : Direkt per Textbefehl entsperren");
+                    Serial.println("===============================");
+                }
+            }
+
+            // 3. Line accumulator for text commands (like 'unlock', 'gas 2.5', 'duty 5', 'lock', 'status')
+            if (c == '\r' || c == '\n') {
+                s_cmd_line.trim();
+                if (s_cmd_line.length() > 0) {
+                    if (s_cmd_line.equalsIgnoreCase("unlock") || s_cmd_line == Settings.get().pin_code) {
+                        telemetry.is_locked = false;
+                        telemetry.theft_alarm_active = false;
+                        telemetry.locked_moved_meters = 0.0f;
+                        telemetry.pin_error = false;
+                        telemetry.pin_entry[0] = '\0';
+                        ModeManager::instance().setLocked(false);
+                        Vesc.sendFocPlayStop();
+                        Vesc.sendCurrentBrake(0.0f);
+                        Renderer.markScreenDirty();
+                        Renderer.invalidateCache();
+                        Renderer.triggerNeedleSweep();
+                        Serial.println("[PIN] System UNLOCKED via Serial Command! Alarm disarmed.");
+                    } else if (s_cmd_line.equalsIgnoreCase("lock")) {
+                        telemetry.is_locked = true;
+                        ModeManager::instance().setLocked(true);
+                        Renderer.markScreenDirty();
+                        Renderer.invalidateCache();
+                        Serial.println("[PIN] System LOCKED via Serial Command.");
+                    } else if (s_cmd_line.startsWith("gas ") || s_cmd_line.startsWith("cur ")) {
+                        if (telemetry.is_locked) {
+                            Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben.");
+                        } else {
+                            float amps = s_cmd_line.substring(4).toFloat();
+                            if (amps > 5.0f) amps = 5.0f; // bench safety clamp
+                            if (amps < 0.0f) amps = 0.0f;
+                            Vesc.sendCurrent(amps);
+                            Vesc.setSimThrottle(amps * 10.0f);
+                            if (amps > 0.0f) {
+                                s_test_gas_until = millis() + 1500;
+                                Serial.printf("[TEST GAS] Motor-Strom %.1fA fuer 1.5s gesendet!\n", amps);
+                            } else {
+                                s_test_gas_until = 0;
+                                Serial.println("[TEST GAS] Motor 0.0A gestoppt.");
+                            }
+                        }
+                    } else if (s_cmd_line.startsWith("duty ")) {
+                        if (telemetry.is_locked) {
+                            Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben.");
+                        } else {
+                            float duty_pct = s_cmd_line.substring(5).toFloat();
+                            if (duty_pct > 15.0f) duty_pct = 15.0f; // bench safety clamp max 15%
+                            if (duty_pct < 0.0f) duty_pct = 0.0f;
+                            float duty_frac = duty_pct / 100.0f;
+                            Vesc.sendDuty(duty_frac);
+                            Vesc.setSimThrottle(duty_pct);
+                            if (duty_frac > 0.0f) {
+                                s_test_gas_until = millis() + 1500;
+                                Serial.printf("[TEST DUTY] Motor Duty %.1f%% (%.3f) fuer 1.5s gesendet!\n", duty_pct, duty_frac);
+                            } else {
+                                s_test_gas_until = 0;
+                                Serial.println("[TEST DUTY] Motor 0% gestoppt.");
+                            }
+                        }
+                    } else if (s_cmd_line.equalsIgnoreCase("stop") || s_cmd_line.equalsIgnoreCase("s")) {
+                        s_test_gas_until = 0;
+                        Vesc.sendCurrent(0.0f);
+                        Vesc.sendDuty(0.0f);
+                        Vesc.sendCurrentBrake(0.0f);
+                        Vesc.setSimThrottle(0.0f);
+                        Renderer.markScreenDirty();
+                        Serial.println("[TEST STOP] Motor gestoppt.");
+                    } else if (s_cmd_line.equalsIgnoreCase("status") || s_cmd_line.equalsIgnoreCase("i")) {
+                        Serial.println("=== SYSTEM STATUS ===");
+                        Serial.printf("  Lock: %s | PIN-Code: '%s'\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT", Settings.get().pin_code);
+                        Serial.printf("  Alarm: %s | Moved: %.2fm\n", telemetry.theft_alarm_active ? "AKTIV" : "INAKTIV", telemetry.locked_moved_meters);
+                        Serial.printf("  VESC: %s | Spd: %.1f km/h | RPM: %.0f | MotI: %.1fA | BatI: %.1fA | Vin: %.1fV\n",
+                                      telemetry.vesc_connected ? "VERBUNDEN" : "GETRENNT",
+                                      telemetry.vesc_motor_speed, telemetry.rpm, telemetry.phase_amps, telemetry.current_amps, telemetry.voltage);
+                        Serial.printf("  Mode: %s | Theme: %s\n", ModeManager::instance().getActiveModeName(), DashboardRenderer::getThemePalette(telemetry.color_theme).name);
+                        Serial.println("=====================");
+                    } else if (s_cmd_line.equalsIgnoreCase("theme")) {
+                        uint8_t th = (Settings.get().color_theme + 1) % THEME_COUNT;
+                        Settings.get().color_theme = th;
+                        Settings.save();
+                        telemetry.color_theme = th;
+                        Renderer.invalidateCache();
+                        Renderer.markScreenDirty();
+                        Serial.printf("[SERIAL] Farb-Theme gewechselt auf: %s\n", DashboardRenderer::getThemePalette(th).name);
+                    } else if (s_cmd_line.equalsIgnoreCase("help")) {
+                        Serial.println("Befehle: unlock, lock, gas <A>, duty <%>, stop, status, theme, help");
+                    }
+                    s_cmd_line = "";
+                }
+            } else if (c >= 32 && c <= 126) {
+                if (s_cmd_line.length() < 32) {
+                    s_cmd_line += c;
+                }
+            }
         }
     }
-#endif
 
     // 0. High-Priority Wireless OTA Firmware Update in Progress
     if (OtaManager::instance().isUpdating()) {
