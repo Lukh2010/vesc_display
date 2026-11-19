@@ -16,9 +16,12 @@ GpsTracker::GpsTracker()
 
 void GpsTracker::init() {
 #if !defined(NATIVE_SIMULATOR)
-    // ESP32-S3: Initialize Serial2 on GPIO 44 (RX only, TX not needed for listening)
-    Serial2.begin(9600, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
-    Serial.printf("[GPS] Initialized ATGM336H GPS+BDS on GPIO %d (RX) @ 9600 baud.\n", PIN_GPS_RX);
+    if (PIN_GPS_RX >= 0) {
+        Serial2.begin(9600, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+        Serial.printf("[GPS] Initialized ATGM336H GPS+BDS on GPIO %d (RX) @ 9600 baud.\n", PIN_GPS_RX);
+    } else {
+        Serial.println("[GPS] Physical GPS RX disabled (GPIO 44 reserved for USB Serial RX).");
+    }
 #else
     Serial.println("[GPS SIM] Running virtual GPS+BDS tracker in simulator mode.");
 #endif
@@ -173,21 +176,23 @@ void GpsTracker::update(DashTelemetry &telemetry) {
     uint32_t now = millis();
 
 #if !defined(NATIVE_SIMULATOR)
-    // Live ESP32-S3: Read all available NMEA bytes from ATGM336H on Serial2 (GPIO 6)
-    while (Serial2.available() > 0) {
-        char c = (char)Serial2.read();
-        if (c == '\r') continue;
-        if (c == '\n') {
-            _rx_buf[_rx_idx] = '\0';
-            if (_rx_idx > 6 && _rx_buf[0] == '$') {
-                parseNmeaLine(_rx_buf, telemetry);
-            }
-            _rx_idx = 0;
-        } else {
-            if (_rx_idx < sizeof(_rx_buf) - 1) {
-                _rx_buf[_rx_idx++] = c;
+    // Live ESP32-S3: Read all available NMEA bytes from ATGM336H on Serial2
+    if (PIN_GPS_RX >= 0) {
+        while (Serial2.available() > 0) {
+            char c = (char)Serial2.read();
+            if (c == '\r') continue;
+            if (c == '\n') {
+                _rx_buf[_rx_idx] = '\0';
+                if (_rx_idx > 6 && _rx_buf[0] == '$') {
+                    parseNmeaLine(_rx_buf, telemetry);
+                }
+                _rx_idx = 0;
             } else {
-                _rx_idx = 0; // Buffer overrun safety
+                if (_rx_idx < sizeof(_rx_buf) - 1) {
+                    _rx_buf[_rx_idx++] = c;
+                } else {
+                    _rx_idx = 0; // Buffer overrun safety
+                }
             }
         }
     }
