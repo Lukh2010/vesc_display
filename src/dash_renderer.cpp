@@ -1414,8 +1414,11 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _cache.show_incline = inc_on ? 1 : 0;
         _cache.show_light_btn = lb_on ? 1 : 0;
         _cache.incline_gforce_enabled = telemetry.incline_gforce_enabled;
-        _canvas->fillRect(15, 320, 135, 135, COLOR_BG);  // Clear entire badge area (x:15..150, y:320..455)
-        _canvas->fillRect(165, 395, 150, 45, COLOR_BG);  // Clear thermals area (x:165..315)
+        if (badge_cfg_changed) {
+            _canvas->fillRect(20, 325, 60, 60, COLOR_BG);   // Clear top light badge (x:20..80, y:325..385) - never touches dial (x>=120)
+            _canvas->fillRect(20, 386, 120, 60, COLOR_BG);  // Clear bottom badges row (x:20..140, y:386..446) - safely below dial (y<=334)
+            _canvas->fillRect(165, 395, 150, 45, COLOR_BG); // Clear thermals area (x:165..315)
+        }
         _cache.temp_esc = -999;
         _cache.temp_motor = -999;
         _cache.g_force_x10 = -999;
