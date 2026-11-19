@@ -410,8 +410,8 @@ void loop() {
                 char key = KEY_CHARS[r][c];
                 Serial.printf("[TOUCH PIN] tx=%d, ty=%d -> r=%d, c=%d, key='%c'\n", tx, ty, r, c, key);
 
-                // Tactile / acoustic motor tick feedback on button press
-                Vesc.triggerFocBeep(2600.0f, 0.03f, 1.8f);
+                // Tactile / acoustic motor tick feedback on button press (silent to avoid deck thumps)
+                // Vesc.triggerFocBeep(2600.0f, 0.03f, 1.8f);
 
                 int len = strlen(telemetry.pin_entry);
 
@@ -429,10 +429,11 @@ void loop() {
                         telemetry.pin_error = false;
                         telemetry.pin_entry[0] = '\0';
                         ModeManager::instance().setLocked(false);
+                        Vesc.sendFocPlayStop(); // Stop any active alarm tone immediately
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
                         Renderer.triggerNeedleSweep();
-                        Vesc.triggerFocBeep(1800.0f, 0.12f, 3.5f); // Pleasant unlock chime
+                        Vesc.triggerFocBeep(1800.0f, 0.12f, 2.5f); // Pleasant unlock chime
                         Serial.println("[PIN] System UNLOCKED with valid PIN code! Alarm disarmed.");
                     } else {
                         telemetry.pin_error = true;
@@ -459,10 +460,11 @@ void loop() {
                                 telemetry.pin_error = false;
                                 telemetry.pin_entry[0] = '\0';
                                 ModeManager::instance().setLocked(false);
+                                Vesc.sendFocPlayStop(); // Stop any active alarm tone immediately
                                 Renderer.markScreenDirty();
                                 Renderer.invalidateCache();
                                 Renderer.triggerNeedleSweep();
-                                Vesc.triggerFocBeep(1800.0f, 0.12f, 3.5f); // Pleasant unlock chime
+                                Vesc.triggerFocBeep(1800.0f, 0.12f, 2.5f); // Pleasant unlock chime
                                 Serial.println("[PIN] System UNLOCKED automatically upon 4 digits! Alarm disarmed.");
                             } else {
                                 telemetry.pin_error = true;
@@ -485,6 +487,7 @@ void loop() {
     static uint32_t s_last_alarm_beep_ms = 0;
     static uint8_t s_alarm_beep_cadence = 0;
     static uint32_t s_last_movement_calc_ms = millis();
+    static uint32_t s_lock_arm_time_ms = 0;
 
     if (telemetry.is_locked) {
         uint32_t dt_ms = now - s_last_movement_calc_ms;
@@ -496,36 +499,50 @@ void loop() {
             s_was_locked = true;
             telemetry.theft_alarm_active = false;
             telemetry.locked_moved_meters = 0.0f;
-            Serial.println("[SECURITY] Theft protection ARMED.");
+            s_lock_arm_time_ms = now + 4000; // 4s boot/lock arming grace period
+            Serial.println("[SECURITY] Theft protection ARMED (4s grace window).");
         }
 
-        // Measure vehicle movement from physical sensors:
-        // 1. VESC motor rotation speed
-        float raw_v = telemetry.vesc_motor_speed;
-        if (telemetry.rpm > 12.0f && raw_v < 0.5f) {
-            float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
-            float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
-            raw_v = (telemetry.rpm / gear_ratio) * wheel_circ_m * 60.0f / 1000.0f;
-        }
-        // 2. GPS ground speed (when 3D fix is active)
-        float gps_v = (telemetry.gps.valid && telemetry.gps.satellites >= 4) ? telemetry.gps.speed_kmh : 0.0f;
-        float move_v = (raw_v > gps_v) ? raw_v : gps_v;
+        // Only evaluate movement AFTER the 4-second boot/lock arming grace period
+        if (now >= s_lock_arm_time_ms) {
+            // Measure actual physical vehicle movement:
+            // 1. Motor wheel rotation speed (VESC telemetry):
+            float raw_v = telemetry.vesc_motor_speed;
+            if (telemetry.rpm > 15.0f && raw_v < 0.5f) {
+                float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
+                float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
+                raw_v = (telemetry.rpm / gear_ratio) * wheel_circ_m * 60.0f / 1000.0f;
+            }
 
-        // 3. Accelerometer / IMU G-Force
-        if (fabsf(telemetry.g_force) > 0.35f) {
-            telemetry.locked_moved_meters += 0.4f * dt_sec;
-        }
+            // 2. High-quality GPS ground speed (only if 3D fix is solid, HDOP < 1.6, and speed >= 3.0 km/h to reject drift)
+            float gps_v = 0.0f;
+            if (telemetry.gps.valid && telemetry.gps.satellites >= 6 && telemetry.gps.hdop < 1.6f && telemetry.gps.speed_kmh >= 3.0f) {
+                gps_v = telemetry.gps.speed_kmh;
+            }
 
-        if (move_v > 0.7f) {
-            telemetry.locked_moved_meters += (move_v * (1000.0f / 3600.0f)) * dt_sec;
-        }
+            // Only count if physical wheel rotation >= 1.2 km/h OR genuine GPS movement >= 3.0 km/h
+            float move_v = 0.0f;
+            if (raw_v >= 1.2f) {
+                move_v = raw_v;
+            } else if (gps_v >= 3.0f) {
+                move_v = gps_v;
+            }
 
-        // Trigger condition: "wenn es gesperrt ist und sich ein paar meter bewegt" -> >= 2.0 meters
-        if (telemetry.locked_moved_meters >= 2.0f && !telemetry.theft_alarm_active) {
-            telemetry.theft_alarm_active = true;
-            Renderer.markScreenDirty();
-            Serial.printf("[ALARM] DIEBSTAHLWARNUNG! Moved %.2f meters while locked! Triggering FOC Motor Siren.\n",
-                          telemetry.locked_moved_meters);
+            if (move_v > 0.0f) {
+                telemetry.locked_moved_meters += (move_v * (1000.0f / 3600.0f)) * dt_sec;
+            } else if (telemetry.locked_moved_meters > 0.0f && !telemetry.theft_alarm_active) {
+                // Gentle decay if vehicle is completely stationary (prevents slow noise accumulation)
+                telemetry.locked_moved_meters -= 0.15f * dt_sec;
+                if (telemetry.locked_moved_meters < 0.0f) telemetry.locked_moved_meters = 0.0f;
+            }
+
+            // Trigger condition: "wenn es gesperrt ist und sich ein paar meter bewegt" -> >= 2.0 meters
+            if (telemetry.locked_moved_meters >= 2.0f && !telemetry.theft_alarm_active) {
+                telemetry.theft_alarm_active = true;
+                Renderer.markScreenDirty();
+                Serial.printf("[ALARM] DIEBSTAHLWARNUNG! Moved %.2f meters while locked! Triggering FOC Motor Siren.\n",
+                              telemetry.locked_moved_meters);
+            }
         }
 
         // While alarm is active: pulse loud VESC FOC siren through motor windings
@@ -534,7 +551,7 @@ void loop() {
                 s_last_alarm_beep_ms = now;
                 s_alarm_beep_cadence = (s_alarm_beep_cadence + 1) % 4;
                 float freqs[4] = { 1600.0f, 2400.0f, 1800.0f, 2800.0f };
-                Vesc.triggerFocBeep(freqs[s_alarm_beep_cadence], 0.30f, 8.0f);
+                Vesc.triggerFocBeep(freqs[s_alarm_beep_cadence], 0.30f, 6.0f);
             }
         }
     } else {
@@ -542,6 +559,7 @@ void loop() {
             s_was_locked = false;
             telemetry.theft_alarm_active = false;
             telemetry.locked_moved_meters = 0.0f;
+            Vesc.sendFocPlayStop(); // Instantly silence motor on unlock
         }
         s_last_movement_calc_ms = now;
     }
@@ -1038,7 +1056,7 @@ void loop() {
         if (s_turbine_was_active) {
             s_turbine_was_active = false;
             s_last_turbine_volts = 0.0f;
-            Vesc.stopFocTone(0);
+            Vesc.sendFocPlayStop();
         }
     }
 
