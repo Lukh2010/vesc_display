@@ -1870,6 +1870,43 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
 #endif
 }
 
+void VescHandler::sendTcsPhaseLimit(float max_phase_amps) {
+    UartLock lock;
+    if (max_phase_amps < 2.0f) max_phase_amps = 2.0f;
+    if (max_phase_amps > 300.0f) max_phase_amps = 300.0f;
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (s_can_initialized) {
+        twai_message_t can_lim;
+        can_lim.extd = 1;
+        can_lim.identifier = (21 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC
+        can_lim.data_length_code = 8;
+        int32_t min_mot = (Settings.get().brake_mode == 0) ? 0 : 
+                          ((Settings.get().brake_mode == 1) ? (int32_t)(-12.0f * 1000.0f) : (int32_t)(-max_phase_amps * 1000.0f));
+        int32_t max_mot = (int32_t)(max_phase_amps * 1000.0f);
+        can_lim.data[0] = (min_mot >> 24) & 0xFF;
+        can_lim.data[1] = (min_mot >> 16) & 0xFF;
+        can_lim.data[2] = (min_mot >> 8) & 0xFF;
+        can_lim.data[3] = min_mot & 0xFF;
+        can_lim.data[4] = (max_mot >> 24) & 0xFF;
+        can_lim.data[5] = (max_mot >> 16) & 0xFF;
+        can_lim.data[6] = (max_mot >> 8) & 0xFF;
+        can_lim.data[7] = max_mot & 0xFF;
+        twai_transmit(&can_lim, pdMS_TO_TICKS(5));
+        can_lim.identifier = (21 << 8) | 0;
+        twai_transmit(&can_lim, pdMS_TO_TICKS(5));
+        can_lim.identifier = (21 << 8) | 1;
+        twai_transmit(&can_lim, pdMS_TO_TICKS(5));
+    }
+#endif
+
+    if (_transport) {
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "conf_set l_current_max %.1f", max_phase_amps);
+        sendTerminalCommand(cmd);
+    }
+}
+
 void VescHandler::sendGnssData(const GpsTelemetry &gps) {
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (!gps.valid) return;

@@ -12,6 +12,7 @@
 #include "gps_tracker.h"
 #include "ble_keyless_manager.h"
 #include "ota_manager.h"
+#include "tcs_tpms_manager.h"
 
 // Active Telemetry State
 static DashTelemetry telemetry;
@@ -105,6 +106,15 @@ void setup() {
     telemetry.ble_pairing_active  = false;
     telemetry.ble_pair_success    = false;
     telemetry.ble_device_name[0]  = '\0';
+    telemetry.tcs_active          = false;
+    telemetry.tcs_slip_kmh        = 0.0f;
+    telemetry.tcs_throttle_scale  = 1.0f;
+    telemetry.tpms_warning        = false;
+    telemetry.tpms_drift_pct      = 0.0f;
+    telemetry.calibrated_wheel_diam_inch = Settings.get().wheel_diameter_in;
+
+    // 4b. Initialize Traction Control (TCS) & Virtual TPMS Engine
+    TcsTpmsManager::instance().begin();
 
     // 5. Initialize Touch and Input Handling (GT911 I2C SDA=8, SCL=9)
     Buttons.begin();
@@ -918,6 +928,25 @@ void loop() {
 
     // 2b. Update Live GPS+BDS Satellite Tracker & Ground Speed Priority
     GpsTracker::instance().update(telemetry);
+
+    // 2b2. Update Proactive Traction Control (TCS) & Virtual TPMS Engine
+    static uint32_t s_last_tcs_update_ms = millis();
+    uint32_t tcs_now = millis();
+    float tcs_dt = (tcs_now - s_last_tcs_update_ms) / 1000.0f;
+    if (tcs_dt < 0.001f) tcs_dt = 0.001f;
+    if (tcs_dt > 0.1f) tcs_dt = 0.1f;
+    s_last_tcs_update_ms = tcs_now;
+
+    TcsTpmsManager::instance().update(telemetry, tcs_dt);
+
+    static float s_last_applied_tcs_scale = 1.0f;
+    if (fabsf(telemetry.tcs_throttle_scale - s_last_applied_tcs_scale) > 0.04f ||
+        (telemetry.tcs_active != (s_last_applied_tcs_scale < 0.98f))) {
+        s_last_applied_tcs_scale = telemetry.tcs_throttle_scale;
+        float base_phase = ModeManager::instance().getActiveLimits().max_phase_amps;
+        float scaled_phase = base_phase * telemetry.tcs_throttle_scale;
+        Vesc.sendTcsPhaseLimit(scaled_phase);
+    }
 
     // 2c. Update Headlight MOSFET hardware state if changed
     static bool s_last_hw_light = false;

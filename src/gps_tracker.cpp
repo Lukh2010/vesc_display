@@ -279,58 +279,11 @@ void GpsTracker::update(DashTelemetry &telemetry) {
     }
 
     // --------------------------------------------------------------------------
-    // AUTONOMOUS GPS TIRE CALIBRATION (Virtual TPMS & Dynamic Tire Size Learning):
-    // When vehicle cruises steadily without slip (GPS >= 14 km/h, steady ERPM, low G-force):
-    // Computes exact dynamic rolling circumference and updates Settings.wheel_diameter_in
-    // --------------------------------------------------------------------------
-    if (has_gps_fix && telemetry.gps.satellites >= 6 && telemetry.gps.hdop < 1.6f &&
-        telemetry.gps.speed_kmh >= 14.0f && telemetry.gps.speed_kmh <= 55.0f &&
-        telemetry.rpm > 800.0f && telemetry.phase_amps >= 2.0f && telemetry.phase_amps <= 25.0f &&
-        fabsf(telemetry.g_force) < 0.08f) {
-        if (now - _last_calib_eval_ms >= 100) {
-            _last_calib_eval_ms = now;
-            float gear = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
-            float wheel_rpm = telemetry.rpm / gear;
-            if (wheel_rpm > 80.0f) {
-                float v_m_s = telemetry.gps.speed_kmh / 3.6f;
-                float circ_m = (v_m_s * 60.0f) / wheel_rpm;
-                float diam_in = circ_m / (M_PI * 0.0254f);
-                if (diam_in >= 8.0f && diam_in <= 16.0f) {
-                    _calib_diam_accum += diam_in;
-                    _calib_samples_count++;
-                    if (_calib_samples_count >= 50) { // ~5 seconds of stable cruising
-                        float learned_diam = _calib_diam_accum / (float)_calib_samples_count;
-                        float rounded = roundf(learned_diam * 10.0f) / 10.0f;
-                        if (fabsf(Settings.get().wheel_diameter_in - rounded) > 0.05f || !Settings.get().wheel_gps_calibrated) {
-                            Settings.get().wheel_diameter_in = rounded;
-                            Settings.get().wheel_gps_calibrated = true;
-                            Settings.save();
-#if !defined(NATIVE_SIMULATOR)
-                            Serial.printf("[GPS] Autonome Reifengroessen-Kalibrierung: %.1fin gelernt & gespeichert.\n", rounded);
-#else
-                            printf("[GPS] Autonome Reifengroessen-Kalibrierung: %.1fin gelernt & gespeichert.\n", rounded);
-#endif
-                        }
-                        _calib_diam_accum = 0.0f;
-                        _calib_samples_count = 0;
-                    }
-                } else {
-                    _calib_diam_accum = 0.0f;
-                    _calib_samples_count = 0;
-                }
-            }
-        }
-    } else if (fabsf(telemetry.g_force) >= 0.15f || telemetry.phase_amps > 30.0f) {
-        // Reset accumulation buffer during hard braking or acceleration to maintain calibration purity
-        _calib_diam_accum = 0.0f;
-        _calib_samples_count = 0;
-    }
-
-    // --------------------------------------------------------------------------
     // VESC APP & UBOX SYNCHRONIZATION:
     // Transmit official VESC GNSS CAN frames every 200ms (5 Hz) to target Ubox (76)
     // When Ubox receives these, it updates its internal mc_interface_gnss() data,
     // which allows the mobile VESC Tool App to display GPS speed & coordinates!
+    // (Autonomous Tire Calibration and Virtual TPMS are handled by TcsTpmsManager)
     // --------------------------------------------------------------------------
     if (has_gps_fix && (now - _last_can_broadcast_ms >= 200)) {
         _last_can_broadcast_ms = now;

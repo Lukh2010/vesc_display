@@ -16,6 +16,7 @@
 #include "vesc_uart.h"
 #include "fault_manager.h"
 #include "gps_tracker.h"
+#include "tcs_tpms_manager.h"
 #include <string>
 
 
@@ -110,6 +111,12 @@ struct SimTelemetryExport {
     float turbine_volts;
     int32_t brake_mode;
     int32_t horn_active;
+    int32_t tcs_active;
+    float   tcs_slip_kmh;
+    float   tcs_throttle_scale;
+    int32_t tpms_warning;
+    float   tpms_drift_pct;
+    float   calibrated_wheel_diam_inch;
 };
 #pragma pack(pop)
 
@@ -230,6 +237,13 @@ static void runSimulationStep(float dt) {
     float max_pha_a = lim.max_phase_amps;
     float accel_rate = 22.0f;
 
+    // Update Proactive Traction Control (TCS) & Virtual TPMS Engine
+    TcsTpmsManager::instance().update(g_telemetry, dt);
+    float tcs_scale = g_telemetry.tcs_throttle_scale;
+    if (tcs_scale <= 0.01f) tcs_scale = 0.15f;
+    if (tcs_scale > 1.0f) tcs_scale = 1.0f;
+    max_pha_a *= tcs_scale;
+
     if (!g_telemetry.tuning_mode) {
         // Legal Modes: ECO (15 km/h), SPORT (20 km/h), RACE (22 km/h)
         switch (g_telemetry.ride_mode) {
@@ -318,6 +332,9 @@ static void runSimulationStep(float dt) {
         if (s_sim_speed_kmh < target_speed) {
             float speed_diff = target_speed - s_sim_speed_kmh;
             float step = (sim_t / 100.0f) * (accel_rate * dt + speed_diff * (dt * 3.5f));
+            if (g_telemetry.tcs_active) {
+                step *= tcs_scale;
+            }
             s_sim_speed_kmh += step;
             if (s_sim_speed_kmh > target_speed) s_sim_speed_kmh = target_speed;
         } else {
@@ -330,6 +347,9 @@ static void runSimulationStep(float dt) {
         if (g_virtual_vesc.hasExternalCurrentControl()) {
             target_phase = fabsf(g_virtual_vesc.getExternalTargetCurrent());
             if (target_phase > max_pha_a) target_phase = max_pha_a;
+        }
+        if (g_telemetry.tcs_active && s_sim_phase_amps > max_pha_a) {
+            s_sim_phase_amps = max_pha_a; // Fast suppression < 5ms
         }
         s_sim_phase_amps += (target_phase - s_sim_phase_amps) * (dt * 6.5f);
         if (s_sim_phase_amps < 0.0f) s_sim_phase_amps = 0.0f;
@@ -658,6 +678,14 @@ void sim_init() {
     s_sim_current_amps = 0.0f;
     s_sim_phase_amps = 0.0f;
     s_sim_power_watts = 0.0f;
+
+    TcsTpmsManager::instance().begin();
+    g_telemetry.tcs_active = false;
+    g_telemetry.tcs_slip_kmh = 0.0f;
+    g_telemetry.tcs_throttle_scale = 1.0f;
+    g_telemetry.tpms_warning = false;
+    g_telemetry.tpms_drift_pct = 0.0f;
+    g_telemetry.calibrated_wheel_diam_inch = Settings.get().wheel_diameter_in;
     s_sim_duty_cycle_pct = 0.0f;
     s_sim_rpm = 0.0f;
     g_manual_throttle = 0.0f;
@@ -1237,6 +1265,7 @@ void sim_step(uint32_t step_ms) {
         g_telemetry.vesc_connected = false;
     }
     GpsTracker::instance().update(g_telemetry);
+    TcsTpmsManager::instance().update(g_telemetry, dt);
     ensureZeroSpeedIfIdle();
     g_virtual_vesc.process();
     g_tcp_server.update(g_virtual_vesc);
@@ -1938,6 +1967,12 @@ void sim_get_telemetry(SimTelemetryExport *out) {
     out->turbine_volts = g_telemetry.turbine_volts;
     out->brake_mode = (int32_t)Settings.get().brake_mode;
     out->horn_active = Buttons.isHornActive() ? 1 : 0;
+    out->tcs_active = g_telemetry.tcs_active ? 1 : 0;
+    out->tcs_slip_kmh = g_telemetry.tcs_slip_kmh;
+    out->tcs_throttle_scale = g_telemetry.tcs_throttle_scale;
+    out->tpms_warning = g_telemetry.tpms_warning ? 1 : 0;
+    out->tpms_drift_pct = g_telemetry.tpms_drift_pct;
+    out->calibrated_wheel_diam_inch = g_telemetry.calibrated_wheel_diam_inch;
 }
 
 void sim_get_config_json(char *out_buf, int max_len) {
@@ -2296,6 +2331,42 @@ void sim_action_button_release() {
 
 int sim_is_horn_active() {
     return Buttons.isHornActive() ? 1 : 0;
+}
+
+void sim_set_wheel_slip(float slip_kmh) {
+    TcsTpmsManager::instance().setSimulatedSlipSpeed(slip_kmh);
+}
+
+void sim_clear_wheel_slip() {
+    TcsTpmsManager::instance().clearSimulatedSlip();
+}
+
+void sim_set_tire_deflation(float drop_pct) {
+    TcsTpmsManager::instance().setSimulatedDiameterDropPct(drop_pct);
+}
+
+void sim_clear_tire_deflation() {
+    TcsTpmsManager::instance().clearSimulatedDiameterDrop();
+}
+
+int sim_is_tcs_active() {
+    return TcsTpmsManager::instance().isTcsActive() ? 1 : 0;
+}
+
+float sim_get_tcs_throttle_scale() {
+    return TcsTpmsManager::instance().getThrottleScale();
+}
+
+int sim_is_tpms_warning() {
+    return TcsTpmsManager::instance().isTpmsWarning() ? 1 : 0;
+}
+
+float sim_get_tpms_drift_pct() {
+    return TcsTpmsManager::instance().getTpmsDriftPct();
+}
+
+float sim_get_calibrated_diam() {
+    return TcsTpmsManager::instance().getCalibratedDiameterInch();
 }
 
 } // extern "C"
