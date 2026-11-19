@@ -430,17 +430,16 @@ void loop() {
                         telemetry.pin_entry[0] = '\0';
                         ModeManager::instance().setLocked(false);
                         Vesc.sendFocPlayStop(); // Stop any active alarm tone immediately
+                        Vesc.sendCurrentBrake(0.0f);
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
                         Renderer.triggerNeedleSweep();
-                        Vesc.triggerFocBeep(1800.0f, 0.12f, 2.5f); // Pleasant unlock chime
                         Serial.println("[PIN] System UNLOCKED with valid PIN code! Alarm disarmed.");
                     } else {
                         telemetry.pin_error = true;
                         telemetry.pin_error_end_ms = millis() + 800;
                         // Keep pin_entry intact so all 4 dots are shown in bright red!
                         Renderer.markScreenDirty();
-                        Vesc.triggerFocBeep(450.0f, 0.20f, 4.0f);
                         Serial.printf("[PIN] Invalid PIN code '%s' entered! (Expected: '%s')\n",
                                       telemetry.pin_entry, Settings.get().pin_code);
                     }
@@ -461,17 +460,16 @@ void loop() {
                                 telemetry.pin_entry[0] = '\0';
                                 ModeManager::instance().setLocked(false);
                                 Vesc.sendFocPlayStop(); // Stop any active alarm tone immediately
+                                Vesc.sendCurrentBrake(0.0f);
                                 Renderer.markScreenDirty();
                                 Renderer.invalidateCache();
                                 Renderer.triggerNeedleSweep();
-                                Vesc.triggerFocBeep(1800.0f, 0.12f, 2.5f); // Pleasant unlock chime
                                 Serial.println("[PIN] System UNLOCKED automatically upon 4 digits! Alarm disarmed.");
                             } else {
                                 telemetry.pin_error = true;
                                 telemetry.pin_error_end_ms = millis() + 800;
                                 // Keep pin_entry intact so all 4 dots are shown in bright red!
                                 Renderer.markScreenDirty();
-                                Vesc.triggerFocBeep(450.0f, 0.20f, 4.0f);
                                 Serial.printf("[PIN] Invalid PIN code '%s' entered! (Expected: '%s')\n",
                                               telemetry.pin_entry, Settings.get().pin_code);
                             }
@@ -553,6 +551,15 @@ void loop() {
                 float freqs[4] = { 1600.0f, 2400.0f, 1800.0f, 2800.0f };
                 Vesc.triggerFocBeep(freqs[s_alarm_beep_cadence], 0.30f, 6.0f);
             }
+        }
+
+        static uint32_t s_last_sec_dbg = 0;
+        if (now - s_last_sec_dbg >= 1000) {
+            s_last_sec_dbg = now;
+            Serial.printf("[SEC_DBG] locked=%d, alarm=%d, moved=%.2fm, rpm=%.1f, v_mot=%.2f, v_gps=%.2f, sats=%d, screen=%d\n",
+                          (int)telemetry.is_locked, (int)telemetry.theft_alarm_active, telemetry.locked_moved_meters,
+                          telemetry.rpm, telemetry.vesc_motor_speed, telemetry.gps.speed_kmh,
+                          (int)telemetry.gps.satellites, (int)telemetry.screen);
         }
     } else {
         if (s_was_locked) {

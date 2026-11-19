@@ -76,7 +76,15 @@
 // ==============================================================================
 #define PIN_BTN_1       -1   // No physical buttons by default
 #define PIN_BTN_2       -1
-#define PIN_BTN_BOOT    0    // Onboard BOOT button (GPIO 0)
+// Onboard BOOT button (GPIO 0)
+// WARNING: On physical ESP32-S3 hardware, GPIO 0 is the strapping pin tied to the USB-UART DTR/RTS circuit.
+// When plugged into USB, DTR/RTS holds GPIO 0 LOW, which falsely triggered the continuous FOC horn & theft alarm!
+// For physical hardware, disable GPIO 0 (set to -1). Keep 0 only for native simulator testing.
+#if defined(NATIVE_SIMULATOR)
+#define PIN_BTN_BOOT    0
+#else
+#define PIN_BTN_BOOT    -1
+#endif
 
 // ==============================================================================
 // VESC Controller Interfaces (Spintend Ubox / Flipsky / VESC on Waveshare 4.3" Pins)
@@ -105,8 +113,9 @@
 // Accessory Interfaces (Cockpit Header Pins)
 // ==============================================================================
 // Headlight 12V MOSFET Trigger Switch (Dual D4184 Module, 3.3V Logic)
-// Connect MOSFET TRIG -> Waveshare UART Header Pin TX (GPIO 43)
-#define PIN_HEADLIGHT_MOSFET 43
+// Note: GPIO 43 is shared with USB UART0 TX on the Waveshare board.
+// Set to -1 during USB serial debugging / flashing to avoid breaking Serial output.
+#define PIN_HEADLIGHT_MOSFET -1
 
 // ATGM336H / NEO-M8N GPS Module (NMEA 9600 Baud)
 // Connect GPS Module TX -> Waveshare UART Header Pin RX (GPIO 44)
