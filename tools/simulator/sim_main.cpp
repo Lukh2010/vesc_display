@@ -664,6 +664,34 @@ void testTouchGestures() {
     assert(actBlDrag == NAV_NONE); // Dragging slider must not exit to Ride Dash
     printf("[PASS] Statistics Screen Horizontal Drag on Backlight Slider does NOT trigger NAV_BTN1_SHORT.\n");
 
+    // 10p. Headlight Badge Touch Toggle on SCREEN_RIDE_DASH
+    Buttons.setActiveScreen(SCREEN_RIDE_DASH);
+    Settings.get().show_light_btn = 1;
+    Settings.get().incline_gforce_enabled = true;
+    Settings.get().show_gforce = 1;
+    Settings.get().show_incline = 1;
+
+    // Both GF and INC are ON -> Light badge is at Top Slot (50, 354)
+    NavAction actLightTop = simTouchAction(50, 354, 50, 354, 60);
+    assert(actLightTop == NAV_LIGHT_TOGGLE);
+    printf("[PASS] Headlight Badge Top Slot (50, 354) triggers NAV_LIGHT_TOGGLE when both GF and INC are ON.\n");
+
+    // Incline is OFF -> Light badge moves to Bottom Slot (50, 416)
+    Settings.get().show_incline = 0;
+    NavAction actLightBotIncOff = simTouchAction(50, 416, 50, 416, 60);
+    assert(actLightBotIncOff == NAV_LIGHT_TOGGLE);
+    printf("[PASS] Headlight Badge Bottom Slot (50, 416) triggers NAV_LIGHT_TOGGLE when Incline is OFF.\n");
+
+    // Both GF and INC are OFF -> Light badge remains at Bottom Slot (50, 416)
+    Settings.get().show_gforce = 0;
+    NavAction actLightBotBothOff = simTouchAction(50, 416, 50, 416, 60);
+    assert(actLightBotBothOff == NAV_LIGHT_TOGGLE);
+    printf("[PASS] Headlight Badge Bottom Slot (50, 416) triggers NAV_LIGHT_TOGGLE when both GF and INC are OFF.\n");
+
+    // Restore settings
+    Settings.get().show_gforce = 1;
+    Settings.get().show_incline = 1;
+
     // 11. Requirement: Settings Menu (SCREEN_SETTINGS_MENU) Touch Hitboxes & Navigation
     Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
 
