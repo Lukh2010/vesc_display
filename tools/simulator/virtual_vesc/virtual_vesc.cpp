@@ -650,6 +650,9 @@ void VirtualVesc::handleTerminalCmd(const uint8_t *payload, size_t len) {
     } else if (sscanf(cmd.c_str(), "conf_set l_battery_cut_end %f", &val) == 1) {
         _limits.battery_cut_end = val;
         reply = "l_battery_cut_end set\n";
+    } else if (sscanf(cmd.c_str(), "conf_set si_wheel_diameter %f", &val) == 1) {
+        _telem.wheel_diameter_m = val;
+        reply = "si_wheel_diameter set\n";
     } else if (cmd == "ping") {
         reply = "pong\n";
     } else if (cmd == "fault") {

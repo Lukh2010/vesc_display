@@ -1850,6 +1850,8 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
     sendTerminalCommand(cmd);
     snprintf(cmd, sizeof(cmd), "conf_set l_max_erpm %.0f", max_erpm);
     sendTerminalCommand(cmd);
+    snprintf(cmd, sizeof(cmd), "conf_set si_wheel_diameter %.4f", wheel_diam_in * 0.0254f);
+    sendTerminalCommand(cmd);
 
     if (Settings.get().brake_mode == 0) {
         sendTerminalCommand("conf_set l_current_min 0.0");
@@ -1905,6 +1907,57 @@ void VescHandler::sendTcsPhaseLimit(float max_phase_amps) {
         snprintf(cmd, sizeof(cmd), "conf_set l_current_max %.1f", max_phase_amps);
         sendTerminalCommand(cmd);
     }
+}
+
+void VescHandler::syncWheelDiameterToVesc(float wheel_diam_in) {
+    UartLock lock;
+    if (wheel_diam_in < 5.0f || wheel_diam_in > 30.0f) return;
+    _wheel_diameter_mm = wheel_diam_in * 25.4f;
+
+    float diam_m = wheel_diam_in * 0.0254f;
+
+    // 1. VESC Terminal Command: conf_set si_wheel_diameter <meters>
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "conf_set si_wheel_diameter %.4f", diam_m);
+    sendTerminalCommand(cmd);
+
+    // 2. VESC LispBM Command: (conf-set 'si-wheel-diameter <meters>)
+    char lisp_cmd[64];
+    snprintf(lisp_cmd, sizeof(lisp_cmd), "(conf-set 'si-wheel-diameter %.4f)", diam_m);
+    size_t slen = strlen(lisp_cmd);
+    if (slen > 60) slen = 60;
+    uint8_t payload[64];
+    payload[0] = 138; // COMM_LISP_REPL_CMD
+    memcpy(&payload[1], lisp_cmd, slen);
+
+    if (_transport) {
+        uint8_t packet[70];
+        packet[0] = 0x02;
+        packet[1] = (uint8_t)(slen + 1);
+        memcpy(&packet[2], payload, slen + 1);
+        uint16_t tcrc = crc16(payload, slen + 1);
+        packet[3 + slen] = (uint8_t)(tcrc >> 8);
+        packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
+        packet[5 + slen] = 0x03;
+        _transport->write(packet, slen + 6);
+    }
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    if (s_can_initialized) {
+        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
+        if (VESC_CAN_ID_DEFAULT != 0) {
+            sendVescCanBuffer(0, payload, slen + 1);
+        }
+    }
+#endif
+
+#if !defined(NATIVE_SIMULATOR)
+    Serial.printf("[VESC] Synchronized calibrated wheel diameter to VESC: %.1f in (%.4f m)\n",
+                  wheel_diam_in, diam_m);
+#else
+    printf("[VESC] Synchronized calibrated wheel diameter to VESC: %.1f in (%.4f m)\n",
+           wheel_diam_in, diam_m);
+#endif
 }
 
 void VescHandler::sendGnssData(const GpsTelemetry &gps) {

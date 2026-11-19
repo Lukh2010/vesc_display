@@ -36,6 +36,8 @@ public:
     void update(DashTelemetry &telemetry, float dt_sec);
 
     // Proactive Traction Control (TCS) state
+    bool  isTcsEnabled() const { return _tcs_enabled; }
+    void  setTcsEnabled(bool enabled);
     bool  isTcsActive() const { return _tcs_active; }
     float getSlipSpeedKmh() const { return _slip_speed_kmh; }
     float getSlipRatio() const { return _slip_ratio; }
@@ -61,6 +63,7 @@ private:
     TcsTpmsManager();
 
     // TCS Internal State
+    bool     _tcs_enabled;
     bool     _tcs_active;
     float    _slip_speed_kmh;
     float    _slip_ratio;
