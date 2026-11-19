@@ -1560,8 +1560,6 @@ void VescHandler::sendFocPlayStop() {
     }
 #endif
 #endif
-
-    sendTerminalCommand("foc_openloop 0 0\n");
 }
 
 void VescHandler::triggerFocHorn(bool active) {
