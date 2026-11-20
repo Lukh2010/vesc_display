@@ -1345,6 +1345,47 @@ void sim_step(uint32_t step_ms) {
         g_telemetry.turbine_volts = 0.0f;
     }
 
+    // 2e. 5-Minute Idle Auto-Lock (automatically locks stationary untouched scooter after 5 min)
+    static uint32_t s_sim_last_activity_ms = 0;
+    static bool s_sim_was_locked = true;
+    if (g_telemetry.is_locked) {
+        s_sim_was_locked = true;
+        s_sim_last_activity_ms = g_sim_uptime_ms;
+    } else {
+        if (s_sim_was_locked) {
+            s_sim_was_locked = false;
+            s_sim_last_activity_ms = g_sim_uptime_ms;
+        }
+        bool is_active = (g_telemetry.speed_kmh >= 0.8f) ||
+                         (g_telemetry.vesc_motor_speed >= 0.8f) ||
+                         (g_telemetry.throttle_pct >= 2.0f) ||
+                         (g_manual_throttle >= 1.0f) ||
+                         Buttons.isTouching() ||
+                         Buttons.isBtn1Down() ||
+                         Buttons.isBtn2Down() ||
+                         Vesc.isBridgeActive() ||
+                         (g_telemetry.screen == SCREEN_SETUP_WIZARD);
+        if (is_active) {
+            s_sim_last_activity_ms = g_sim_uptime_ms;
+        } else if (Settings.get().pin_lock_enabled &&
+                   !Renderer.isBootAnimActive() &&
+                   (uint32_t)(g_sim_uptime_ms - s_sim_last_activity_ms) >= 300000UL) {
+            g_telemetry.is_locked = true;
+            g_telemetry.theft_alarm_active = false;
+            g_telemetry.boost_active = false;
+            g_telemetry.pin_entry[0] = '\0';
+            g_telemetry.pin_error = false;
+            ModeManager::instance().setBoostActive(false);
+            ModeManager::instance().setLocked(true);
+            Buttons.setLocked(true);
+            g_telemetry.screen = SCREEN_RIDE_DASH;
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            s_sim_was_locked = true;
+            printf("[SIM_SECURITY] Auto-locked after 5 minutes of inactivity.\n");
+        }
+    }
+
     // 3. Render frame to sprite
     Renderer.render(g_telemetry);
 }
