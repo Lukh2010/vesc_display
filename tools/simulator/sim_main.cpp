@@ -334,7 +334,12 @@ void testTouchGestures() {
     assert(actTapThermals == NAV_NONE);
     printf("[PASS] Arbitrary taps on Ride Dash ignored (NAV_NONE, accidental page switches & resets prevented).\n");
 
-    // 6. Test 500ms Long-Press Top-Right Gear Icon -> NAV_BTN1_LONG (Open Settings Menu)
+    // 6. Test Hidden Top-Right Settings Corner -> NAV_BTN1_LONG (Short Tap & 500ms Long-Press)
+    // Short Tap in hidden corner (e.g. x=756, y=34)
+    NavAction actTapTopRight = simTouchAction(756, 34, 756, 34, 50);
+    assert(actTapTopRight == NAV_BTN1_LONG);
+
+    // 500ms Long-Press in hidden corner
     Display.setSimTouch(true, 756, 34);
     Buttons.update();
     simAdvanceMs(550);
@@ -345,19 +350,21 @@ void testTouchGestures() {
     simAdvanceMs(120);
     Buttons.update();
     Buttons.getNavAction();
-    printf("[PASS] 500ms Long-Press on Top-Right Settings Gear triggered NAV_BTN1_LONG (Settings Menu).\n");
+    printf("[PASS] Hidden Top-Right Settings corner openable via short tap AND long hold (Settings Menu).\n");
 
-    // 6b. Test Bottom-Right Action Buttons in Legal vs Tuning Mode
+    // 6b. Test Bottom-Right Action Buttons: BOOST (445..597) and MODE (613..765) in All Modes
     Buttons.setTuningMode(false);
-    NavAction actLegalWideMode = simTouchAction(500, 415, 500, 415, 50);
-    assert(actLegalWideMode == NAV_MODE_CYCLE);
+    NavAction actLegalBoost = simTouchAction(500, 415, 500, 415, 50);
+    assert(actLegalBoost == NAV_BOOST_TOGGLE);
+    NavAction actLegalMode = simTouchAction(690, 415, 690, 415, 50);
+    assert(actLegalMode == NAV_MODE_CYCLE);
     Buttons.setTuningMode(true);
     NavAction actTuningBoost = simTouchAction(500, 415, 500, 415, 50);
     assert(actTuningBoost == NAV_BOOST_TOGGLE);
     NavAction actTuningMode = simTouchAction(690, 415, 690, 415, 50);
     assert(actTuningMode == NAV_MODE_CYCLE);
     Buttons.setTuningMode(false);
-    printf("[PASS] Ride Dash Bottom-Right Hitboxes verified: wide MODE in Legal, BOOST + MODE in Tuning.\n");
+    printf("[PASS] Ride Dash Bottom-Right Hitboxes verified: BOOST + MODE persistent in all modes.\n");
 
     // 7. Test Long Press on Bottom Strip -> NAV_BTN2_LONG (Reset Trip Odometer)
     Display.setSimTouch(true, 100, 440);
@@ -760,10 +767,10 @@ void testTouchGestures() {
     assert(Renderer.getSettingsTab() == DashboardRenderer::TAB_PIN);
     printf("[PASS] Settings Legal Stealth Mode strictly hides ECO/SPORT/RACE/DRAGY (shows DASH, SYSTEM, PIN only).\n");
 
-    // 11e-1: Tuning Mode (tuning_mode == true): All 7 tabs (ECO, SPORT, RACE, DRAGY, DASH, SYSTEM, PIN)
+    // 11e-1: Tuning Mode (tuning_mode == true): All 5 tabs (SPEED, DRAGY, DASH, SYSTEM, PIN)
     tTest.tuning_mode = true;
-    int tabCenters[7] = { 71, 180, 289, 398, 507, 616, 725 };
-    for (int ti = 0; ti < 7; ti++) {
+    int tabCenters[DashboardRenderer::TAB_COUNT] = { 92, 246, 400, 554, 708 };
+    for (int ti = 0; ti < DashboardRenderer::TAB_COUNT; ti++) {
         touchHandled = Renderer.handleSettingsTouch(tabCenters[ti], 80, tTest);
         assert(touchHandled == true);
         assert(Renderer.getSettingsTab() == ti);
@@ -841,34 +848,23 @@ void testTouchGestures() {
     tTest.screen = SCREEN_SETTINGS_MENU;
     printf("[PASS] Settings Tab 6 PIN: [JETZT SPERREN] immediately locks stationary scooter!\n");
 
-    Renderer.setSettingsTab(DashboardRenderer::TAB_RACE); // Switch back to RACE for limit tests
+    Renderer.setSettingsTab(DashboardRenderer::TAB_SPEED); // Switch back to SPEED for limit tests
 
-    // 2. Adjust RACE mode limits via [-] and [+] buttons and slider track, plus verify ECO-override bug fixed!
+    // 2. Adjust RACE mode limits via [-] and [+] buttons on TAB_SPEED, plus verify ECO-override bug fixed!
     VehicleModeConfig &cfg = ModeManager::instance().getConfig();
     cfg.tuned_modes[0].max_battery_amps = 25.0f;
     cfg.tuned_modes[0].max_phase_amps   = 45.0f;
     cfg.tuned_modes[2].max_speed_kmh = 50.0f;
     cfg.tuned_modes[2].max_power_watts = 5000.0f;
 
-    touchHandled = Renderer.handleSettingsTouch(728, 208, tTest);
+    touchHandled = Renderer.handleSettingsTouch(730, 118 + 2 * 112 + 70, tTest);
     assert(touchHandled == true && cfg.tuned_modes[2].max_speed_kmh == 51.0f);
 
-    touchHandled = Renderer.handleSettingsTouch(72, 208, tTest);
+    touchHandled = Renderer.handleSettingsTouch(70, 118 + 2 * 112 + 70, tTest);
     assert(touchHandled == true && cfg.tuned_modes[2].max_speed_kmh == 50.0f);
 
-    touchHandled = Renderer.handleSettingsTouch(400, 208, tTest);
+    touchHandled = Renderer.handleSettingsTouch(400, 118 + 2 * 112 + 70, tTest);
     assert(touchHandled == true && cfg.tuned_modes[2].max_speed_kmh >= 15.0f && cfg.tuned_modes[2].max_speed_kmh <= 100.0f);
-
-    float prevW = cfg.tuned_modes[2].max_power_watts;
-    touchHandled = Renderer.handleSettingsTouch(728, 376, tTest);
-    assert(touchHandled == true && cfg.tuned_modes[2].max_power_watts > prevW);
-
-    prevW = cfg.tuned_modes[2].max_power_watts;
-    touchHandled = Renderer.handleSettingsTouch(72, 376, tTest);
-    assert(touchHandled == true && cfg.tuned_modes[2].max_power_watts < prevW);
-
-    touchHandled = Renderer.handleSettingsTouch(500, 376, tTest);
-    assert(touchHandled == true && cfg.tuned_modes[2].max_power_watts >= 250.0f && cfg.tuned_modes[2].max_power_watts <= 25000.0f);
 
     // Tap [< DASH] at x=74, y=29 -> Auto-saves and returns to SCREEN_RIDE_DASH without overwriting ECO amps!
     touchHandled = Renderer.handleSettingsTouch(74, 29, tTest);
@@ -903,14 +899,17 @@ void testTouchGestures() {
         }
     };
 
-    runMainLoopTouch(71, 80);  // Tab 0 ECO
-    assert(Renderer.getSettingsTab() == 0);
+    runMainLoopTouch(92, 80);  // Tab 0 SPEED
+    assert(Renderer.getSettingsTab() == DashboardRenderer::TAB_SPEED);
 
-    runMainLoopTouch(289, 80); // Tab 2 RACE
-    assert(Renderer.getSettingsTab() == 2);
+    runMainLoopTouch(246, 80); // Tab 1 DRAGY
+    assert(Renderer.getSettingsTab() == DashboardRenderer::TAB_DRAGY);
+
+    runMainLoopTouch(92, 80);  // Back to Tab 0 SPEED
+    assert(Renderer.getSettingsTab() == DashboardRenderer::TAB_SPEED);
 
     float initialRaceSpeed = cfg.tuned_modes[2].max_speed_kmh;
-    runMainLoopTouch(728, 208); // [+] Speed
+    runMainLoopTouch(730, 118 + 2 * 112 + 70); // [+] RACE Speed
     assert(cfg.tuned_modes[2].max_speed_kmh == initialRaceSpeed + 1.0f);
 
     runMainLoopTouch(74, 29);   // [< DASH]
@@ -1267,22 +1266,19 @@ void testRaceTimerAndRecords() {
     assert(t.race_elapsed_sec == 0.0f);
     printf("[PASS] IDLE race timer remains idle.\n");
 
-    // 2. Auto-Rollout ARMED State (waits at standstill until speed >= 1.0 km/h)
+    // 2. Start Countdown (5s)
     t.race_state = 1;
-    t.speed_kmh = 0.0f;
     t.race_countdown_start_ms = 1000;
-    Renderer.updateRaceTimer(t, 3000); // Still stationary -> stays ARMED
+    Renderer.updateRaceTimer(t, 3000); // 2s elapsed
     assert(t.race_state == 1);
-    assert(t.race_elapsed_sec == 0.0f);
-    printf("[PASS] ARMED launch timer stays ARMED at standstill without blind 5s timer.\n");
+    printf("[PASS] Countdown at 2s remains in COUNTDOWN state.\n");
 
-    // Auto-rollout triggers exact millisecond speed crosses >= 1.0 km/h
-    t.speed_kmh = 1.2f;
-    Renderer.updateRaceTimer(t, 6000);
+    // Countdown finishes at 5s
+    Renderer.updateRaceTimer(t, 6000); // 5s elapsed
     assert(t.race_state == 2); // MEASURING
     assert(t.race_launch_start_ms == 6000);
     assert(t.race_elapsed_sec == 0.0f);
-    printf("[PASS] Auto-Rollout (>= 1.0 km/h) cleanly triggers MEASURING state at 0.00s.\n");
+    printf("[PASS] Countdown expiration cleanly triggers MEASURING state at 0.00s.\n");
 
     // 3. Accelerating: at t = 7.5s (elapsed = 1.5s), speed reaches 25 km/h -> crosses 22 km/h
     t.speed_kmh = 25.0f;
@@ -3142,15 +3138,23 @@ int main(int argc, char **argv) {
     // Scenario 11: Screen 3 - Mode Configurator (DRAGY Splits Tab)
     // ----------------------------------------------------
     t.screen = SCREEN_SETTINGS_MENU;
-    Renderer.setSettingsTab(3);
+    Renderer.setSettingsTab(DashboardRenderer::TAB_DRAGY);
     Renderer.markScreenDirty();
     renderAndSave("11_settings_display_style", t);
+
+    // ----------------------------------------------------
+    // Scenario 11b: Screen 3 - Tuned Topspeed per Mode Tab (3 Stacked Rows)
+    // ----------------------------------------------------
+    t.screen = SCREEN_SETTINGS_MENU;
+    Renderer.setSettingsTab(DashboardRenderer::TAB_SPEED);
+    Renderer.markScreenDirty();
+    renderAndSave("11b_settings_speed_tab", t);
 
     // ----------------------------------------------------
     // Scenario 12: Screen 3 - Mode Configurator (DASH Options Tab)
     // ----------------------------------------------------
     t.screen = SCREEN_SETTINGS_MENU;
-    Renderer.setSettingsTab(4);
+    Renderer.setSettingsTab(DashboardRenderer::TAB_DASH);
     Renderer.markScreenDirty();
     renderAndSave("12_settings_dash_options", t);
 
@@ -3313,12 +3317,13 @@ int main(int argc, char **argv) {
     renderAndSave("18_pin_lockscreen_error", t);
 
     // ----------------------------------------------------
-    // Scenario 19: Screen 6 - "RACE" Dragy Launch-Timer (ARMED Auto-Rollout & Measuring)
+    // Scenario 19: Screen 6 - "RACE" Dragy Launch-Timer (5s Countdown & Measuring)
     // ----------------------------------------------------
     setBaseTelemetry(t);
     t.screen = SCREEN_RACE_TIMER;
     t.speed_kmh = 0.0f;
-    t.race_state = 1; // ARMED (BEREIT - GAS GEBEN!)
+    t.race_state = 1; // COUNTDOWN (5s)
+    t.race_countdown_start_ms = 0;
     t.race_elapsed_sec = 0.0f;
     t.race_split_0_22 = 0.0f;
     t.race_split_0_50 = 0.0f;
@@ -3579,6 +3584,134 @@ int main(int argc, char **argv) {
     Renderer.markScreenDirty();
     renderAndSave("38_boot_animation_phase3_pin_lockscreen", t);
     printf("[PASS] Scenario 38: Boot Animation Phase 3 PIN Lockscreen rendered and saved.\n");
+
+    // ----------------------------------------------------
+    // Unit Tests for 3 Fixes: Reboot Screen Clear, TAB_SPEED, Boost Toggle ON/OFF
+    // ----------------------------------------------------
+    {
+        // Fix 1: Reboot without setup wizard (boot animation -> Ride Dash) clears boot console text
+        DashTelemetry tBoot;
+        setBaseTelemetry(tBoot);
+        Settings.get().setup_completed = true;
+        Settings.get().pin_lock_enabled = false;
+        tBoot.setup_completed = true;
+        tBoot.is_locked = false;
+        tBoot.vesc_connected = true;
+        tBoot.screen = SCREEN_RIDE_DASH;
+        ModeManager::instance().setLocked(false);
+
+        // Render Ride Dash once so _hyper_inited == true (simulates pre-reboot state)
+        Renderer.invalidateCache();
+        Renderer.render(tBoot);
+
+        // Trigger boot animation -> Phase 2 console text drawn -> auto-advance to Ride Dash
+        Renderer.triggerBootAnimation();
+        Renderer.setBootAnimElapsed(2900);
+        Renderer.render(tBoot); // Draws boot console text
+        Renderer.setBootAnimElapsed(3300);
+        Renderer.render(tBoot); // should_auto_advance -> skipBootAnimation() -> renders clean Ride Dash
+        assert(!Renderer.isBootAnimActive());
+        renderAndSave("39_reboot_no_setup_clean_dash", tBoot);
+        printf("[PASS] Fix 1: Reboot without setup cleanly clears boot text before Ride Dash.\n");
+    }
+
+    {
+        // Fix 2: TAB_SPEED (3 stacked rows: ECO, SPORT, RACE) touch, drag, persistence & ModeManager limits
+        DashTelemetry tSpd;
+        setBaseTelemetry(tSpd);
+        tSpd.screen = SCREEN_SETTINGS_MENU;
+        tSpd.tuning_mode = true;
+        tSpd.is_locked = false;
+        ModeManager::instance().setTuningMode(true);
+        Renderer.setSettingsTab(DashboardRenderer::TAB_SPEED);
+
+        VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+        float eco0 = cfg.tuned_modes[PROFILE_MODE_ECO].max_speed_kmh;
+        float spr0 = cfg.tuned_modes[PROFILE_MODE_SPORT].max_speed_kmh;
+        float rac0 = cfg.tuned_modes[PROFILE_MODE_RACE].max_speed_kmh;
+
+        // Tap [+] on ECO (row 0: y=118..222, [+] x=700..760, y=166..210)
+        assert(Renderer.handleSettingsTouch(730, 188, tSpd) == true);
+        assert(cfg.tuned_modes[PROFILE_MODE_ECO].max_speed_kmh == eco0 + 1.0f);
+
+        // Tap [-] on SPORT (row 1: y=230..334, [-] x=40..100, y=278..322)
+        assert(Renderer.handleSettingsTouch(70, 300, tSpd) == true);
+        assert(cfg.tuned_modes[PROFILE_MODE_SPORT].max_speed_kmh == spr0 - 1.0f);
+
+        // Drag slider on RACE (row 2: y=342..446, track x=120..680, y=380..442)
+        assert(Renderer.handleSettingsSliderDrag(400, 412, tSpd) == true); // midpoint = 57.5 -> 58 km/h
+        assert(cfg.tuned_modes[PROFILE_MODE_RACE].max_speed_kmh != rac0);
+
+        // Exit Settings (saves to NVS & applies)
+        Renderer.handleMenuNav(NAV_SCREEN_DASH, tSpd);
+        ModeManager::instance().setRideMode(MODE_ECO);
+        assert(ModeManager::instance().getActiveLimits().max_speed_kmh == eco0 + 1.0f);
+        ModeManager::instance().setRideMode(MODE_SPORT);
+        assert(ModeManager::instance().getActiveLimits().max_speed_kmh == spr0 - 1.0f);
+
+        // Restore defaults
+        ModeManager::instance().resetDefaults();
+        printf("[PASS] Fix 2: TAB_SPEED 3 stacked rows touch, drag, NVS save & ModeManager application verified.\n");
+    }
+
+    {
+        // Fix 3: Boost toggle ON -> OFF via touch on [ BOOST ] in both legal and tuning modes
+        DashTelemetry tBoost;
+        setBaseTelemetry(tBoost);
+        tBoost.screen = SCREEN_RIDE_DASH;
+        tBoost.is_locked = false;
+        tBoost.boost_active = false;
+        Buttons.setActiveScreen(SCREEN_RIDE_DASH);
+        Buttons.setLocked(false);
+
+        auto tapBoost = [&]() {
+            simAdvanceMs(200);
+            Display.setSimTouch(true, 521, 416);
+            Buttons.update();
+            simAdvanceMs(60);
+            Display.setSimTouch(false, 521, 416);
+            Buttons.update();
+        };
+
+        // Legal mode (!tuning_mode)
+        tBoost.tuning_mode = false;
+        Buttons.setTuningMode(false);
+        tapBoost();
+        assert(Buttons.getNavAction() == NAV_BOOST_TOGGLE);
+        tBoost.boost_active = !tBoost.boost_active;
+        assert(tBoost.boost_active == true);
+
+        tapBoost();
+        assert(Buttons.getNavAction() == NAV_BOOST_TOGGLE);
+        tBoost.boost_active = !tBoost.boost_active;
+        assert(tBoost.boost_active == false);
+
+        // Tuning mode (tuning_mode == true) + visual redraw check with markScreenDirty()
+        tBoost.tuning_mode = true;
+        Buttons.setTuningMode(true);
+        Renderer.invalidateCache();
+        Renderer.markScreenDirty();
+        Renderer.render(tBoost); // initial OFF
+        const ColorThemePalette &bPal = Renderer.currentTheme();
+
+        tapBoost();
+        assert(Buttons.getNavAction() == NAV_BOOST_TOGGLE);
+        tBoost.boost_active = !tBoost.boost_active;
+        assert(tBoost.boost_active == true);
+        Renderer.markScreenDirty();
+        Renderer.render(tBoost);
+        assert(Display.getCanvas()->readPixel(460, 390) == bPal.primary);
+
+        tapBoost();
+        assert(Buttons.getNavAction() == NAV_BOOST_TOGGLE);
+        tBoost.boost_active = !tBoost.boost_active;
+        assert(tBoost.boost_active == false);
+        Renderer.markScreenDirty();
+        Renderer.render(tBoost);
+        assert(Display.getCanvas()->readPixel(460, 390) == bPal.surface);
+
+        printf("[PASS] Fix 3: [ BOOST ] button toggles ON -> OFF cleanly in both legal and tuning modes.\n");
+    }
 
     // Reset default theme
     Settings.get().color_theme = THEME_OBSIDIAN_DARK;

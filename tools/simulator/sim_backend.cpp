@@ -172,6 +172,7 @@ static void runSimulationStep(float dt) {
         }
         if (g_telemetry.screen != SCREEN_RACE_TIMER && g_sim_uptime_ms > g_telemetry.boost_end_ms) {
             g_telemetry.boost_active = false;
+            ModeManager::instance().setBoostActive(false);
             Renderer.markScreenDirty();
         }
     }
@@ -991,7 +992,7 @@ void sim_step(uint32_t step_ms) {
         if (Buttons.getLastTap(&tx, &ty)) {
             Renderer.handleSettingsTouch(tx, ty, g_telemetry);
             Buttons.clearNavAction(); // Clear any pending action to prevent double-invocation
-        } else if (Buttons.isTouching() && Renderer.getSettingsTab() < 3) {
+        } else if (Buttons.isTouching() && Renderer.getSettingsTab() <= DashboardRenderer::TAB_SPEED) {
             int16_t cx = Buttons.getTouchX();
             int16_t cy = Buttons.getTouchY();
             Renderer.handleSettingsSliderDrag(cx, cy, g_telemetry);
@@ -1188,6 +1189,7 @@ void sim_step(uint32_t step_ms) {
                     if (g_telemetry.boost_active) {
                         g_telemetry.boost_end_ms = g_sim_uptime_ms + 10000;
                     }
+                    ModeManager::instance().setBoostActive(g_telemetry.boost_active);
                     ensureZeroSpeedIfIdle();
                     Renderer.markScreenDirty();
                     break;
@@ -1460,6 +1462,14 @@ void sim_touch_event(int is_down, int x, int y) {
         return;
     }
 
+    // 0b. Hidden Top-Right Settings Corner Touch on SCREEN_RIDE_DASH (Reliable Short Tap & Hold)
+    if (is_new_down && !g_telemetry.is_locked && g_telemetry.screen == SCREEN_RIDE_DASH) {
+        if (x >= 680 && y <= 65) {
+            sim_trigger_nav(NAV_BTN1_LONG);
+            return;
+        }
+    }
+
     Buttons.setActiveScreen(g_telemetry.screen);
     Buttons.setRacePopupOpen(g_telemetry.race_popup_open);
     Buttons.setRaceDynoOpen(g_telemetry.race_dyno_open);
@@ -1698,6 +1708,7 @@ void sim_trigger_nav(int nav_action) {
                 if (g_telemetry.boost_active) {
                     g_telemetry.boost_end_ms = g_sim_uptime_ms + 10000;
                 }
+                ModeManager::instance().setBoostActive(g_telemetry.boost_active);
                 ensureZeroSpeedIfIdle();
                 break;
             case NAV_TUNING_ENABLE:
@@ -1759,6 +1770,7 @@ void sim_toggle_boost() {
     if (g_telemetry.boost_active) {
         g_telemetry.boost_end_ms = g_sim_uptime_ms + 10000;
     }
+    ModeManager::instance().setBoostActive(g_telemetry.boost_active);
     ensureZeroSpeedIfIdle();
     Renderer.markScreenDirty();
 }
@@ -2306,6 +2318,17 @@ void sim_cycle_brake_mode() {
 }
 
 void sim_trigger_boot_animation() {
+    g_manual_throttle = 0.0f;
+    g_manual_brake = 0.0f;
+    s_sim_speed_kmh = 0.0f;
+    s_sim_current_amps = 0.0f;
+    s_sim_phase_amps = 0.0f;
+    s_sim_power_watts = 0.0f;
+    s_sim_duty_cycle_pct = 0.0f;
+    g_telemetry.speed_kmh = 0.0f;
+    g_telemetry.power_watts = 0.0f;
+    g_telemetry.current_amps = 0.0f;
+    g_telemetry.phase_amps = 0.0f;
     Renderer.triggerBootAnimation();
     if (Settings.get().pin_lock_enabled) {
         g_telemetry.is_locked = true;
