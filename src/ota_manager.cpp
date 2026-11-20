@@ -168,7 +168,7 @@ function startUpload() {
       const pct = Math.round((e.loaded / e.total) * 100);
       document.getElementById('progressBar').style.width = pct + '%';
       document.getElementById('statusPct').innerText = pct + '%';
-      document.getElementById('statusMsg').innerText = '&Uuml;bertrage Firmware (' + (e.loaded/1024).toFixed(0) + ' / ' + (e.total/1024).toFixed(0) + ' KB)...';
+      document.getElementById('statusMsg').innerText = 'Uebertrage Firmware (' + (e.loaded/1024).toFixed(0) + ' / ' + (e.total/1024).toFixed(0) + ' KB)...';
     }
   });
 

@@ -1,5 +1,7 @@
 #include "mode_manager.h"
 #include "vesc_uart.h"
+#include "settings_manager.h"
+#include <math.h>
 
 ModeManager& ModeManager::instance() {
     static ModeManager s_instance;
@@ -83,20 +85,61 @@ void ModeManager::begin() {
     _prefs.begin("vesc_modes", false);
     if (!_prefs.isKey("cfg_48v_v4")) {
         setFactoryDefaults();
-        _config.battery_cells        = 13;
-        _config.battery_cutoff_start = 42.9f;
-        _config.battery_cutoff_end   = 39.0f;
+        uint8_t s_cells = Settings.get().battery_cells;
+        if (s_cells < 10 || s_cells > 24) s_cells = 13;
+        _config.battery_cells        = s_cells;
+        _config.battery_cutoff_start = roundf((float)s_cells * 3.3f * 10.0f) / 10.0f;
+        _config.battery_cutoff_end   = roundf((float)s_cells * 3.0f * 10.0f) / 10.0f;
+        Settings.get().battery_cells = s_cells;
         saveToNvs();
         _prefs.putBool("cfg_48v_v4", true);
         _prefs.putBool("cfg_v3", true);
         Serial.println("[MODE_MGR] Initialized/Migrated 48V (13S) vehicle & mode profiles in NVS.");
     } else {
         loadFromNvs();
+        if (_config.battery_cells < 10 || _config.battery_cells > 24) {
+            _config.battery_cells = 13;
+        }
+        Settings.get().battery_cells = _config.battery_cells;
         Serial.println("[MODE_MGR] Loaded vehicle & mode configurations from NVS.");
     }
 
     // Send initial legal limits immediately to VESC
     applyLimitsToVesc();
+}
+
+void ModeManager::setBatteryCells(uint8_t cells) {
+    if (cells < 10) cells = 10;
+    if (cells > 24) cells = 24;
+
+    bool cells_changed = (_config.battery_cells != cells);
+    bool settings_diff = (Settings.get().battery_cells != cells);
+
+    _config.battery_cells = cells;
+    Settings.get().battery_cells = cells;
+
+    // Auto-recalculate sensible cutoff voltages when cell count changes (or if out of plausible range)
+    float min_valid = (float)cells * 2.5f;
+    float max_valid = (float)cells * 4.0f;
+    if (cells_changed ||
+        _config.battery_cutoff_start < min_valid || _config.battery_cutoff_start > max_valid ||
+        _config.battery_cutoff_end < min_valid   || _config.battery_cutoff_end > max_valid ||
+        _config.battery_cutoff_end >= _config.battery_cutoff_start) {
+        _config.battery_cutoff_start = roundf((float)cells * 3.3f * 10.0f) / 10.0f;
+        _config.battery_cutoff_end   = roundf((float)cells * 3.0f * 10.0f) / 10.0f;
+        cells_changed = true;
+    }
+
+    if (settings_diff) {
+        Settings.save();
+    }
+    if (cells_changed) {
+        saveToNvs();
+        _limits_dirty = true;
+        applyLimitsToVesc();
+        Serial.printf("[MODE_MGR] Battery cells set to %uS (Cutoffs: %.1fV .. %.1fV)\n",
+                      cells, _config.battery_cutoff_start, _config.battery_cutoff_end);
+    }
 }
 
 void ModeManager::loadFromNvs() {
@@ -140,6 +183,7 @@ void ModeManager::loadFromNvs() {
 
     _config.throttle_curve       = (int8_t)_prefs.getUChar("t_curve", (uint8_t)_config.throttle_curve);
     _config.battery_cells        = _prefs.getUChar("b_cells", _config.battery_cells);
+    if (_config.battery_cells < 10 || _config.battery_cells > 24) _config.battery_cells = 13;
     _config.battery_cutoff_start = _prefs.getFloat("b_cut_s", _config.battery_cutoff_start);
     _config.battery_cutoff_end   = _prefs.getFloat("b_cut_e", _config.battery_cutoff_end);
 
@@ -202,6 +246,10 @@ void ModeManager::saveToNvs() {
         snprintf(key, sizeof(key), "%s_pha", tun_prefixes[i]);
         _prefs.putFloat(key, _config.tuned_modes[i].max_phase_amps);
     }
+
+    if (_config.battery_cells < 10) _config.battery_cells = 10;
+    if (_config.battery_cells > 24) _config.battery_cells = 24;
+    Settings.get().battery_cells = _config.battery_cells;
 
     _prefs.putUChar("t_curve", (uint8_t)_config.throttle_curve);
     _prefs.putUChar("b_cells", _config.battery_cells);

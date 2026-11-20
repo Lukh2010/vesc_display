@@ -5,9 +5,30 @@
 #include "dash_types.h"
 #include "settings_manager.h"
 #include "battery_manager.h"
+#include "board_config.h"
 
 class DashboardRenderer {
 public:
+    enum UiFont : uint8_t {
+        UIF_HERO_NUM = 0, // Roboto Bold 72px (digits, - . + % :)
+        UIF_MED_NUM  = 1, // Roboto Bold 34px (digits, A-Z, k m h s % . : - + / °)
+        UIF_HEADING  = 2, // Roboto Bold 22px (full ASCII + DE umlauts)
+        UIF_BODY     = 3, // Roboto Medium 16px (full ASCII + DE umlauts)
+        UIF_SMALL    = 4, // Roboto Medium 12px (full ASCII + DE umlauts)
+        UIF_COUNT    = 5
+    };
+
+    enum SettingsTab : uint8_t {
+        TAB_ECO    = 0,
+        TAB_SPORT  = 1,
+        TAB_RACE   = 2,
+        TAB_DRAGY  = 3,
+        TAB_DASH   = 4,
+        TAB_SYSTEM = 5,
+        TAB_PIN    = 6,
+        TAB_COUNT  = 7
+    };
+
     DashboardRenderer();
     void begin(DisplayDriver *display);
     void render(const DashTelemetry &telemetry);
@@ -31,6 +52,7 @@ public:
         _stats_cache.invalidate();
         _hyper_inited = false;
         _stats_inited = false;
+        _settings_inited = false;
         _last_arc_frac = -1.0f;
         _last_arc_angle = 135.0f;
         _last_arc_col = 0;
@@ -47,6 +69,9 @@ public:
         _last_race_g_force_x10 = -999;
         _mode_banner_drawn_mode = -1;
         _pin_screen_drawn = false;
+        _last_pin_bat_pct = -999;
+        _last_pin_volt_x10 = -999;
+        _last_pin_vesc_conn = -1;
         _last_ble_conn = false;
         _last_ble_bars = 255;
     }
@@ -64,7 +89,7 @@ public:
     void resetSetupWizard();
     bool isInEditMode() const { return false; }
     uint8_t getSettingsTab() const { return _settings_tab_idx; }
-    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < 6) ? tab : 0; _last_rendered_tab = 255; _menu_dirty = true; }
+    void setSettingsTab(uint8_t tab) { _settings_tab_idx = (tab < TAB_COUNT) ? tab : (uint8_t)TAB_DASH; _last_rendered_tab = 255; _menu_dirty = true; }
 
     // Race / Dragy Timer Logic
     void updateRaceTimer(DashTelemetry &telemetry, uint32_t now);
@@ -72,6 +97,17 @@ public:
 private:
     DisplayDriver *_display;
     LovyanGFX     *_canvas;
+
+    // Pre-loaded zero-allocation VLW anti-aliased smooth fonts
+    lgfx::PointerWrapper _vlwData[UIF_COUNT];
+    lgfx::VLWfont        _vlwFonts[UIF_COUNT];
+    bool                 _vlwLoaded[UIF_COUNT];
+
+    void initSmoothFonts();
+    const lgfx::IFont* getUiFont(UiFont f) const;
+    void useFont(UiFont f);
+    void resetFont();
+    void drawSmoothText(UiFont f, const char *str, int x, int y, textdatum_t datum, uint16_t fg, uint16_t bg, int padW = 0);
 
     // Screen 0: Main Ride Dashboard (renders selected style)
     void initRideDashboard(const DashTelemetry &telemetry);
@@ -81,17 +117,19 @@ private:
     void initHyper35kwStyle(const DashTelemetry &telemetry);
     void renderHyper35kwStyle(const DashTelemetry &telemetry);
 
+#if ENABLE_LIGHTS_SCREEN
     // Screen 1: Controllable LEDs & Light Modules (Color Wheel & Hazard)
     void initLightsScreen(const DashTelemetry &telemetry);
     void renderLightsScreen(const DashTelemetry &telemetry);
     void drawColorWheel(int cx, int cy, int r_in, int r_out, uint8_t selected_hue);
+#endif
 
-    // Screen 2: Real-Time Waveform Curves (Speed & Power) & Dual Controllers
+    // Screen 2: Telemetry, Statistics & 60s Live Dual-Curve Sparkline
     void initRtGraphsScreen(const DashTelemetry &telemetry);
     void renderRtGraphsScreen(const DashTelemetry &telemetry);
-    void drawWaveformGraph(int x, int y, int w, int h, const float *data, int count, float max_val, uint16_t line_col, uint16_t fill_col, const char *label, const char *val_str, uint16_t val_col);
+    void drawStatsSparkline(const DashTelemetry &telemetry, const ColorThemePalette &pal);
 
-    // Screen 3: Interactive Touch Mode Configurator
+    // Screen 3: Interactive Touch Mode & System Configurator
     void initSettingsScreen(const DashTelemetry &telemetry);
     void renderSettingsScreen(const DashTelemetry &telemetry);
 
@@ -103,7 +141,7 @@ private:
     void initWifiBridgeScreen(const DashTelemetry &telemetry);
     void renderWifiBridgeScreen(const DashTelemetry &telemetry);
 
-    // Screen 6: "RACE" Dragy / Launch Acceleration Timer
+    // Screen 6: "RACE" Dragy / Launch Acceleration Timer (Auto-Rollout)
     void initRaceTimerScreen(const DashTelemetry &telemetry);
     void renderRaceTimerScreen(const DashTelemetry &telemetry);
     void drawRaceRecordsModal(const DashTelemetry &telemetry);
@@ -116,13 +154,15 @@ private:
     // Screen 9: Wireless OTA Firmware Update Progress HUD
     void renderOtaScreen(int pct, const char *status);
 
-    // PIN-Lockscreen & VESC Alarm Banner (Requirements 1 & 7)
+    // PIN-Lockscreen & VESC Alarm Banner
     void renderPinLockScreen(const DashTelemetry &telemetry);
     void drawFaultBanner(uint8_t fault_code);
 
     // Common UI Helpers
-    void drawCard(int x, int y, int w, int h, uint16_t bg, uint16_t border);
-    void drawValWithUnit(int x, int y, int numPadW, int unitPadW, const char *numStr, const char *unitStr, uint16_t numCol, uint16_t unitCol, uint16_t bgCol = 0x0821);
+    void drawCard(int x, int y, int w, int h, uint16_t bg, uint16_t border, int r = 10);
+    void drawPillToggle(int x, int y, bool on, const ColorThemePalette &pal);
+    void drawSettingsGearIcon(int cx, int cy, uint16_t col, uint16_t bg);
+    void drawLockIcon(int cx, int cy, uint16_t col, uint16_t bg);
 
     // Screen State
     DashboardScreen _active_screen;
@@ -133,10 +173,11 @@ private:
     int8_t          _mode_banner_drawn_mode;
 
     // Menu / Settings Configurator State
-    uint8_t  _settings_tab_idx; // 0 = ECO, 1 = SPORT, 2 = RACE, 3 = DRAGY, 4 = DASH, 5 = PIN
+    uint8_t  _settings_tab_idx; // SettingsTab (0..6)
     uint8_t  _last_rendered_tab;
     bool     _settings_inited;
     bool     _menu_dirty;
+    int8_t   _settings_last_tuning_mode;
 
     // Differential Render Cache
     struct RenderCache {
@@ -173,14 +214,19 @@ private:
         int soh_x10;
         uint32_t ride_sec;
 
-        // Hyper 35kW & Lights Caches
+        // Hyper 35kW & Status Caches
         int ride_mode;
         bool tuning_mode;
+        bool banner_active;
+        int8_t boost_btn_tuning;
         bool boost_active;
         bool hazard_active;
         uint8_t light_mode;
         uint8_t light_hue;
         uint8_t light_brightness;
+        int8_t lights_enabled;
+        int8_t tcs_active;
+        int8_t tpms_warning;
 
         // Clock & GPS Satellite Caches
         char clock_str[12];
@@ -213,13 +259,13 @@ private:
             duty_col = 0;
             throttle_pct = -1;
             throttle_fill_w = -1;
-            battery_pct = -1;
-            voltage_x10 = -1;
-            current_x10 = -1;
-            phase_x10 = -1;
+            battery_pct = -999;
+            voltage_x10 = -999;
+            current_x10 = -9999;
+            phase_x10 = -9999;
             watts = -99999;
             remaining_wh = -1;
-            est_range = -1;
+            est_range = -999;
             temp_motor = -999;
             temp_esc = -999;
             g_force_x10 = -999;
@@ -241,14 +287,17 @@ private:
 
             ride_mode = -1;
             tuning_mode = false;
+            banner_active = false;
+            boost_btn_tuning = -1;
             boost_active = false;
             hazard_active = false;
             lights_enabled = -1;
             light_mode = 255;
             light_hue = 255;
             light_brightness = 255;
+            tcs_active = -1;
+            tpms_warning = -1;
         }
-        int8_t lights_enabled;
     } _cache;
 
     // Analog Needle State
@@ -307,6 +356,7 @@ private:
         int max_temp_mot;
         int max_temp_esc;
         int8_t tuning_mode;
+        uint32_t sparkline_sig;
 
         void invalidate() {
             trip_x10 = -1;
@@ -328,6 +378,7 @@ private:
             max_temp_mot = -999;
             max_temp_esc = -999;
             tuning_mode = -1;
+            sparkline_sig = 0xFFFFFFFF;
         }
     } _stats_cache;
 
@@ -339,6 +390,9 @@ private:
     bool     _last_ble_conn;
     uint8_t  _last_ble_bars;
     int8_t   _last_pin_active_key;
+    int      _last_pin_bat_pct;
+    int      _last_pin_volt_x10;
+    int8_t   _last_pin_vesc_conn;
 
     // PIN Change Modal State (in Settings)
     bool     _pin_modal_open;
@@ -369,7 +423,7 @@ private:
 
     // Boot Animation State
     bool     _boot_anim_active;
-    uint8_t  _boot_anim_phase; // 0=idle/done, 1=Phase 1 (Logo), 2=Phase 2 (Console), 3=Complete (transitioning to PIN)
+    uint8_t  _boot_anim_phase; // 0=idle/done, 1=Phase 1 (Logo), 2=Phase 2 (Console), 3=Complete
     uint32_t _boot_anim_start_ms;
     uint8_t  _boot_log_lines_drawn;
     bool     _vesc_link_skipped;

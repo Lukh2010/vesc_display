@@ -11,6 +11,7 @@
 #include <freertos/semphr.h>
 #if VESC_USE_CAN_BUS
 #include "driver/twai.h"
+#include <esp_rom_sys.h>
 #endif
 static SemaphoreHandle_t s_uartMutex = NULL;
 struct UartLock {
@@ -61,6 +62,29 @@ static float buffer_get_float32_auto(const uint8_t *buffer, int32_t *index) {
     return ldexpf(sig, e);
 }
 
+// Serializes VESC IEEE-754 auto-float (matches VESC buffer_append_float32_auto)
+static void buffer_append_float32_auto(uint8_t *b, float number, int32_t *idx) {
+    if (fabsf(number) < 1.5e-38f) {
+        number = 0.0f;
+    }
+    int e = 0;
+    float sig = frexpf(number, &e);
+    float sig_abs = fabsf(sig);
+    uint32_t sig_i = 0;
+    if (sig_abs >= 0.5f) {
+        sig_i = (uint32_t)((sig_abs - 0.5f) * 2.0f * 8388608.0f);
+        e += 126;
+    }
+    uint32_t res = ((e & 0xFF) << 23) | (sig_i & 0x7FFFFF);
+    if (sig < 0) {
+        res |= (1U << 31);
+    }
+    b[(*idx)++] = (uint8_t)(res >> 24);
+    b[(*idx)++] = (uint8_t)(res >> 16);
+    b[(*idx)++] = (uint8_t)(res >> 8);
+    b[(*idx)++] = (uint8_t)(res);
+}
+
 static float _last_adc1_v = 0.0f;
 static float _last_adc1_pct = 0.0f;
 static float _last_adc2_v = 0.0f;
@@ -100,6 +124,7 @@ VescHandler::VescHandler()
       _last_ah(0),
       _wh_trip_inited(false),
       _ah_trip_inited(false),
+      _vesc_trip_wh(0.0f),
       _sim_throttle(0.0f),
       _sim_incline(0.0f),
       _target_speed(0.0f),
@@ -391,6 +416,284 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
 static bool s_can_initialized = false;
 static uint8_t s_primary_vesc_id = VESC_CAN_ID_DEFAULT;
+static uint8_t s_secondary_vesc_id = 0xFF;
+static bool s_has_primary = false;
+static bool s_has_76 = false;
+static bool s_has_secondary = false;
+static uint32_t s_sec_last_rx_ms = 0;
+
+static constexpr size_t CAN_RX_BUF_SIZE = 2048;
+static uint8_t s_can_rx_buf[CAN_RX_BUF_SIZE];
+
+static void ensureCanBusHealthy() {
+    if (!s_can_initialized) return;
+    twai_status_info_t st;
+    if (twai_get_status_info(&st) == ESP_OK) {
+        if (st.state == TWAI_STATE_BUS_OFF) {
+            twai_initiate_recovery();
+        } else if (st.state == TWAI_STATE_STOPPED) {
+            twai_start();
+        }
+    }
+}
+
+static void updateDetectedCanIds(uint8_t controller_id, uint8_t cmd_id, uint32_t now) {
+    if (controller_id == VescHandler::ESP_CAN_ID) return;
+    // Only learn VESC node IDs from VESC broadcast status packets
+    if (cmd_id != 9 && cmd_id != 14 && cmd_id != 15 && cmd_id != 16 && cmd_id != 27) return;
+
+    if (controller_id == VESC_CAN_ID_DEFAULT) {
+        s_has_76 = true;
+        s_primary_vesc_id = VESC_CAN_ID_DEFAULT;
+        s_has_primary = true;
+    } else if (!s_has_76 && !s_has_primary && controller_id != 77) {
+        s_primary_vesc_id = controller_id;
+        s_has_primary = true;
+        Serial.printf("[VESC_CAN] Auto-detected primary VESC ID: %u\n", s_primary_vesc_id);
+    } else if (controller_id != s_primary_vesc_id) {
+        if (controller_id == 77 ||
+            (s_primary_vesc_id == 76 && controller_id == 1) ||
+            (s_primary_vesc_id == 1 && controller_id == 2)) {
+            if (!s_has_secondary || s_secondary_vesc_id != controller_id) {
+                Serial.printf("[VESC_CAN] Auto-detected secondary VESC ID: %u\n", controller_id);
+            }
+            s_secondary_vesc_id = controller_id;
+            s_has_secondary = true;
+            s_sec_last_rx_ms = now;
+        }
+    }
+}
+
+static void twaiTransmitToDetected(twai_message_t &msg, uint8_t cmd_id, TickType_t timeout_ticks = pdMS_TO_TICKS(5)) {
+    if (!s_can_initialized) return;
+    msg.extd = 1;
+    msg.rtr = 0;
+    msg.identifier = ((uint32_t)cmd_id << 8) | s_primary_vesc_id;
+    twai_transmit(&msg, timeout_ticks);
+
+    if (s_has_secondary && s_secondary_vesc_id != s_primary_vesc_id) {
+        msg.identifier = ((uint32_t)cmd_id << 8) | s_secondary_vesc_id;
+        twai_transmit(&msg, timeout_ticks);
+    }
+}
+
+// VESC CAN buffer TX (supports short <= 6B, standard FILL_RX_BUFFER < 256, and FILL_RX_BUFFER_LONG >= 256)
+// send_flag in VESC comm_can.c:
+//   0 = process packet & send reply back to src_id (used for Bridge & telemetry queries)
+//   1 = forward directly to VESC USB/UART (used by VESC when replying)
+//   2 = process packet WITHOUT sending any reply (used for fire-and-forget commands)
+static void sendVescCanBuffer(uint8_t controller_id, const uint8_t *data, size_t len,
+                              uint8_t src_id = VescHandler::ESP_CAN_ID, uint8_t send_flag = 2) {
+    if (!s_can_initialized || !data || len == 0 || len > CAN_RX_BUF_SIZE) return;
+
+    if (len <= 6) {
+        twai_message_t msg = {};
+        msg.extd = 1;
+        msg.identifier = (8U << 8) | controller_id; // CAN_PACKET_PROCESS_SHORT_BUFFER (ID 8)
+        msg.data_length_code = (uint8_t)(len + 2);
+        msg.data[0] = src_id;
+        msg.data[1] = send_flag;
+        memcpy(&msg.data[2], data, len);
+        twai_transmit(&msg, pdMS_TO_TICKS(5));
+    } else {
+        size_t i = 0;
+        while (i < len) {
+            twai_message_t msg = {};
+            msg.extd = 1;
+            if (i < 256) {
+                // CAN_PACKET_FILL_RX_BUFFER (ID 5): 1-byte offset + up to 7 bytes
+                size_t chunk_len = (len - i > 7) ? 7 : (len - i);
+                msg.identifier = (5U << 8) | controller_id;
+                msg.data_length_code = (uint8_t)(chunk_len + 1);
+                msg.data[0] = (uint8_t)i;
+                memcpy(&msg.data[1], data + i, chunk_len);
+                i += chunk_len;
+            } else {
+                // CAN_PACKET_FILL_RX_BUFFER_LONG (ID 6): 2-byte big-endian offset + up to 6 bytes
+                size_t chunk_len = (len - i > 6) ? 6 : (len - i);
+                msg.identifier = (6U << 8) | controller_id;
+                msg.data_length_code = (uint8_t)(chunk_len + 2);
+                msg.data[0] = (uint8_t)((i >> 8) & 0xFF);
+                msg.data[1] = (uint8_t)(i & 0xFF);
+                memcpy(&msg.data[2], data + i, chunk_len);
+                i += chunk_len;
+            }
+            twai_transmit(&msg, pdMS_TO_TICKS(10));
+            esp_rom_delay_us(150);
+        }
+
+        // CAN_PACKET_PROCESS_RX_BUFFER (ID 7)
+        uint16_t crc = crc16(data, len);
+        twai_message_t proc = {};
+        proc.extd = 1;
+        proc.identifier = (7U << 8) | controller_id;
+        proc.data_length_code = 6;
+        proc.data[0] = src_id;
+        proc.data[1] = send_flag;
+        proc.data[2] = (uint8_t)((len >> 8) & 0xFF);
+        proc.data[3] = (uint8_t)(len & 0xFF);
+        proc.data[4] = (uint8_t)((crc >> 8) & 0xFF);
+        proc.data[5] = (uint8_t)(crc & 0xFF);
+        twai_transmit(&proc, pdMS_TO_TICKS(10));
+    }
+}
+
+static void sendVescCanBufferToDetected(const uint8_t *data, size_t len,
+                                        uint8_t src_id = VescHandler::ESP_CAN_ID, uint8_t send_flag = 2) {
+    sendVescCanBuffer(s_primary_vesc_id, data, len, src_id, send_flag);
+    if (s_has_secondary && s_secondary_vesc_id != s_primary_vesc_id) {
+        sendVescCanBuffer(s_secondary_vesc_id, data, len, src_id, send_flag);
+    }
+}
+
+// Reassemble VESC CAN buffer replies addressed to ESP_CAN_ID (cmd 5, 6, 7, 8)
+static bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **out_payload, size_t *out_len) {
+    uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
+    if (cmd_id == 5 && msg.data_length_code >= 2) {
+        // CAN_PACKET_FILL_RX_BUFFER
+        size_t offset = msg.data[0];
+        size_t chunk_len = (size_t)msg.data_length_code - 1;
+        if (offset + chunk_len <= CAN_RX_BUF_SIZE) {
+            memcpy(s_can_rx_buf + offset, &msg.data[1], chunk_len);
+        }
+        return false;
+    } else if (cmd_id == 6 && msg.data_length_code >= 3) {
+        // CAN_PACKET_FILL_RX_BUFFER_LONG
+        size_t offset = ((size_t)msg.data[0] << 8) | msg.data[1];
+        size_t chunk_len = (size_t)msg.data_length_code - 2;
+        if (offset + chunk_len <= CAN_RX_BUF_SIZE) {
+            memcpy(s_can_rx_buf + offset, &msg.data[2], chunk_len);
+        }
+        return false;
+    } else if (cmd_id == 7 && msg.data_length_code >= 6) {
+        // CAN_PACKET_PROCESS_RX_BUFFER
+        uint16_t rx_len = ((uint16_t)msg.data[2] << 8) | msg.data[3];
+        uint16_t rx_crc = ((uint16_t)msg.data[4] << 8) | msg.data[5];
+        if (rx_len > 0 && rx_len <= CAN_RX_BUF_SIZE && crc16(s_can_rx_buf, rx_len) == rx_crc) {
+            *out_payload = s_can_rx_buf;
+            *out_len = rx_len;
+            return true;
+        }
+        return false;
+    } else if (cmd_id == 8 && msg.data_length_code >= 3) {
+        // CAN_PACKET_PROCESS_SHORT_BUFFER
+        size_t rx_len = (size_t)msg.data_length_code - 2;
+        if (rx_len <= 6) {
+            memcpy(s_can_rx_buf, &msg.data[2], rx_len);
+            *out_payload = s_can_rx_buf;
+            *out_len = rx_len;
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+// Stream parser for VESC UART-framed packets arriving over TCP/USB Bridge (tunneled to CAN)
+struct VescBridgeFramer {
+    uint8_t  buf[CAN_RX_BUF_SIZE + 8];
+    size_t   idx = 0;
+    uint32_t last_byte_ms = 0;
+
+    void reset() {
+        idx = 0;
+        last_byte_ms = 0;
+    }
+
+    bool feed(uint8_t b, uint32_t now_ms, const uint8_t **out_payload, size_t *out_len) {
+        if (idx > 0 && (uint32_t)(now_ms - last_byte_ms) > 500) {
+            idx = 0;
+        }
+        last_byte_ms = now_ms;
+
+        if (idx == 0) {
+            if (b == 0x02 || b == 0x03) {
+                buf[idx++] = b;
+            }
+            return false;
+        }
+
+        if (idx >= sizeof(buf)) {
+            idx = 0;
+            return false;
+        }
+        buf[idx++] = b;
+
+        size_t hdr_len = 0;
+        size_t payload_len = 0;
+        if (buf[0] == 0x02) {
+            if (idx < 2) return false;
+            hdr_len = 2;
+            payload_len = buf[1];
+        } else if (buf[0] == 0x03) {
+            if (idx < 3) return false;
+            hdr_len = 3;
+            payload_len = ((size_t)buf[1] << 8) | buf[2];
+        } else {
+            idx = 0;
+            return false;
+        }
+
+        if (payload_len == 0 || payload_len > CAN_RX_BUF_SIZE) {
+            idx = 0;
+            return false;
+        }
+
+        size_t total_len = hdr_len + payload_len + 3; // hdr + payload + crc16 + 0x03
+        if (idx < total_len) {
+            return false;
+        }
+
+        bool ok = false;
+        if (buf[total_len - 1] == 0x03) {
+            uint16_t rx_crc = ((uint16_t)buf[total_len - 3] << 8) | buf[total_len - 2];
+            if (crc16(&buf[hdr_len], payload_len) == rx_crc) {
+                *out_payload = &buf[hdr_len];
+                *out_len = payload_len;
+                ok = true;
+            }
+        }
+        idx = 0;
+        return ok;
+    }
+};
+
+static size_t frameVescUartPacket(const uint8_t *payload, size_t payload_len, uint8_t *out_buf, size_t out_cap) {
+    if (!payload || payload_len == 0 || payload_len > CAN_RX_BUF_SIZE) return 0;
+    uint16_t crc = crc16(payload, payload_len);
+    size_t pos = 0;
+    if (payload_len <= 255) {
+        if (payload_len + 5 > out_cap) return 0;
+        out_buf[pos++] = 0x02;
+        out_buf[pos++] = (uint8_t)payload_len;
+    } else {
+        if (payload_len + 6 > out_cap) return 0;
+        out_buf[pos++] = 0x03;
+        out_buf[pos++] = (uint8_t)((payload_len >> 8) & 0xFF);
+        out_buf[pos++] = (uint8_t)(payload_len & 0xFF);
+    }
+    memcpy(out_buf + pos, payload, payload_len);
+    pos += payload_len;
+    out_buf[pos++] = (uint8_t)((crc >> 8) & 0xFF);
+    out_buf[pos++] = (uint8_t)(crc & 0xFF);
+    out_buf[pos++] = 0x03;
+    return pos;
+}
+
+static void dispatchBridgePayloadToCan(const uint8_t *payload, size_t payload_len) {
+    if (!payload || payload_len == 0) return;
+    if (payload[0] == 0x22 && payload_len >= 3) {
+        // COMM_FORWARD_CAN: tunnel inner packet directly to requested CAN target so reply returns to ESP_CAN_ID
+        uint8_t target_id = payload[1];
+        sendVescCanBuffer(target_id, payload + 2, payload_len - 2, VescHandler::ESP_CAN_ID, 0);
+    } else {
+        sendVescCanBuffer(s_primary_vesc_id, payload, payload_len, VescHandler::ESP_CAN_ID, 0);
+    }
+}
+
+static VescBridgeFramer s_usb_bridge_framer;
+static VescBridgeFramer s_wifi_bridge_framer;
+static uint8_t s_bridge_tx_frame[CAN_RX_BUF_SIZE + 8];
 
 void VescHandler::initCanBus() {
     if (s_can_initialized) return;
@@ -406,7 +709,8 @@ void VescHandler::initCanBus() {
         err = twai_start();
         if (err == ESP_OK) {
             s_can_initialized = true;
-            Serial.println("[VESC_CAN] ESP32-S3 TWAI CAN driver started at 500kbit/s (TX: GPIO 20, RX: GPIO 19).");
+            Serial.printf("[VESC_CAN] ESP32-S3 TWAI CAN started at 500kbit/s (TX: GPIO 20, RX: GPIO 19, Local ID: %u).\n",
+                          (unsigned)ESP_CAN_ID);
         } else {
             Serial.printf("[VESC_CAN ERROR] twai_start failed: 0x%x\n", err);
         }
@@ -418,50 +722,61 @@ void VescHandler::initCanBus() {
 void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
     if (!s_can_initialized) return;
 
-    twai_status_info_t st;
-    if (twai_get_status_info(&st) == ESP_OK) {
-        if (st.state == TWAI_STATE_BUS_OFF) {
-            twai_initiate_recovery();
-        } else if (st.state == TWAI_STATE_STOPPED) {
-            twai_start();
-        }
-    }
+    ensureCanBusHealthy();
     uint32_t now = millis();
     static uint32_t s_last_can_rx_ms = 0;
     static uint32_t s_last_can_diag_ms = 0;
-    static uint32_t s_sec_last_rx_ms = 0;
+    static uint32_t s_last_can_req_ms = 0;
+    static uint8_t  s_can_poll_phase = 0;
     static bool s_has_imu_g = false;
+
+    // Interleaved 5 Hz (200ms) active polling for CAN telemetry blindspots (Fault Code & Throttle ADC)
+    if (!isBridgeActive() && (uint32_t)(now - s_last_can_req_ms) >= 200) {
+        s_last_can_req_ms = now;
+        if (s_can_poll_phase == 0) {
+            // Phase 0: COMM_GET_VALUES_SELECTIVE (0x32 / 50), mask = (1U << 15) for fault_code only (5B -> single short CAN frame!)
+            static const uint8_t req_fault[5] = { 0x32, 0x00, 0x00, 0x80, 0x00 };
+            sendVescCanBuffer(s_primary_vesc_id, req_fault, sizeof(req_fault), ESP_CAN_ID, 0);
+            s_can_poll_phase = 1;
+        } else {
+            // Phase 1: COMM_GET_DECODED_ADC (0x20 / 32) for throttle_pct & ADC1/ADC2 diagnostics
+            static const uint8_t req_adc[1] = { 0x20 };
+            sendVescCanBuffer(s_primary_vesc_id, req_adc, sizeof(req_adc), ESP_CAN_ID, 0);
+            s_can_poll_phase = 0;
+        }
+    }
 
     twai_message_t msg;
     int frames_read = 0;
-    while (twai_receive(&msg, pdMS_TO_TICKS(0)) == ESP_OK && frames_read < 32) {
+    while (twai_receive(&msg, pdMS_TO_TICKS(0)) == ESP_OK && frames_read < 48) {
         frames_read++;
         if (!msg.extd) continue;
 
         uint8_t controller_id = (uint8_t)(msg.identifier & 0xFF);
         uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
 
-        static bool s_has_primary = false;
-        static bool s_has_76 = false;
-        static bool s_first_frame_logged = false;
+        // Handle CAN RX buffer replies addressed specifically to our ESP32 node ID (ESP_CAN_ID)
+        if (controller_id == ESP_CAN_ID) {
+            const uint8_t *rx_payload = nullptr;
+            size_t rx_len = 0;
+            if (processCanRxFrameForEsp(msg, &rx_payload, &rx_len)) {
+                parseVescPayload(rx_payload, rx_len, telemetry);
+                telemetry.vesc_connected = true;
+                s_last_can_rx_ms = now;
+            }
+            continue;
+        }
 
+        static bool s_first_frame_logged = false;
         if (!s_first_frame_logged) {
             s_first_frame_logged = true;
             Serial.printf("[VESC_CAN] First frame RX -> ID: %u, Cmd: %u, DLC: %u\n", controller_id, cmd_id, msg.data_length_code);
         }
 
-        if (controller_id == 76) {
-            s_has_76 = true;
-            s_primary_vesc_id = 76;
-            s_has_primary = true;
-        } else if (!s_has_76 && !s_has_primary && controller_id != 77) {
-            s_primary_vesc_id = controller_id;
-            s_has_primary = true;
-            Serial.printf("[VESC_CAN] Auto-detected primary VESC ID: %u\n", s_primary_vesc_id);
-        }
+        updateDetectedCanIds(controller_id, cmd_id, now);
 
         bool is_primary = (controller_id == s_primary_vesc_id);
-        bool is_secondary = (!is_primary && (controller_id == 77 || (s_primary_vesc_id == 76 && controller_id == 1) || (s_primary_vesc_id == 1 && controller_id == 2)));
+        bool is_secondary = (s_has_secondary && !is_primary && controller_id == s_secondary_vesc_id);
 
         if (is_secondary) {
             s_sec_last_rx_ms = now;
@@ -597,10 +912,11 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 }
                 int32_t rel_wh = wh_raw - _wh_trip_offset;
                 if (rel_wh < 0) rel_wh = 0;
-                telemetry.stats.trip_wh = (float)rel_wh / 10000.0f;
+                // Keep VESC-reported Wh separate so BatteryManager remains the single source of truth for telemetry.stats.trip_wh
+                _vesc_trip_wh = (float)rel_wh / 10000.0f;
             }
         }
-        else if (cmd_id == 65 && msg.data_length_code >= 4) { // Custom VESC IMU telemetry (Incline & Accel, distinct from GNSS_LAT=60)
+        else if (cmd_id == 65 && msg.data_length_code >= 4) { // Custom VESC IMU telemetry (Incline & Accel)
             int16_t roll_raw  = (int16_t)(((uint16_t)msg.data[0] << 8) | msg.data[1]);
             int16_t pitch_raw = (int16_t)(((uint16_t)msg.data[2] << 8) | msg.data[3]);
             (void)roll_raw;
@@ -619,6 +935,13 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         }
     }
 
+    // Check on-demand MCCONF pull timeout
+    if (_sync_status == SYNC_REQUESTED && (uint32_t)(now - _mcconf_req_ms) > 2500) {
+        _sync_status = SYNC_FAILED;
+        _sync_ms = now;
+        Serial.println("[VESC_CAN] COMM_GET_MCCONF request timed out.");
+    }
+
     if (now - s_last_can_rx_ms > 1500) {
         telemetry.vesc_connected = false;
         telemetry.speed_kmh = 0.0f;
@@ -632,9 +955,12 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
 
     if (now - s_last_can_diag_ms >= 2000) {
         s_last_can_diag_ms = now;
-        Serial.printf("[VESC_CAN] Link: %s | V_in: %.1fV | Spd: %.1f km/h | MotI: %.1fA | BatI: %.1fA | ESC: %.1fC | Mot: %.1fC\n",
+        Serial.printf("[VESC_CAN] Link: %s | ID: %u | V_in: %.1fV | Spd: %.1f km/h | Thr: %.0f%% | Fault: %u | MotI: %.1fA | BatI: %.1fA | ESC: %.1fC | Mot: %.1fC\n",
                       telemetry.vesc_connected ? "CONNECTED" : "NO_DATA",
-                      telemetry.voltage, telemetry.speed_kmh, telemetry.phase_amps, telemetry.current_amps,
+                      (unsigned)s_primary_vesc_id,
+                      telemetry.voltage, telemetry.speed_kmh, telemetry.throttle_pct,
+                      (unsigned)telemetry.fault_code,
+                      telemetry.phase_amps, telemetry.current_amps,
                       telemetry.temp_esc, telemetry.temp_motor);
     }
 
@@ -741,14 +1067,12 @@ void VescHandler::pollRealVesc(DashTelemetry &telemetry) {
     static size_t rx_index = 0;
     static uint32_t last_rx_byte_ms = 0;
 
-    static uint32_t total_rx_bytes = 0;
     static uint32_t last_diag_ms = 0;
 
     if (!_transport) return;
 
     while (_transport->available()) {
         uint8_t b = (uint8_t)_transport->read();
-        total_rx_bytes++;
         last_rx_byte_ms = now;
 
         if (rx_index == 0) {
@@ -882,9 +1206,11 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
     if (buffer[0] == 0x02) {
         payload = &buffer[2];
         payload_len = buffer[1];
+        if (len < payload_len + 5) return false;
     } else if (buffer[0] == 0x03) {
         payload = &buffer[3];
         payload_len = ((size_t)buffer[1] << 8) | buffer[2];
+        if (len < payload_len + 6) return false;
     } else {
         return false;
     }
@@ -895,8 +1221,46 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
         return false;
     }
 
+    return parseVescPayload(payload, payload_len, telemetry);
+}
+
+bool VescHandler::parseVescPayload(const uint8_t *payload, size_t payload_len, DashTelemetry &telemetry) {
+    if (!payload || payload_len < 1) return false;
+
     telemetry.vesc_connected = true;
     uint8_t cmd_id = payload[0];
+
+    // 0. Selective Telemetry Packet (COMM_GET_VALUES_SELECTIVE = 0x32 / 50)
+    // Used over CAN to poll fault_code (bit 15) cleanly in a single short frame
+    if (cmd_id == 0x32) {
+        if (payload_len < 6) return false;
+        uint32_t mask = ((uint32_t)payload[1] << 24) |
+                        ((uint32_t)payload[2] << 16) |
+                        ((uint32_t)payload[3] << 8)  |
+                        (uint32_t)payload[4];
+        if (mask & (1U << 15)) {
+            static const uint8_t bit_sizes[15] = {
+                2, 2, 4, 4, 4, 4, 2, 4, 2, 4, 4, 4, 4, 4, 4
+            };
+            size_t offset = 5;
+            for (int b = 0; b < 15; b++) {
+                if (mask & (1U << b)) offset += bit_sizes[b];
+            }
+            if (offset < payload_len) {
+                uint8_t fault_code = payload[offset];
+                telemetry.fault_code = fault_code;
+                if (fault_code != 0) {
+                    FaultManager::instance().recordFault(
+                        fault_code, telemetry.voltage, telemetry.current_amps,
+                        telemetry.phase_amps, telemetry.temp_esc, telemetry.temp_motor,
+                        telemetry.uptime_sec);
+                } else {
+                    FaultManager::instance().setActiveFault(0);
+                }
+            }
+        }
+        return true;
+    }
 
     // 1. Decoded ADC Packet (COMM_GET_DECODED_ADC = 0x20 / 32)
     if (cmd_id == 0x20) {
@@ -921,23 +1285,24 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
             }
             telemetry.throttle_pct = pct;
 
-            // Motor brake lever processing (ADC2 when throttle is ADC1, or ADC1 when throttle is ADC2)
-            float brake_pct = (Settings.get().throttle_adc_channel == 0 && payload_len >= 13) ? _last_adc2_pct : _last_adc1_pct;
-            if (brake_pct < 0.0f) brake_pct = 0.0f;
-            if (brake_pct > 100.0f) brake_pct = 100.0f;
+            // Motor brake lever processing via UART transport only (on CAN mode, VESC handles its own ADC brake)
+            if (_transport != nullptr) {
+                float brake_pct = (Settings.get().throttle_adc_channel == 0 && payload_len >= 13) ? _last_adc2_pct : _last_adc1_pct;
+                if (brake_pct < 0.0f) brake_pct = 0.0f;
+                if (brake_pct > 100.0f) brake_pct = 100.0f;
 
-            if (brake_pct > 3.0f) {
-                if (Settings.get().brake_mode == 0) {
+                if (brake_pct > 3.0f) {
+                    if (Settings.get().brake_mode == 0) {
+                        sendCurrentBrake(0.0f);
+                    } else if (Settings.get().brake_mode == 1) {
+                        sendCurrentBrake((brake_pct / 100.0f) * 12.0f);
+                    } else {
+                        float max_pha = Settings.get().max_phase_amps > 0 ? (float)Settings.get().max_phase_amps * 0.75f : 45.0f;
+                        sendCurrentBrake((brake_pct / 100.0f) * max_pha);
+                    }
+                } else if (telemetry.throttle_pct <= 0.5f && Settings.get().brake_mode == 0) {
                     sendCurrentBrake(0.0f);
-                } else if (Settings.get().brake_mode == 1) {
-                    sendCurrentBrake((brake_pct / 100.0f) * 12.0f);
-                } else {
-                    float max_pha = Settings.get().max_phase_amps > 0 ? (float)Settings.get().max_phase_amps * 0.75f : 45.0f;
-                    sendCurrentBrake((brake_pct / 100.0f) * max_pha);
                 }
-            } else if (telemetry.throttle_pct <= 0.5f && Settings.get().brake_mode == 0) {
-                // Throttle released in freewheel mode: clamp electronic brake current commands to 0A
-                sendCurrentBrake(0.0f);
             }
         }
         return true;
@@ -945,7 +1310,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
 
     // 2. Setup Telemetry Packet with True Ground Speed (COMM_GET_VALUES_SETUP = 0x2F / 47)
     if (cmd_id == 0x2F) {
-        if (len < 50) return false;
+        if (payload_len < 45) return false;
         int idx = 1;
         int16_t temp_mos = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
         int16_t temp_mot = (int16_t)((payload[idx] << 8) | payload[idx + 1]); idx += 2;
@@ -1012,7 +1377,7 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
 
     // 3. Fallback: Standard Telemetry Packet (COMM_GET_VALUES = 0x04)
     if (cmd_id == 0x04) {
-        if (len < 60) return false;
+        if (payload_len < 54) return false;
 
         // Unpack big-endian payload
         int idx = 1;
@@ -1126,10 +1491,18 @@ bool VescHandler::parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &te
 
 void VescHandler::requestMcconf() {
     static const uint8_t req[] = { 0x02, 0x01, 0x0E, 0xE1, 0xCE, 0x03 };
-    if (_transport) _transport->write(req, sizeof(req));
+    if (_transport) {
+        _transport->write(req, sizeof(req));
+    }
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    else if (s_can_initialized) {
+        static const uint8_t req_can[1] = { 0x0E };
+        sendVescCanBuffer(s_primary_vesc_id, req_can, sizeof(req_can), ESP_CAN_ID, 0);
+    }
+#endif
     _sync_status = SYNC_REQUESTED;
     _mcconf_req_ms = millis();
-    Serial.println("[VESC_UART] Sent COMM_GET_MCCONF request to VESC.");
+    Serial.println("[VESC] Sent COMM_GET_MCCONF request to VESC.");
 }
 
 #if !defined(LGFX_LINUX_FB) && !defined(SIMULATOR)
@@ -1139,7 +1512,7 @@ static WiFiClient _wifi_client;
 #endif
 
 // ==============================================================================
-// Transparent USB CDC <-> UART Passthrough Bridge for VESC Tool
+// Transparent USB CDC <-> UART / CAN Bridge for VESC Tool
 // ==============================================================================
 void VescHandler::enterBridgeMode() {
     _bridge_active = true;
@@ -1149,9 +1522,12 @@ void VescHandler::enterBridgeMode() {
     // Ensure 4KB queues for high-volume configuration bursts (e.g. COMM_SET_MCCONF)
     Serial.setRxBufferSize(4096);
     Serial.setTxBufferSize(4096);
-#if !defined(NATIVE_SIMULATOR)
+#if !defined(NATIVE_SIMULATOR) && !VESC_USE_CAN_BUS
     VESC_UART_PORT.setRxBufferSize(4096);
     VESC_UART_PORT.setTxBufferSize(4096);
+#endif
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    s_usb_bridge_framer.reset();
 #endif
 
     // Allow in-flight telemetry frames to conclude, then flush both pipelines
@@ -1164,39 +1540,89 @@ void VescHandler::enterBridgeMode() {
 
 void VescHandler::exitBridgeMode() {
     _bridge_active = false;
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    s_usb_bridge_framer.reset();
+#endif
     _last_poll_ms = millis();
 }
 
 void VescHandler::updateUsbBridge() {
-    if (!_bridge_active || !_transport) return;
+    if (!_bridge_active) return;
 
-    // 1. Forward USB CDC (PC / VESC Tool) -> Flipsky 75100 VESC Transport
+    if (_transport) {
+        // UART Bridge Path: Transparent byte-stream passthrough
+        while (Serial.available() > 0) {
+            uint8_t buf[512];
+            size_t n = Serial.read(buf, sizeof(buf));
+            if (n > 0) {
+                _transport->write(buf, n);
+                _bridge_pc_to_vesc += n;
+            } else {
+                break;
+            }
+        }
+
+        while (_transport->available() > 0) {
+            uint8_t buf[512];
+            size_t n = _transport->readBytes(buf, sizeof(buf));
+            if (n > 0) {
+                Serial.write(buf, n);
+                _bridge_vesc_to_pc += n;
+            } else {
+                break;
+            }
+        }
+        return;
+    }
+
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    // CAN Bridge Path: Bidirectional VESC UART-frame <-> CAN RX buffer tunneling
+    if (!s_can_initialized) return;
+    ensureCanBusHealthy();
+    uint32_t now = millis();
+
+    // 1. Parse framed VESC packets from USB Serial -> transmit to VESC over CAN
     while (Serial.available() > 0) {
-        uint8_t buf[512];
+        uint8_t buf[256];
         size_t n = Serial.read(buf, sizeof(buf));
-        if (n > 0) {
-            _transport->write(buf, n);
-            _bridge_pc_to_vesc += n;
-        } else {
-            break;
+        if (n == 0) break;
+        _bridge_pc_to_vesc += n;
+        for (size_t i = 0; i < n; i++) {
+            const uint8_t *payload = nullptr;
+            size_t payload_len = 0;
+            if (s_usb_bridge_framer.feed(buf[i], now, &payload, &payload_len)) {
+                dispatchBridgePayloadToCan(payload, payload_len);
+            }
         }
     }
 
-    // 2. Forward Flipsky 75100 VESC Transport -> USB CDC (PC / VESC Tool)
-    while (_transport->available() > 0) {
-        uint8_t buf[512];
-        size_t n = _transport->readBytes(buf, sizeof(buf));
-        if (n > 0) {
-            Serial.write(buf, n);
-            _bridge_vesc_to_pc += n;
+    // 2. Receive CAN buffer replies addressed to ESP_CAN_ID -> re-frame & write to USB Serial
+    twai_message_t msg;
+    int frames_read = 0;
+    while (twai_receive(&msg, pdMS_TO_TICKS(0)) == ESP_OK && frames_read < 64) {
+        frames_read++;
+        if (!msg.extd) continue;
+        uint8_t controller_id = (uint8_t)(msg.identifier & 0xFF);
+        uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
+        if (controller_id == ESP_CAN_ID) {
+            const uint8_t *rx_payload = nullptr;
+            size_t rx_len = 0;
+            if (processCanRxFrameForEsp(msg, &rx_payload, &rx_len)) {
+                size_t framed_len = frameVescUartPacket(rx_payload, rx_len, s_bridge_tx_frame, sizeof(s_bridge_tx_frame));
+                if (framed_len > 0) {
+                    Serial.write(s_bridge_tx_frame, framed_len);
+                    _bridge_vesc_to_pc += framed_len;
+                }
+            }
         } else {
-            break;
+            updateDetectedCanIds(controller_id, cmd_id, now);
         }
     }
+#endif
 }
 
 // ==============================================================================
-// Transparent Wireless Wi-Fi TCP <-> UART Passthrough Bridge for VESC Tool
+// Transparent Wireless Wi-Fi TCP <-> UART / CAN Bridge for VESC Tool
 // ==============================================================================
 void VescHandler::enterWifiBridgeMode() {
     _wifi_bridge_active = true;
@@ -1205,10 +1631,13 @@ void VescHandler::enterWifiBridgeMode() {
     _bridge_wifi_to_vesc = 0;
     _bridge_vesc_to_wifi = 0;
 
-    // Ensure 4KB UART queues for high-volume configuration bursts
-#if !defined(NATIVE_SIMULATOR)
+    // Ensure 4KB UART queues only when UART transport is in use
+#if !defined(NATIVE_SIMULATOR) && !VESC_USE_CAN_BUS
     VESC_UART_PORT.setRxBufferSize(4096);
     VESC_UART_PORT.setTxBufferSize(4096);
+#endif
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    s_wifi_bridge_framer.reset();
 #endif
 
     // Allow in-flight telemetry to conclude, then flush buffers
@@ -1228,7 +1657,8 @@ void VescHandler::enterWifiBridgeMode() {
     _wifi_server.begin(6510);
     _wifi_server.setNoDelay(true);
     OtaManager::instance().begin();
-    Serial.println("[WIFI_BRIDGE] SoftAP started: SSID='VESC-DASH-AP', IP=192.168.4.1, Port=6510");
+    Serial.printf("[WIFI_BRIDGE] SoftAP started: SSID='VESC-DASH-AP', IP=192.168.4.1, Port=6510 (Mode: %s)\n",
+                  _transport ? "UART" : "CAN_TUNNEL");
 #endif
 }
 
@@ -1236,6 +1666,9 @@ void VescHandler::exitWifiBridgeMode() {
     _wifi_bridge_active = false;
     _wifi_client_connected = false;
     _wifi_client_ip[0] = '\0';
+#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
+    s_wifi_bridge_framer.reset();
+#endif
     _last_poll_ms = millis();
 
 #if !defined(LGFX_LINUX_FB) && !defined(SIMULATOR)
@@ -1259,12 +1692,15 @@ void VescHandler::updateWifiBridge() {
 
     if (_wifi_server.hasClient()) {
         if (_wifi_client && _wifi_client.connected()) {
-            WiFiClient rej = _wifi_server.available();
+            WiFiClient rej = _wifi_server.accept();
             rej.stop();
         } else {
-            _wifi_client = _wifi_server.available();
+            _wifi_client = _wifi_server.accept();
             _wifi_client.setNoDelay(true);
             _wifi_client_connected = true;
+#if VESC_USE_CAN_BUS
+            s_wifi_bridge_framer.reset();
+#endif
             IPAddress ip = _wifi_client.remoteIP();
             snprintf(_wifi_client_ip, sizeof(_wifi_client_ip), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
             Serial.printf("[WIFI_BRIDGE] Client connected: %s\n", _wifi_client_ip);
@@ -1274,20 +1710,19 @@ void VescHandler::updateWifiBridge() {
     if (_wifi_client && _wifi_client.connected()) {
         _wifi_client_connected = true;
 
-        // 1. Forward TCP -> VESC UART (bulk read/write loop)
-        while (_wifi_client.available() > 0) {
-            uint8_t buf[512];
-            int bytes_read = _wifi_client.read(buf, sizeof(buf));
-            if (bytes_read > 0) {
-                if (_transport) _transport->write(buf, bytes_read);
-                _bridge_wifi_to_vesc += bytes_read;
-            } else {
-                break;
-            }
-        }
-
-        // 2. Forward VESC UART -> TCP (bulk read/write loop)
         if (_transport) {
+            // UART Bridge Path
+            while (_wifi_client.available() > 0) {
+                uint8_t buf[512];
+                int bytes_read = _wifi_client.read(buf, sizeof(buf));
+                if (bytes_read > 0) {
+                    _transport->write(buf, bytes_read);
+                    _bridge_wifi_to_vesc += bytes_read;
+                } else {
+                    break;
+                }
+            }
+
             while (_transport->available() > 0) {
                 uint8_t buf[512];
                 size_t n = _transport->readBytes(buf, sizeof(buf));
@@ -1299,10 +1734,58 @@ void VescHandler::updateWifiBridge() {
                 }
             }
         }
+#if VESC_USE_CAN_BUS
+        else if (s_can_initialized) {
+            // CAN Bridge Path: Bidirectional VESC TCP-frame <-> CAN RX buffer tunneling
+            ensureCanBusHealthy();
+            uint32_t now = millis();
+
+            // 1. Parse framed VESC packets from TCP client -> transmit over CAN to VESC
+            while (_wifi_client.available() > 0) {
+                uint8_t buf[256];
+                int bytes_read = _wifi_client.read(buf, sizeof(buf));
+                if (bytes_read <= 0) break;
+                _bridge_wifi_to_vesc += (uint32_t)bytes_read;
+                for (int i = 0; i < bytes_read; i++) {
+                    const uint8_t *payload = nullptr;
+                    size_t payload_len = 0;
+                    if (s_wifi_bridge_framer.feed(buf[i], now, &payload, &payload_len)) {
+                        dispatchBridgePayloadToCan(payload, payload_len);
+                    }
+                }
+            }
+
+            // 2. Receive CAN buffer replies addressed to ESP_CAN_ID -> re-frame & send over TCP
+            twai_message_t msg;
+            int frames_read = 0;
+            while (twai_receive(&msg, pdMS_TO_TICKS(0)) == ESP_OK && frames_read < 64) {
+                frames_read++;
+                if (!msg.extd) continue;
+                uint8_t controller_id = (uint8_t)(msg.identifier & 0xFF);
+                uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
+                if (controller_id == ESP_CAN_ID) {
+                    const uint8_t *rx_payload = nullptr;
+                    size_t rx_len = 0;
+                    if (processCanRxFrameForEsp(msg, &rx_payload, &rx_len)) {
+                        size_t framed_len = frameVescUartPacket(rx_payload, rx_len, s_bridge_tx_frame, sizeof(s_bridge_tx_frame));
+                        if (framed_len > 0) {
+                            _wifi_client.write(s_bridge_tx_frame, framed_len);
+                            _bridge_vesc_to_wifi += framed_len;
+                        }
+                    }
+                } else {
+                    updateDetectedCanIds(controller_id, cmd_id, now);
+                }
+            }
+        }
+#endif
     } else {
         if (_wifi_client_connected) {
             _wifi_client_connected = false;
             _wifi_client_ip[0] = '\0';
+#if VESC_USE_CAN_BUS
+            s_wifi_bridge_framer.reset();
+#endif
             if (_wifi_client) {
                 _wifi_client.stop();
             }
@@ -1319,50 +1802,6 @@ void VescHandler::updateBridge() {
         updateWifiBridge();
     }
 }
-
-#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-static void sendVescCanBuffer(uint8_t controller_id, const uint8_t *data, size_t len) {
-    if (!s_can_initialized || len == 0) return;
-
-    if (len <= 6) {
-        twai_message_t msg;
-        msg.extd = 1;
-        msg.identifier = (8 << 8) | controller_id; // CAN_PACKET_PROCESS_SHORT_BUFFER (ID 8)
-        msg.data_length_code = (uint8_t)(len + 2);
-        msg.data[0] = 0; // source controller ID
-        msg.data[1] = 0; // send flag (0 = no reply)
-        memcpy(&msg.data[2], data, len);
-        twai_transmit(&msg, pdMS_TO_TICKS(10));
-    } else {
-        // Multi-frame send: CAN_PACKET_FILL_RX_BUFFER (ID 5)
-        for (size_t i = 0; i < len; i += 7) {
-            size_t chunk_len = (len - i > 7) ? 7 : (len - i);
-            twai_message_t msg;
-            msg.extd = 1;
-            msg.identifier = (5 << 8) | controller_id; // CAN_PACKET_FILL_RX_BUFFER
-            msg.data_length_code = (uint8_t)(chunk_len + 1);
-            msg.data[0] = (uint8_t)i; // index offset
-            memcpy(&msg.data[1], data + i, chunk_len);
-            twai_transmit(&msg, pdMS_TO_TICKS(10));
-            delay(1);
-        }
-
-        // Process frame: CAN_PACKET_PROCESS_RX_BUFFER (ID 7)
-        uint16_t crc = crc16(data, len);
-        twai_message_t proc;
-        proc.extd = 1;
-        proc.identifier = (7 << 8) | controller_id; // CAN_PACKET_PROCESS_RX_BUFFER
-        proc.data_length_code = 6;
-        proc.data[0] = 0; // source controller ID
-        proc.data[1] = 0; // send flag
-        proc.data[2] = (uint8_t)(len >> 8);
-        proc.data[3] = (uint8_t)(len & 0xFF);
-        proc.data[4] = (uint8_t)(crc >> 8);
-        proc.data[5] = (uint8_t)(crc & 0xFF);
-        twai_transmit(&proc, pdMS_TO_TICKS(10));
-    }
-}
-#endif
 
 void VescHandler::sendCurrent(float current_amps) {
     UartLock lock;
@@ -1393,31 +1832,14 @@ void VescHandler::sendCurrent(float current_amps) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        // CAN_PACKET_SET_CURRENT (ID 1)
-        twai_message_t can_cur;
-        can_cur.extd = 1;
-        can_cur.identifier = (1 << 8) | s_primary_vesc_id;
+        // CAN_PACKET_SET_CURRENT (ID 1) -> Primary VESC (+ detected secondary only)
+        twai_message_t can_cur = {};
         can_cur.data_length_code = 4;
         can_cur.data[0] = payload[1];
         can_cur.data[1] = payload[2];
         can_cur.data[2] = payload[3];
         can_cur.data[3] = payload[4];
-        twai_transmit(&can_cur, pdMS_TO_TICKS(5));
-
-        if (s_primary_vesc_id != 0) {
-            can_cur.identifier = (1 << 8) | 0;
-            twai_transmit(&can_cur, pdMS_TO_TICKS(5));
-        }
-        if (s_primary_vesc_id != 1) {
-            can_cur.identifier = (1 << 8) | 1;
-            twai_transmit(&can_cur, pdMS_TO_TICKS(5));
-        }
-
-        // Also transmit via COMM_SET_CURRENT (Short buffer ID 8) for maximum compatibility
-        sendVescCanBuffer(s_primary_vesc_id, payload, 5);
-        if (s_primary_vesc_id != 0) {
-            sendVescCanBuffer(0, payload, 5);
-        }
+        twaiTransmitToDetected(can_cur, 1, pdMS_TO_TICKS(5));
     }
 #endif
 }
@@ -1450,31 +1872,14 @@ void VescHandler::sendDuty(float duty) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        // CAN_PACKET_SET_DUTY (ID 0)
-        twai_message_t can_duty;
-        can_duty.extd = 1;
-        can_duty.identifier = (0 << 8) | s_primary_vesc_id;
+        // CAN_PACKET_SET_DUTY (ID 0) -> Primary VESC (+ detected secondary only)
+        twai_message_t can_duty = {};
         can_duty.data_length_code = 4;
         can_duty.data[0] = payload[1];
         can_duty.data[1] = payload[2];
         can_duty.data[2] = payload[3];
         can_duty.data[3] = payload[4];
-        twai_transmit(&can_duty, pdMS_TO_TICKS(5));
-
-        if (s_primary_vesc_id != 0) {
-            can_duty.identifier = (0 << 8) | 0;
-            twai_transmit(&can_duty, pdMS_TO_TICKS(5));
-        }
-        if (s_primary_vesc_id != 1) {
-            can_duty.identifier = (0 << 8) | 1;
-            twai_transmit(&can_duty, pdMS_TO_TICKS(5));
-        }
-
-        // Also transmit via COMM_SET_DUTY (Short buffer ID 8)
-        sendVescCanBuffer(s_primary_vesc_id, payload, 5);
-        if (s_primary_vesc_id != 0) {
-            sendVescCanBuffer(0, payload, 5);
-        }
+        twaiTransmitToDetected(can_duty, 0, pdMS_TO_TICKS(5));
     }
 #endif
 }
@@ -1518,30 +1923,14 @@ void VescHandler::sendCurrentBrake(float brake_amps) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        // CAN_PACKET_SET_CURRENT_BRAKE (ID 2)
-        twai_message_t can_brake;
-        can_brake.extd = 1;
-        can_brake.identifier = (2 << 8) | s_primary_vesc_id;
+        // CAN_PACKET_SET_CURRENT_BRAKE (ID 2) -> Primary VESC (+ detected secondary only)
+        twai_message_t can_brake = {};
         can_brake.data_length_code = 4;
         can_brake.data[0] = payload[1];
         can_brake.data[1] = payload[2];
         can_brake.data[2] = payload[3];
         can_brake.data[3] = payload[4];
-        twai_transmit(&can_brake, pdMS_TO_TICKS(5));
-
-        if (s_primary_vesc_id != 0) {
-            can_brake.identifier = (2 << 8) | 0;
-            twai_transmit(&can_brake, pdMS_TO_TICKS(5));
-        }
-        if (s_primary_vesc_id != 1) {
-            can_brake.identifier = (2 << 8) | 1;
-            twai_transmit(&can_brake, pdMS_TO_TICKS(5));
-        }
-
-        sendVescCanBuffer(s_primary_vesc_id, payload, 5);
-        if (s_primary_vesc_id != 0) {
-            sendVescCanBuffer(0, payload, 5);
-        }
+        twaiTransmitToDetected(can_brake, 2, pdMS_TO_TICKS(5));
     }
 #endif
 }
@@ -1568,10 +1957,7 @@ void VescHandler::sendTerminalCommand(const char *str) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(s_primary_vesc_id, t_payload, slen + 1);
-        if (s_primary_vesc_id != 0) {
-            sendVescCanBuffer(0, t_payload, slen + 1);
-        }
+        sendVescCanBufferToDetected(t_payload, slen + 1, ESP_CAN_ID, 2);
     }
 #endif
 #endif
@@ -1602,10 +1988,7 @@ void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
-        if (s_primary_vesc_id != 0) {
-            sendVescCanBuffer(0, payload, slen + 1);
-        }
+        sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
     }
 #endif
 #endif
@@ -1647,10 +2030,7 @@ void VescHandler::playFocTone(uint8_t channel, float freq, float voltage) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
-        if (s_primary_vesc_id != 0) {
-            sendVescCanBuffer(0, payload, slen + 1);
-        }
+        sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
     }
 #endif
 #endif
@@ -1687,10 +2067,7 @@ void VescHandler::sendFocPlayStop() {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
-        if (s_primary_vesc_id != 0) {
-            sendVescCanBuffer(0, payload, slen + 1);
-        }
+        sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
     }
 #endif
 #endif
@@ -1739,10 +2116,7 @@ void VescHandler::triggerFocHorn(bool active) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
         if (s_can_initialized) {
-            sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
-            if (s_primary_vesc_id != 0) {
-                sendVescCanBuffer(0, payload, slen + 1);
-            }
+            sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
         }
 #endif
 #endif
@@ -1780,7 +2154,7 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
             max_erpm = mech_rpm * (float)pole_pairs;
             if (max_erpm < 500.0f) max_erpm = 500.0f;
         } else {
-            max_erpm = 100000.0f; // Vollständig unbegrenzt (keine ERPM Drossel)
+            max_erpm = 100000.0f; // Vollstaendig unbegrenzt (keine ERPM Drossel)
         }
 
         // Sanity clamp power and currents for active driving
@@ -1790,56 +2164,13 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         if (max_battery_amps > 200.0f) max_battery_amps = 200.0f;
         if (max_phase_amps < 5.0f) max_phase_amps = 5.0f;
         if (max_phase_amps > 300.0f) max_phase_amps = 300.0f;
-
-        // Keep active UI settings in sync without uint8 overflow
-        Settings.get().max_speed_kmh    = (uint8_t)roundf(max_speed_kmh);
-        Settings.get().max_battery_amps = (uint16_t)roundf(max_battery_amps);
-        Settings.get().max_phase_amps   = (uint16_t)roundf(max_phase_amps);
     }
 
     Serial.printf("[VESC_CMD] Dynamic Limits -> Spd: %.1f km/h (ERPM: %.0f) | Pwr: %.0f W | Bat: %.1f A | Phase: %.1f A\n",
                   max_speed_kmh, max_erpm, max_power_watts, max_battery_amps, max_phase_amps);
 
 #if !SIMULATION_MODE || defined(NATIVE_SIMULATOR)
-    auto append_f32_auto = [](uint8_t *b, float number, int32_t *idx) {
-        if (fabsf(number) < 1.5e-38f) {
-            number = 0.0f;
-        }
-        int e = 0;
-        float sig = frexpf(number, &e);
-        float sig_abs = fabsf(sig);
-        uint32_t sig_i = 0;
-        if (sig_abs >= 0.5f) {
-            sig_i = (uint32_t)((sig_abs - 0.5f) * 2.0f * 8388608.0f);
-            e += 126;
-        }
-        uint32_t res = ((e & 0xFF) << 23) | (sig_i & 0x7FFFFF);
-        if (sig < 0) {
-            res |= (1U << 31);
-        }
-        b[(*idx)++] = (uint8_t)(res >> 24);
-        b[(*idx)++] = (uint8_t)(res >> 16);
-        b[(*idx)++] = (uint8_t)(res >> 8);
-        b[(*idx)++] = (uint8_t)(res);
-    };
-
     // 2. Official VESC COMM_SET_MCCONF_TEMP (Command ID 48 / 0x30)
-    // Structure expected by VESC firmware comm/commands.c:
-    // [0] = 48 (COMM_SET_MCCONF_TEMP)
-    // [1] = store (bool: 0 = false)
-    // [2] = forward_can (bool: 1 = true)
-    // [3] = ack (bool: 0 = false)
-    // [4] = divide_by_controllers (bool: 0 = false)
-    // [5..8]   = l_current_min_scale (float32 auto)
-    // [9..12]  = l_current_max_scale (float32 auto)
-    // [13..16] = l_min_erpm (float32 auto)
-    // [17..20] = l_max_erpm (float32 auto)
-    // [21..24] = l_min_duty (float32 auto)
-    // [25..28] = l_max_duty (float32 auto)
-    // [29..32] = l_watt_min (float32 auto)
-    // [33..36] = l_watt_max (float32 auto)
-    // [37..40] = l_in_current_min (float32 auto)
-    // [41..44] = l_in_current_max (float32 auto)
     uint8_t payload[45];
     int32_t p_idx = 0;
     payload[p_idx++] = 48; // COMM_SET_MCCONF_TEMP
@@ -1850,19 +2181,19 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
 
     float cur_scale = is_locked ? 0.0f : 1.0f;
     float cur_min_scale = (is_locked || Settings.get().brake_mode == 0) ? 0.0f : (Settings.get().brake_mode == 1 ? 0.25f : 1.0f);
-    append_f32_auto(payload, cur_min_scale, &p_idx); // l_current_min_scale
-    append_f32_auto(payload, cur_scale, &p_idx); // l_current_max_scale
-    append_f32_auto(payload, is_locked ? 0.0f : -max_erpm, &p_idx);
-    append_f32_auto(payload, is_locked ? 0.0f : max_erpm, &p_idx);
-    append_f32_auto(payload, is_locked ? 0.0f : 0.005f, &p_idx); // l_min_duty
-    append_f32_auto(payload, is_locked ? 0.0f : 0.95f, &p_idx);  // l_max_duty
-    append_f32_auto(payload, is_locked ? 0.0f : -max_power_watts, &p_idx);
-    append_f32_auto(payload, is_locked ? 0.0f : max_power_watts, &p_idx);
-    append_f32_auto(payload, is_locked ? 0.0f : -max_battery_amps, &p_idx);
-    append_f32_auto(payload, is_locked ? 0.0f : max_battery_amps, &p_idx);
+    buffer_append_float32_auto(payload, cur_min_scale, &p_idx); // l_current_min_scale
+    buffer_append_float32_auto(payload, cur_scale, &p_idx);     // l_current_max_scale
+    buffer_append_float32_auto(payload, is_locked ? 0.0f : -max_erpm, &p_idx);
+    buffer_append_float32_auto(payload, is_locked ? 0.0f : max_erpm, &p_idx);
+    buffer_append_float32_auto(payload, is_locked ? 0.0f : 0.005f, &p_idx); // l_min_duty
+    buffer_append_float32_auto(payload, is_locked ? 0.0f : 0.95f, &p_idx);  // l_max_duty
+    buffer_append_float32_auto(payload, is_locked ? 0.0f : -max_power_watts, &p_idx);
+    buffer_append_float32_auto(payload, is_locked ? 0.0f : max_power_watts, &p_idx);
+    buffer_append_float32_auto(payload, is_locked ? 0.0f : -max_battery_amps, &p_idx);
+    buffer_append_float32_auto(payload, is_locked ? 0.0f : max_battery_amps, &p_idx);
 
-    // Short packet: 0x02, len, payload..., crc_hi, crc_lo, 0x03
     if (_transport) {
+        // UART / Simulator Fallback Path
         uint8_t packet[55];
         packet[0] = 0x02;
         packet[1] = (uint8_t)p_idx;
@@ -1887,144 +2218,129 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         can_packet[5 + p_idx] = (uint8_t)(can_crc & 0xFF);
         can_packet[6 + p_idx] = 0x03;
         _transport->write(can_packet, p_idx + 7);
+
+        // Terminal fallback commands ONLY on UART transport (never spam over CAN!)
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "conf_set l_current_max %.1f", max_phase_amps);
+        sendTerminalCommand(cmd);
+        snprintf(cmd, sizeof(cmd), "conf_set l_in_current_max %.1f", max_battery_amps);
+        sendTerminalCommand(cmd);
+        snprintf(cmd, sizeof(cmd), "conf_set l_watt_max %.1f", max_power_watts);
+        sendTerminalCommand(cmd);
+        snprintf(cmd, sizeof(cmd), "conf_set l_max_erpm %.0f", max_erpm);
+        sendTerminalCommand(cmd);
+        snprintf(cmd, sizeof(cmd), "conf_set si_wheel_diameter %.4f", wheel_diam_in * 0.0254f);
+        sendTerminalCommand(cmd);
+
+        if (is_locked || Settings.get().brake_mode == 0) {
+            sendTerminalCommand("conf_set l_current_min 0.0");
+            sendTerminalCommand("conf_set l_in_current_min 0.0");
+            sendCurrentBrake(0.0f);
+        } else if (Settings.get().brake_mode == 1) {
+            sendTerminalCommand("conf_set l_current_min -12.0");
+            sendTerminalCommand("conf_set l_in_current_min -8.0");
+        } else {
+            // brake_mode == 2 (MAX): properly restore full regen brake current limits
+            snprintf(cmd, sizeof(cmd), "conf_set l_current_min %.1f", -max_phase_amps);
+            sendTerminalCommand(cmd);
+            snprintf(cmd, sizeof(cmd), "conf_set l_in_current_min %.1f", -max_battery_amps);
+            sendTerminalCommand(cmd);
+        }
+
+        if (cutoff_start > 20.0f && cutoff_end > 20.0f) {
+            snprintf(cmd, sizeof(cmd), "conf_set l_battery_cut_start %.1f", cutoff_start);
+            sendTerminalCommand(cmd);
+            snprintf(cmd, sizeof(cmd), "conf_set l_battery_cut_end %.1f", cutoff_end);
+            sendTerminalCommand(cmd);
+        }
     }
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        // 1. Transmit official COMM_SET_MCCONF_TEMP (48) via CAN multi-frame buffer to primary VESC & 0
-        sendVescCanBuffer(s_primary_vesc_id, payload, p_idx);
-        if (s_primary_vesc_id != 0) {
-            sendVescCanBuffer(0, payload, p_idx);
-        }
+        // Clean CAN Mode: Send ONLY COMM_SET_MCCONF_TEMP (48) + native CAN limit frames to detected VESC(s)
+        // (Zero redundant conf_set terminal commands -> zero RAM config corruption, zero main-loop freezes!)
+        sendVescCanBufferToDetected(payload, p_idx, ESP_CAN_ID, 2);
 
-        // 2. Hardware Native CAN Limits: Motor Phase Amps (CAN_PACKET_CONF_CURRENT_LIMITS ID 21)
-        twai_message_t can_lim;
-        can_lim.extd = 1;
-        can_lim.identifier = (21 << 8) | s_primary_vesc_id; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC
+        // Native CAN Motor Phase Current Limits (CAN_PACKET_CONF_CURRENT_LIMITS ID 21)
+        twai_message_t can_lim = {};
         can_lim.data_length_code = 8;
-        int32_t min_mot = (Settings.get().brake_mode == 0) ? 0 : 
+        int32_t min_mot = (is_locked || Settings.get().brake_mode == 0) ? 0 :
                           ((Settings.get().brake_mode == 1) ? (int32_t)(-12.0f * 1000.0f) : (int32_t)(-max_phase_amps * 1000.0f));
         int32_t max_mot = (int32_t)(max_phase_amps * 1000.0f);
-        can_lim.data[0] = (min_mot >> 24) & 0xFF;
-        can_lim.data[1] = (min_mot >> 16) & 0xFF;
-        can_lim.data[2] = (min_mot >> 8) & 0xFF;
-        can_lim.data[3] = min_mot & 0xFF;
-        can_lim.data[4] = (max_mot >> 24) & 0xFF;
-        can_lim.data[5] = (max_mot >> 16) & 0xFF;
-        can_lim.data[6] = (max_mot >> 8) & 0xFF;
-        can_lim.data[7] = max_mot & 0xFF;
-        twai_transmit(&can_lim, pdMS_TO_TICKS(10));
-        can_lim.identifier = (21 << 8) | 0; // Also dispatch to ID 0
-        twai_transmit(&can_lim, pdMS_TO_TICKS(10));
-        can_lim.identifier = (21 << 8) | 1; // Also dispatch to VESC ID 1 (Dual VESC)
-        twai_transmit(&can_lim, pdMS_TO_TICKS(10));
+        can_lim.data[0] = (uint8_t)((min_mot >> 24) & 0xFF);
+        can_lim.data[1] = (uint8_t)((min_mot >> 16) & 0xFF);
+        can_lim.data[2] = (uint8_t)((min_mot >> 8) & 0xFF);
+        can_lim.data[3] = (uint8_t)(min_mot & 0xFF);
+        can_lim.data[4] = (uint8_t)((max_mot >> 24) & 0xFF);
+        can_lim.data[5] = (uint8_t)((max_mot >> 16) & 0xFF);
+        can_lim.data[6] = (uint8_t)((max_mot >> 8) & 0xFF);
+        can_lim.data[7] = (uint8_t)(max_mot & 0xFF);
+        twaiTransmitToDetected(can_lim, 21, pdMS_TO_TICKS(10));
 
-        // 3. Hardware Native CAN Limits: Battery Amps (CAN_PACKET_CONF_CURRENT_LIMITS_IN ID 23)
-        twai_message_t can_lim_in;
-        can_lim_in.extd = 1;
-        can_lim_in.identifier = (23 << 8) | s_primary_vesc_id; // CAN_PACKET_CONF_CURRENT_LIMITS_IN -> Target VESC
+        // Native CAN Battery Current Limits (CAN_PACKET_CONF_CURRENT_LIMITS_IN ID 23)
+        twai_message_t can_lim_in = {};
         can_lim_in.data_length_code = 8;
-        int32_t min_bat = (Settings.get().brake_mode == 0) ? 0 : 
+        int32_t min_bat = (is_locked || Settings.get().brake_mode == 0) ? 0 :
                           ((Settings.get().brake_mode == 1) ? (int32_t)(-8.0f * 1000.0f) : (int32_t)(-max_battery_amps * 1000.0f));
         int32_t max_bat = (int32_t)(max_battery_amps * 1000.0f);
-        can_lim_in.data[0] = (min_bat >> 24) & 0xFF;
-        can_lim_in.data[1] = (min_bat >> 16) & 0xFF;
-        can_lim_in.data[2] = (min_bat >> 8) & 0xFF;
-        can_lim_in.data[3] = min_bat & 0xFF;
-        can_lim_in.data[4] = (max_bat >> 24) & 0xFF;
-        can_lim_in.data[5] = (max_bat >> 16) & 0xFF;
-        can_lim_in.data[6] = (max_bat >> 8) & 0xFF;
-        can_lim_in.data[7] = max_bat & 0xFF;
-        twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
-        can_lim_in.identifier = (23 << 8) | 0; // Also dispatch to ID 0
-        twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
-        can_lim_in.identifier = (23 << 8) | 1; // Also dispatch to VESC ID 1 (Dual VESC)
-        twai_transmit(&can_lim_in, pdMS_TO_TICKS(10));
+        can_lim_in.data[0] = (uint8_t)((min_bat >> 24) & 0xFF);
+        can_lim_in.data[1] = (uint8_t)((min_bat >> 16) & 0xFF);
+        can_lim_in.data[2] = (uint8_t)((min_bat >> 8) & 0xFF);
+        can_lim_in.data[3] = (uint8_t)(min_bat & 0xFF);
+        can_lim_in.data[4] = (uint8_t)((max_bat >> 24) & 0xFF);
+        can_lim_in.data[5] = (uint8_t)((max_bat >> 16) & 0xFF);
+        can_lim_in.data[6] = (uint8_t)((max_bat >> 8) & 0xFF);
+        can_lim_in.data[7] = (uint8_t)(max_bat & 0xFF);
+        twaiTransmitToDetected(can_lim_in, 23, pdMS_TO_TICKS(10));
 
-        // 4. Hardware Native CAN Battery Cutoffs (CAN_PACKET_CONF_BATTERY_CUT ID 29)
+        // Native CAN Battery Cutoff Voltages (CAN_PACKET_CONF_BATTERY_CUT ID 29)
         if (cutoff_start > 20.0f && cutoff_end > 20.0f) {
-            twai_message_t can_cut;
-            can_cut.extd = 1;
-            can_cut.identifier = (29 << 8) | s_primary_vesc_id;
+            twai_message_t can_cut = {};
             can_cut.data_length_code = 8;
             int32_t cut_s = (int32_t)(cutoff_start * 1000.0f);
             int32_t cut_e = (int32_t)(cutoff_end * 1000.0f);
-            can_cut.data[0] = (cut_s >> 24) & 0xFF;
-            can_cut.data[1] = (cut_s >> 16) & 0xFF;
-            can_cut.data[2] = (cut_s >> 8) & 0xFF;
-            can_cut.data[3] = cut_s & 0xFF;
-            can_cut.data[4] = (cut_e >> 24) & 0xFF;
-            can_cut.data[5] = (cut_e >> 16) & 0xFF;
-            can_cut.data[6] = (cut_e >> 8) & 0xFF;
-            can_cut.data[7] = cut_e & 0xFF;
-            twai_transmit(&can_cut, pdMS_TO_TICKS(10));
-            can_cut.identifier = (29 << 8) | 0;
-            twai_transmit(&can_cut, pdMS_TO_TICKS(10));
+            can_cut.data[0] = (uint8_t)((cut_s >> 24) & 0xFF);
+            can_cut.data[1] = (uint8_t)((cut_s >> 16) & 0xFF);
+            can_cut.data[2] = (uint8_t)((cut_s >> 8) & 0xFF);
+            can_cut.data[3] = (uint8_t)(cut_s & 0xFF);
+            can_cut.data[4] = (uint8_t)((cut_e >> 24) & 0xFF);
+            can_cut.data[5] = (uint8_t)((cut_e >> 16) & 0xFF);
+            can_cut.data[6] = (uint8_t)((cut_e >> 8) & 0xFF);
+            can_cut.data[7] = (uint8_t)(cut_e & 0xFF);
+            twaiTransmitToDetected(can_cut, 29, pdMS_TO_TICKS(10));
         }
     }
 #endif
-
-    // 3. Fallback / Universal Terminal Commands
-    char cmd[64];
-    snprintf(cmd, sizeof(cmd), "conf_set l_current_max %.1f", max_phase_amps);
-    sendTerminalCommand(cmd);
-    snprintf(cmd, sizeof(cmd), "conf_set l_in_current_max %.1f", max_battery_amps);
-    sendTerminalCommand(cmd);
-    snprintf(cmd, sizeof(cmd), "conf_set l_watt_max %.1f", max_power_watts);
-    sendTerminalCommand(cmd);
-    snprintf(cmd, sizeof(cmd), "conf_set l_max_erpm %.0f", max_erpm);
-    sendTerminalCommand(cmd);
-    snprintf(cmd, sizeof(cmd), "conf_set si_wheel_diameter %.4f", wheel_diam_in * 0.0254f);
-    sendTerminalCommand(cmd);
-
-    if (Settings.get().brake_mode == 0) {
-        sendTerminalCommand("conf_set l_current_min 0.0");
-        sendTerminalCommand("conf_set l_in_current_min 0.0");
-        sendCurrentBrake(0.0f);
-    } else if (Settings.get().brake_mode == 1) {
-        sendTerminalCommand("conf_set l_current_min -12.0");
-        sendTerminalCommand("conf_set l_in_current_min -8.0");
-    }
-
-    // Battery cutoff voltages if configured
-    if (cutoff_start > 20.0f && cutoff_end > 20.0f) {
-        snprintf(cmd, sizeof(cmd), "conf_set l_battery_cut_start %.1f", cutoff_start);
-        sendTerminalCommand(cmd);
-        snprintf(cmd, sizeof(cmd), "conf_set l_battery_cut_end %.1f", cutoff_end);
-        sendTerminalCommand(cmd);
-    }
 #endif
 }
 
 void VescHandler::sendTcsPhaseLimit(float max_phase_amps) {
     UartLock lock;
+    // Safety invariant: NEVER raise the 0A lock limit when vehicle is locked!
+    if (ModeManager::instance().isLocked()) {
+        return;
+    }
     if (max_phase_amps < 2.0f) max_phase_amps = 2.0f;
     if (max_phase_amps > 300.0f) max_phase_amps = 300.0f;
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        twai_message_t can_lim;
-        can_lim.extd = 1;
-        can_lim.identifier = (21 << 8) | s_primary_vesc_id; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC
+        twai_message_t can_lim = {};
         can_lim.data_length_code = 8;
         float full_phase = ModeManager::instance().getActiveLimits().max_phase_amps;
         if (full_phase < 20.0f) full_phase = 20.0f;
-        int32_t min_mot = (Settings.get().brake_mode == 0) ? 0 : 
+        int32_t min_mot = (Settings.get().brake_mode == 0) ? 0 :
                           ((Settings.get().brake_mode == 1) ? (int32_t)(-12.0f * 1000.0f) : (int32_t)(-full_phase * 1000.0f));
         int32_t max_mot = (int32_t)(max_phase_amps * 1000.0f);
-        can_lim.data[0] = (min_mot >> 24) & 0xFF;
-        can_lim.data[1] = (min_mot >> 16) & 0xFF;
-        can_lim.data[2] = (min_mot >> 8) & 0xFF;
-        can_lim.data[3] = min_mot & 0xFF;
-        can_lim.data[4] = (max_mot >> 24) & 0xFF;
-        can_lim.data[5] = (max_mot >> 16) & 0xFF;
-        can_lim.data[6] = (max_mot >> 8) & 0xFF;
-        can_lim.data[7] = max_mot & 0xFF;
-        twai_transmit(&can_lim, pdMS_TO_TICKS(5));
-        can_lim.identifier = (21 << 8) | 0;
-        twai_transmit(&can_lim, pdMS_TO_TICKS(5));
-        can_lim.identifier = (21 << 8) | 1;
-        twai_transmit(&can_lim, pdMS_TO_TICKS(5));
+        can_lim.data[0] = (uint8_t)((min_mot >> 24) & 0xFF);
+        can_lim.data[1] = (uint8_t)((min_mot >> 16) & 0xFF);
+        can_lim.data[2] = (uint8_t)((min_mot >> 8) & 0xFF);
+        can_lim.data[3] = (uint8_t)(min_mot & 0xFF);
+        can_lim.data[4] = (uint8_t)((max_mot >> 24) & 0xFF);
+        can_lim.data[5] = (uint8_t)((max_mot >> 16) & 0xFF);
+        can_lim.data[6] = (uint8_t)((max_mot >> 8) & 0xFF);
+        can_lim.data[7] = (uint8_t)(max_mot & 0xFF);
+        twaiTransmitToDetected(can_lim, 21, pdMS_TO_TICKS(5));
     }
 #endif
 
@@ -2070,10 +2386,7 @@ void VescHandler::syncWheelDiameterToVesc(float wheel_diam_in) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
-        if (s_primary_vesc_id != 0) {
-            sendVescCanBuffer(0, payload, slen + 1);
-        }
+        sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
     }
 #endif
 
@@ -2088,75 +2401,70 @@ void VescHandler::syncWheelDiameterToVesc(float wheel_diam_in) {
 
 void VescHandler::sendGnssData(const GpsTelemetry &gps) {
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-    if (!gps.valid) return;
+    if (!s_can_initialized || !gps.valid) return;
 
     // 1. CAN_PACKET_GNSS_TIME (ID 59)
     // ms_today (int32), yy (int16), mo (uint8), dd (uint8)
-    twai_message_t msg_time;
+    twai_message_t msg_time = {};
     msg_time.extd = 1;
-    msg_time.identifier = (59 << 8) | VESC_CAN_ID_DEFAULT;
+    msg_time.identifier = (59U << 8) | s_primary_vesc_id;
     msg_time.data_length_code = 8;
     int32_t ms_today = ((int32_t)gps.hour * 3600 + (int32_t)gps.minute * 60 + (int32_t)gps.second) * 1000;
-    msg_time.data[0] = (ms_today >> 24) & 0xFF;
-    msg_time.data[1] = (ms_today >> 16) & 0xFF;
-    msg_time.data[2] = (ms_today >> 8) & 0xFF;
-    msg_time.data[3] = ms_today & 0xFF;
+    msg_time.data[0] = (uint8_t)((ms_today >> 24) & 0xFF);
+    msg_time.data[1] = (uint8_t)((ms_today >> 16) & 0xFF);
+    msg_time.data[2] = (uint8_t)((ms_today >> 8) & 0xFF);
+    msg_time.data[3] = (uint8_t)(ms_today & 0xFF);
     int16_t yy = (int16_t)gps.year;
-    msg_time.data[4] = (yy >> 8) & 0xFF;
-    msg_time.data[5] = yy & 0xFF;
+    msg_time.data[4] = (uint8_t)((yy >> 8) & 0xFF);
+    msg_time.data[5] = (uint8_t)(yy & 0xFF);
     msg_time.data[6] = gps.month;
     msg_time.data[7] = gps.day;
     twai_transmit(&msg_time, pdMS_TO_TICKS(10));
 
     // 2. CAN_PACKET_GNSS_LAT (ID 60)
     // int64_t lat scaled by 1e16
-    twai_message_t msg_lat;
+    twai_message_t msg_lat = {};
     msg_lat.extd = 1;
-    msg_lat.identifier = (60 << 8) | VESC_CAN_ID_DEFAULT;
+    msg_lat.identifier = (60U << 8) | s_primary_vesc_id;
     msg_lat.data_length_code = 8;
     int64_t lat_scaled = (int64_t)(gps.latitude * 1e16);
     for (int i = 0; i < 8; i++) {
-        msg_lat.data[i] = (lat_scaled >> (56 - (i * 8))) & 0xFF;
+        msg_lat.data[i] = (uint8_t)((lat_scaled >> (56 - (i * 8))) & 0xFF);
     }
     twai_transmit(&msg_lat, pdMS_TO_TICKS(10));
 
     // 3. CAN_PACKET_GNSS_LON (ID 61)
     // int64_t lon scaled by 1e16
-    twai_message_t msg_lon;
+    twai_message_t msg_lon = {};
     msg_lon.extd = 1;
-    msg_lon.identifier = (61 << 8) | VESC_CAN_ID_DEFAULT;
+    msg_lon.identifier = (61U << 8) | s_primary_vesc_id;
     msg_lon.data_length_code = 8;
     int64_t lon_scaled = (int64_t)(gps.longitude * 1e16);
     for (int i = 0; i < 8; i++) {
-        msg_lon.data[i] = (lon_scaled >> (56 - (i * 8))) & 0xFF;
+        msg_lon.data[i] = (uint8_t)((lon_scaled >> (56 - (i * 8))) & 0xFF);
     }
     twai_transmit(&msg_lon, pdMS_TO_TICKS(10));
 
     // 4. CAN_PACKET_GNSS_ALT_SPEED_HDOP (ID 62)
-    // height (float32_auto), speed (float16 * 100 in m/s), hdop (float16 * 100)
-    twai_message_t msg_dyn;
+    // height (float32_auto), speed (int16 * 100 in m/s), hdop (int16 * 100)
+    twai_message_t msg_dyn = {};
     msg_dyn.extd = 1;
-    msg_dyn.identifier = (62 << 8) | VESC_CAN_ID_DEFAULT;
+    msg_dyn.identifier = (62U << 8) | s_primary_vesc_id;
     msg_dyn.data_length_code = 8;
 
-    float h = gps.altitude_m;
-    uint32_t h_raw;
-    memcpy(&h_raw, &h, sizeof(h_raw));
-    msg_dyn.data[0] = (h_raw >> 24) & 0xFF;
-    msg_dyn.data[1] = (h_raw >> 16) & 0xFF;
-    msg_dyn.data[2] = (h_raw >> 8) & 0xFF;
-    msg_dyn.data[3] = h_raw & 0xFF;
+    int32_t alt_idx = 0;
+    buffer_append_float32_auto(msg_dyn.data, gps.altitude_m, &alt_idx);
 
     // speed in m/s (1 km/h = 1.0 / 3.6 m/s) * 100.0
     float speed_ms = (gps.speed_kmh / 3.6f) * 100.0f;
     int16_t spd_raw = (int16_t)speed_ms;
-    msg_dyn.data[4] = (spd_raw >> 8) & 0xFF;
-    msg_dyn.data[5] = spd_raw & 0xFF;
+    msg_dyn.data[4] = (uint8_t)((spd_raw >> 8) & 0xFF);
+    msg_dyn.data[5] = (uint8_t)(spd_raw & 0xFF);
 
     // hdop * 100.0
     int16_t hdop_raw = (int16_t)(gps.hdop * 100.0f);
-    msg_dyn.data[6] = (hdop_raw >> 8) & 0xFF;
-    msg_dyn.data[7] = hdop_raw & 0xFF;
+    msg_dyn.data[6] = (uint8_t)((hdop_raw >> 8) & 0xFF);
+    msg_dyn.data[7] = (uint8_t)(hdop_raw & 0xFF);
 
     twai_transmit(&msg_dyn, pdMS_TO_TICKS(10));
 #endif

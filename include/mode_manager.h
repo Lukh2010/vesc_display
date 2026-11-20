@@ -24,9 +24,9 @@ struct VehicleModeConfig {
     ModeLimits legal_modes[PROFILE_MODE_COUNT]; // When tuning_mode == false: ECO (15 km/h), SPORT (20 km/h), RACE (22 km/h)
     ModeLimits tuned_modes[PROFILE_MODE_COUNT]; // When tuning_mode == true: ECO (35 km/h), SPORT (55 km/h), RACE (85+ km/h)
     int8_t     throttle_curve;                  // -50 to +50 (% curve / expo)
-    uint8_t    battery_cells;                   // 10 to 24 (default 14)
-    float      battery_cutoff_start;            // V (e.g. 46.2V)
-    float      battery_cutoff_end;              // V (e.g. 42.0V)
+    uint8_t    battery_cells;                   // 10 to 24 (default 13)
+    float      battery_cutoff_start;            // V (e.g. 42.9V for 13S)
+    float      battery_cutoff_end;              // V (e.g. 39.0V for 13S)
 };
 
 class ModeManager {
@@ -40,6 +40,10 @@ public:
 
     VehicleModeConfig& getConfig() { return _config; }
     const VehicleModeConfig& getConfig() const { return _config; }
+
+    // Synchronizes battery series cell count (10..24) with Settings and recalculates cutoffs
+    void setBatteryCells(uint8_t cells);
+    uint8_t getBatteryCells() const { return _config.battery_cells; }
 
     bool isTuningMode() const { return _tuning_mode; }
     void setTuningMode(bool enable);

@@ -9,6 +9,7 @@ public:
     SettingsManager();
     void begin();
     void save();
+    void saveOdo(float odo_km);
     void resetToDefaults();
 
     DashSettings& get() { return _settings; }
@@ -20,9 +21,13 @@ public:
 
 private:
     DashSettings _settings;
+    DashSettings _last_saved;
     RaceRecords  _race_records;
+    RaceRecords  _last_saved_race;
+    bool         _has_saved_snapshot;
     Preferences  _prefs;
     void loadDefaults();
+    void saveInternal(bool force);
 };
 
 extern SettingsManager Settings;

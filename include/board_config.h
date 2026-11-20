@@ -135,3 +135,8 @@
 // 0 = Kept in background (swiping switches directly between Ride Dash & RT Graphs)
 // 1 = Active in screen swipe loop (Ride Dash <-> Lights Screen <-> RT Graphs)
 #define ENABLE_LIGHTS_SCREEN 0
+
+// Bluetooth Low Energy Keyless-Go
+// 0 = Disabled (excludes ESP32 BLE stack completely from Flash & RAM)
+// 1 = Enabled
+#define ENABLE_BLE_KEYLESS  0
