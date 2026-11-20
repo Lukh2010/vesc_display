@@ -20,7 +20,13 @@ public:
         if (_active_screen != screen) {
             _active_screen = screen;
             _has_tap = false;
+            _touch_active = false;
             _pending_action = NAV_NONE;
+            _last_touch_release_ms = millis();
+            _touch_screen_switch_ms = millis();
+            _speed_touch_started = false;
+            _speed_touch_held = false;
+            _speed_touch_fired = false;
         }
     }
     DashboardScreen getActiveScreen() const { return _active_screen; }
@@ -30,6 +36,9 @@ public:
     bool isTouching() const { return _touch_active; }
     int16_t getTouchX() const { return _touch_curr_x; }
     int16_t getTouchY() const { return _touch_curr_y; }
+
+    void setLocked(bool locked) { _is_locked = locked; }
+    bool isLocked() const { return _is_locked; }
 
     // Last tap coordinate query
     bool getLastTap(int16_t *x, int16_t *y) {
@@ -96,12 +105,14 @@ private:
     int16_t     _touch_curr_y;
     uint32_t    _touch_start_ms;
     uint32_t    _last_touch_release_ms;
+    uint32_t    _touch_screen_switch_ms;
     bool        _touch_long_fired;
     bool        _has_tap;
     int16_t     _last_tap_x;
     int16_t     _last_tap_y;
 
     // Speed Number Touch Tracking
+    bool        _is_locked;
     bool        _tuning_mode;
     bool        _speed_touch_started;
     bool        _speed_touch_held;

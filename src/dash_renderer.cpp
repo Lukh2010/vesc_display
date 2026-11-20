@@ -199,6 +199,7 @@ DashboardRenderer::DashboardRenderer()
       _last_theft_alarm(false),
       _last_ble_conn(false),
       _last_ble_bars(255),
+      _last_pin_active_key(-1),
       _pin_modal_open(false),
       _pin_modal_success(false),
       _pin_modal_success_ms(0),
@@ -618,29 +619,36 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
     // 4. Dispatch Screen Rendering
     switch (_active_screen) {
         case SCREEN_RIDE_DASH:
-            if (_screen_dirty || !_hyper_inited) {
-                _canvas->fillScreen(COLOR_BG);
+            if (!_hyper_inited) {
                 initRideDashboard(telemetry);
                 _screen_dirty = false;
+            } else if (_screen_dirty) {
+                _screen_dirty = false;
+                _cache.invalidate();
             }
             renderRideDashboard(telemetry);
             break;
 
         case SCREEN_LIGHTS:
             // Deprecated screen: fallback clean render of main Ride Dash without overwriting _active_screen
-            if (_screen_dirty || !_hyper_inited) {
-                _canvas->fillScreen(COLOR_BG);
+            if (!_hyper_inited) {
                 initRideDashboard(telemetry);
                 _screen_dirty = false;
+            } else if (_screen_dirty) {
+                _screen_dirty = false;
+                _cache.invalidate();
             }
             renderRideDashboard(telemetry);
             break;
 
         case SCREEN_RT_GRAPHS:
-            if (_screen_dirty) {
+            if (!_stats_inited) {
                 _canvas->fillScreen(COLOR_BG);
                 initRtGraphsScreen(telemetry);
                 _screen_dirty = false;
+            } else if (_screen_dirty) {
+                _screen_dirty = false;
+                _stats_cache.invalidate();
             }
             renderRtGraphsScreen(telemetry);
             break;
@@ -2002,11 +2010,47 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
         _pin_screen_drawn = false;
     }
 
+    static const char *KEYS[4][3] = {
+        { "1", "2", "3" },
+        { "4", "5", "6" },
+        { "7", "8", "9" },
+        { "DEL", "0", "OK" }
+    };
+    static const int col_x[3] = { 205, 345, 485 };
+    static const int row_y[4] = { 165, 235, 305, 375 };
+
+    auto drawKeypadButton = [this](int r, int c, bool pressed) {
+        int bx = col_x[c];
+        int by = row_y[r];
+        const char *label = KEYS[r][c];
+
+        uint16_t btn_bg = pressed ? 0x2194 : 0x141F;
+        uint16_t btn_border = pressed ? COLOR_CYAN : 0x2965;
+        uint16_t txt_col = COLOR_WHITE;
+
+        if (r == 3 && c == 0) {
+            btn_bg = pressed ? 0x7800 : 0x141F;
+            btn_border = pressed ? COLOR_WHITE : 0xB800; // Red border
+            txt_col = pressed ? COLOR_WHITE : 0xFCA5;    // Light coral
+        } else if (r == 3 && c == 2) {
+            btn_bg = pressed ? 0x05E0 : 0x141F;
+            btn_border = pressed ? COLOR_WHITE : 0x05E0; // Green border
+            txt_col = pressed ? COLOR_WHITE : COLOR_GREEN;
+        }
+
+        drawCard(bx, by, 110, 54, btn_bg, btn_border);
+        _canvas->setTextDatum(textdatum_t::middle_center);
+        _canvas->setFont(&fonts::Font4);
+        _canvas->setTextColor(txt_col, btn_bg);
+        _canvas->drawString(label, bx + 55, by + 27);
+    };
+
     if (!_pin_screen_drawn) {
         _pin_screen_drawn = true;
         _screen_dirty = false;
         _last_pin_len = -1;
         _last_pin_err = !err;
+        _last_pin_active_key = -1;
 
         _canvas->fillScreen(0x0823); // Deep midnight obsidian background
 
@@ -2040,41 +2084,32 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
         }
 
         // Keypad Grid: 3 columns x 4 rows
-        static const char *KEYS[4][3] = {
-            { "1", "2", "3" },
-            { "4", "5", "6" },
-            { "7", "8", "9" },
-            { "DEL", "0", "OK" }
-        };
-
-        int col_x[3] = { 205, 345, 485 };
-        int row_y[4] = { 165, 235, 305, 375 };
-
         for (int r = 0; r < 4; r++) {
             for (int c = 0; c < 3; c++) {
-                int bx = col_x[c];
-                int by = row_y[r];
-                const char *label = KEYS[r][c];
-
-                uint16_t btn_bg = 0x141F;
-                uint16_t btn_border = 0x2965;
-                uint16_t txt_col = COLOR_WHITE;
-
-                if (r == 3 && c == 0) {
-                    btn_border = 0xB800; // Red border
-                    txt_col = 0xFCA5;   // Light coral
-                } else if (r == 3 && c == 2) {
-                    btn_border = 0x05E0; // Green border
-                    txt_col = COLOR_GREEN;
-                }
-
-                drawCard(bx, by, 110, 54, btn_bg, btn_border);
-                _canvas->setTextDatum(textdatum_t::middle_center);
-                _canvas->setFont(&fonts::Font4);
-                _canvas->setTextColor(txt_col, btn_bg);
-                _canvas->drawString(label, bx + 55, by + 27);
+                drawKeypadButton(r, c, false);
             }
         }
+    }
+
+    // Instant tactile visual feedback while finger is pressing a keypad button
+    int8_t active_key = -1;
+    if (Buttons.isTouching() && !err) {
+        int16_t tx = Buttons.getTouchX();
+        int16_t ty = Buttons.getTouchY();
+        if (tx >= 100 && tx <= 700 && ty >= 120 && ty <= 460) {
+            int c = (tx < 330) ? 0 : ((tx < 470) ? 1 : 2);
+            int r = (ty < 227) ? 0 : ((ty < 297) ? 1 : ((ty < 367) ? 2 : 3));
+            active_key = (int8_t)(r * 3 + c);
+        }
+    }
+    if (active_key != _last_pin_active_key) {
+        if (_last_pin_active_key >= 0) {
+            drawKeypadButton(_last_pin_active_key / 3, _last_pin_active_key % 3, false);
+        }
+        if (active_key >= 0) {
+            drawKeypadButton(active_key / 3, active_key % 3, true);
+        }
+        _last_pin_active_key = active_key;
     }
 
     // Only update PIN Circles and Status Hint if state changed (Zero Flicker!)
