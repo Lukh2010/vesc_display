@@ -1406,6 +1406,47 @@ void loop() {
         }
     }
 
+    // 2e. 5-Minute Idle Auto-Lock (automatically locks stationary untouched scooter after 5 min)
+    static uint32_t s_last_activity_ms = millis();
+    static bool s_autolock_was_locked = true;
+    if (telemetry.is_locked) {
+        s_autolock_was_locked = true;
+        s_last_activity_ms = now;
+    } else {
+        if (s_autolock_was_locked) {
+            s_autolock_was_locked = false;
+            s_last_activity_ms = now;
+        }
+        bool is_active = (telemetry.speed_kmh >= 0.8f) ||
+                         (telemetry.vesc_motor_speed >= 0.8f) ||
+                         (telemetry.throttle_pct >= 2.0f) ||
+                         Buttons.isTouching() ||
+                         Buttons.isBtn1Down() ||
+                         Buttons.isBtn2Down() ||
+                         Vesc.isBridgeActive() ||
+                         (telemetry.screen == SCREEN_SETUP_WIZARD);
+        if (is_active) {
+            s_last_activity_ms = now;
+        } else if (Settings.get().pin_lock_enabled &&
+                   !Renderer.isBootAnimActive() &&
+                   !OtaManager::instance().isUpdating() &&
+                   (uint32_t)(now - s_last_activity_ms) >= 300000UL) {
+            telemetry.is_locked = true;
+            telemetry.theft_alarm_active = false;
+            telemetry.boost_active = false;
+            telemetry.pin_entry[0] = '\0';
+            telemetry.pin_error = false;
+            ModeManager::instance().setBoostActive(false);
+            ModeManager::instance().setLocked(true);
+            Buttons.setLocked(true);
+            telemetry.screen = SCREEN_RIDE_DASH;
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            s_autolock_was_locked = true;
+            Serial.println("[SECURITY] Auto-locked after 5 minutes of inactivity.");
+        }
+    }
+
     // 3. Render at steady 30 FPS rate on ST7262 16-bit parallel RGB panel (throttled to 5 FPS in bridge mode)
     uint32_t render_interval = Vesc.isBridgeActive() ? 200 : 33;
     if (now - last_render_ms >= render_interval) {

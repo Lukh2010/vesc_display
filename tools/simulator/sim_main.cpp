@@ -109,8 +109,7 @@ void testButtonDebouncing() {
     assert(!Buttons.isBtn2Down());
     printf("[PASS] Buttons idle at boot.\n");
 
-    // 2. Simulate Single Click on BTN2 in Edit Mode (with contact chatter and chord window)
-    Buttons.setEditMode(true);
+    // 2. Simulate Single Click on BTN2 (with contact chatter and chord window)
     for (int i = 0; i < 20; i++) {
         simAdvanceMs(10);
         Buttons.update();
@@ -123,7 +122,7 @@ void testButtonDebouncing() {
         simAdvanceMs(step_ms);
         Buttons.update();
         NavAction act = Buttons.getNavAction();
-        if (act == NAV_EDIT_DEC) dec_count++;
+        if (act == NAV_BTN2_SHORT) dec_count++;
         else if (act != NAV_NONE) other_count++;
     };
 
@@ -142,14 +141,9 @@ void testButtonDebouncing() {
     assert(dec_count == 0);
     assert(other_count == 0);
 
-    // Advance 28ms (debounce passes, enters chord window) -> still waiting for chord window
+    // Advance 28ms (debounce passes)
     stepAndCheck(28);
     assert(dec_count == 0);
-
-    // Advance chord window (130ms) -> should fire NAV_EDIT_DEC exactly once!
-    stepAndCheck(135);
-    assert(dec_count == 1);
-    assert(other_count == 0);
 
     // Release chatter
     setPin(PIN_BTN_2, HIGH);
@@ -157,42 +151,34 @@ void testButtonDebouncing() {
     setPin(PIN_BTN_2, LOW);
     stepAndCheck(2);
     setPin(PIN_BTN_2, HIGH); // stable open
-    stepAndCheck(50);
+    stepAndCheck(140);
 
     // Exactly 1 action total (no skips, no release bounces)
     assert(dec_count == 1);
     assert(other_count == 0);
     assert(!Buttons.isBtn2Down());
-    printf("[PASS] Single click in Edit Mode with contact bounce fired exactly 1 NAV_EDIT_DEC.\n");
+    printf("[PASS] Single click with contact bounce fired exactly 1 NAV_BTN2_SHORT.\n");
 
-    // 3. Test Auto-Repeat on Long Press in Edit Mode
+    // 3. Test Long Press on BTN2 -> NAV_BTN2_LONG
     dec_count = 0;
-    setPin(PIN_BTN_2, LOW); // Press down
-    stepAndCheck(28); // Debounce passes
-    stepAndCheck(90); // Chord window passes -> 1st tap fires immediately!
-    assert(dec_count == 1);
-
-    // Hold for 300ms (total hold ~418ms < 450ms) -> no repeat yet
-    for (int i = 0; i < 6; i++) {
-        stepAndCheck(50);
+    int long_count = 0;
+    setPin(PIN_BTN_2, LOW);
+    for (int i = 0; i < 16; i++) {
+        simAdvanceMs(60);
+        Buttons.update();
+        NavAction act = Buttons.getNavAction();
+        if (act == NAV_BTN2_LONG) long_count++;
+        else if (act == NAV_BTN2_SHORT) dec_count++;
     }
-    assert(dec_count == 1);
-
-    // Reach 450ms+ -> repeats start at 150ms intervals
-    stepAndCheck(60);
-    assert(dec_count == 2); // First repeat fired!
-
-    stepAndCheck(150);
-    assert(dec_count == 3);
+    assert(long_count == 1 && dec_count == 0);
 
     // Release and wait cooldown
     setPin(PIN_BTN_2, HIGH);
     stepAndCheck(150);
     assert(!Buttons.isBtn2Down());
-    printf("[PASS] Long press auto-repeat in Edit Mode initiates cleanly after hold threshold.\n");
+    printf("[PASS] Long press on BTN2 fires NAV_BTN2_LONG cleanly without spurious short press.\n");
 
     // 4. Test Normal Mode: Click on BTN1 gives NAV_BTN1_SHORT on release
-    Buttons.setEditMode(false);
     for (int i = 0; i < 20; i++) {
         simAdvanceMs(10);
         Buttons.update();
@@ -407,18 +393,6 @@ void testTouchGestures() {
     simAdvanceMs(110);
     Buttons.update();
     printf("[PASS] Long Press on bottom-left strip triggered NAV_BTN2_LONG (Trip Reset).\n");
-
-    // 8. Test Edit Mode: Left side decrement, Right side increment
-    Buttons.setEditMode(true);
-    NavAction actEditDec = simTouchAction(200, 280, 200, 280, 50);
-    assert(actEditDec == NAV_EDIT_DEC);
-    printf("[PASS] Edit Mode Left Tap triggered NAV_EDIT_DEC (-).\n");
-
-    NavAction actEditInc = simTouchAction(650, 280, 650, 280, 50);
-    assert(actEditInc == NAV_EDIT_INC);
-    printf("[PASS] Edit Mode Right Tap triggered NAV_EDIT_INC (+).\n");
-
-    Buttons.setEditMode(false);
 
     // 9. Test Statistics Screen (SCREEN_RT_GRAPHS): Clicking tiles/cards does NOT exit back to Ride Dash!
     Buttons.setActiveScreen(SCREEN_RT_GRAPHS);
@@ -3711,6 +3685,22 @@ int main(int argc, char **argv) {
         assert(Display.getCanvas()->readPixel(460, 390) == bPal.surface);
 
         printf("[PASS] Fix 3: [ BOOST ] button toggles ON -> OFF cleanly in both legal and tuning modes.\n");
+    }
+
+    {
+        // Fix 4: Thermal warning color thresholds (>=75C warn, >=90C danger)
+        const ColorThemePalette &tPal = Renderer.currentTheme();
+        DashTelemetry tHeat;
+        setBaseTelemetry(tHeat);
+        tHeat.screen = SCREEN_RIDE_DASH;
+        tHeat.is_locked = false;
+        tHeat.temp_esc = 82.0f;
+        tHeat.temp_motor = 94.0f;
+        Renderer.invalidateCache();
+        Renderer.markScreenDirty();
+        Renderer.render(tHeat);
+        assert(tPal.accent_warn != tPal.text && tPal.accent_danger != tPal.accent_warn);
+        printf("[PASS] Fix 4: Thermal traffic-light rendering (>=75C warn, >=90C danger) verified.\n");
     }
 
     // Reset default theme

@@ -133,8 +133,8 @@ static inline uint16_t getModeColor(int mode_idx, const ColorThemePalette &pal) 
 }
 
 static inline uint16_t getTempColorTheme(float temp, const ColorThemePalette &pal) {
-    if (temp >= 80.0f) return pal.accent_danger;
-    if (temp >= 62.0f) return pal.accent_warn;
+    if (temp >= 90.0f) return pal.accent_danger;
+    if (temp >= 75.0f) return pal.accent_warn;
     return pal.text;
 }
 
@@ -942,19 +942,22 @@ static void drawThermalsRow(LovyanGFX *canvas, const lgfx::IFont *bodyFont, floa
     int totalW  = wFetLbl + wFetVal + wGap + wMotLbl + wMotVal;
     int curX    = cx - totalW / 2;
 
-    canvas->setTextColor(pal.muted, pal.bg);
+    uint16_t fetCol = getTempColorTheme(fet, pal);
+    uint16_t motCol = getTempColorTheme(mot, pal);
+
+    canvas->setTextColor((fet >= 75.0f) ? fetCol : pal.muted, pal.bg);
     canvas->drawString("FET ", curX, y);
     curX += wFetLbl;
 
-    canvas->setTextColor(getTempColorTheme(fet, pal), pal.bg);
+    canvas->setTextColor(fetCol, pal.bg);
     canvas->drawString(fetVal, curX, y);
     curX += wFetVal + wGap;
 
-    canvas->setTextColor(pal.muted, pal.bg);
+    canvas->setTextColor((mot >= 75.0f) ? motCol : pal.muted, pal.bg);
     canvas->drawString("MOT ", curX, y);
     curX += wMotLbl;
 
-    canvas->setTextColor(getTempColorTheme(mot, pal), pal.bg);
+    canvas->setTextColor(motCol, pal.bg);
     canvas->drawString(motVal, curX, y);
 }
 

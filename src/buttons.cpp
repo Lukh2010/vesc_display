@@ -19,7 +19,6 @@ static const int16_t  SWIPE_THRESHOLD_PX = 60;  // Movement distance required fo
 ButtonHandler::ButtonHandler()
     : _active_screen(SCREEN_RIDE_DASH),
       _pending_action(NAV_NONE),
-      _in_edit_mode(false),
       _chord_active(false),
       _all_up_since_ms(0),
       _require_all_up(false),
@@ -96,16 +95,6 @@ void ButtonHandler::checkActionButtonState(uint32_t now) {
             }
         }
     }
-}
-
-void ButtonHandler::setEditMode(bool in_edit) {
-    _in_edit_mode = in_edit;
-    _require_all_up = true;
-    _chord_active = true;
-    _all_up_since_ms = 0;
-    _btn1.single_pending = false;
-    _btn2.single_pending = false;
-    _pending_action = NAV_NONE;
 }
 
 void ButtonHandler::processDebounce(ButtonState &btn, bool raw, uint32_t now) {
@@ -230,9 +219,7 @@ void ButtonHandler::processTouch(uint32_t now) {
                     _touch_long_fired = true;
 
                     // Contextual Long Touch Action
-                    if (_in_edit_mode) {
-                        _pending_action = NAV_BOTH_PRESSED; // Save & exit edit mode
-                    } else if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER) {
+                    if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER) {
                         if (_touch_start_x >= 600 && _touch_start_y <= 65) {
                             if (_active_screen == SCREEN_RT_GRAPHS) _pending_action = NAV_BTN2_LONG; // Reset Trip
                             else if (_active_screen == SCREEN_RACE_TIMER) _pending_action = NAV_RACE_TOGGLE_POPUP; // Toggle Bestzeiten Popup
@@ -319,17 +306,17 @@ void ButtonHandler::processTouch(uint32_t now) {
                                 _pending_action = NAV_MENU_BACK;
                             } else {
                                 // Swipe Left -> Select / Enter
-                                _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BOTH_PRESSED;
+                                _pending_action = NAV_BOTH_PRESSED;
                             }
                         }
                     } else if (_touch_start_y >= 350) {
                         // Bottom action bar on Ride Dash (BOOST, MODE, LIGHT) - touches here must NEVER trigger screen swipes!
                     } else if (dx > 0) {
-                        // Swipe Right -> Previous Screen / Value Up
-                        _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BTN1_SHORT;
+                        // Swipe Right -> Previous Screen
+                        _pending_action = NAV_BTN1_SHORT;
                     } else {
-                        // Swipe Left -> Next Screen / Value Down
-                        _pending_action = _in_edit_mode ? NAV_EDIT_DEC : NAV_BTN2_SHORT;
+                        // Swipe Left -> Next Screen
+                        _pending_action = NAV_BTN2_SHORT;
                     }
                 } else if (ady >= SWIPE_THRESHOLD_PX && ady > adx) {
                     // Vertical Swipe (in menu: scroll up/down)
@@ -337,10 +324,10 @@ void ButtonHandler::processTouch(uint32_t now) {
                         // In STATS / RACE screen: do NOT switch screen on swipe! Only < DASH exits.
                     } else if (dy > 0) {
                         // Swipe Down -> Up in menu (Previous item)
-                        _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BTN1_SHORT;
+                        _pending_action = NAV_BTN1_SHORT;
                     } else {
                         // Swipe Up -> Down in menu (Next item)
-                        _pending_action = _in_edit_mode ? NAV_EDIT_DEC : NAV_BTN2_SHORT;
+                        _pending_action = NAV_BTN2_SHORT;
                     }
                 } else {
                     // Clean Tap Detected (Movement was minimal)
@@ -349,20 +336,7 @@ void ButtonHandler::processTouch(uint32_t now) {
                     _last_tap_x = _touch_start_x;
                     _last_tap_y = _touch_start_y;
 
-                    if (_in_edit_mode) {
-                        // In Edit Mode:
-                        if (_last_tap_y <= 65 && _last_tap_x <= 160) {
-                            _pending_action = NAV_SCREEN_DASH; // Top-left < DASH exits directly to Dash
-                        } else if (_last_tap_y <= 65 && _last_tap_x >= 640) {
-                            _pending_action = NAV_SCREEN_DASH; // Top-right [X] exits directly to Dash
-                        } else if (_last_tap_x < 365) {
-                            _pending_action = NAV_EDIT_DEC; // Left side: -
-                        } else if (_last_tap_x > 580) {
-                            _pending_action = NAV_EDIT_INC; // Right side: +
-                        } else {
-                            _pending_action = NAV_BOTH_PRESSED; // Center: Save & exit
-                        }
-                    } else if (_active_screen == SCREEN_RT_GRAPHS) {
+                    if (_active_screen == SCREEN_RT_GRAPHS) {
                         // On RT GRAPHS Screen (Statistics Menu):
                         if (_last_tap_x >= 600 && _last_tap_y <= 65) {
                             _pending_action = NAV_BTN2_LONG; // Top Right -> Reset Trip
@@ -569,68 +543,32 @@ void ButtonHandler::update() {
         return;
     }
 
-    if (_in_edit_mode) {
-        if (_btn1.single_pending) {
+    if (_btn1.single_pending) {
+        if (!_btn1.is_down) {
             if (now - _btn1.pending_since_ms >= CHORD_WINDOW_MS) {
                 _btn1.single_pending = false;
-                _pending_action = NAV_EDIT_INC;
-                _btn1.last_repeat_ms = now;
+                _pending_action = NAV_BTN1_SHORT;
             }
-        } else if (_btn1.is_down) {
-            uint32_t hold_time = now - _btn1.press_start_ms;
-            if (hold_time >= REPEAT_DELAY_MS) {
-                uint32_t interval = (hold_time > 1800) ? 60 : 150;
-                if (now - _btn1.last_repeat_ms >= interval) {
-                    _btn1.last_repeat_ms = now;
-                    _pending_action = NAV_EDIT_INC;
-                }
+        } else {
+            if (now - _btn1.press_start_ms >= LONG_PRESS_TIME_MS) {
+                _btn1.single_pending = false;
+                _btn1.long_press_fired = true;
+                _pending_action = NAV_BTN1_LONG;
             }
         }
+    }
 
-        if (_btn2.single_pending) {
+    if (_btn2.single_pending) {
+        if (!_btn2.is_down) {
             if (now - _btn2.pending_since_ms >= CHORD_WINDOW_MS) {
                 _btn2.single_pending = false;
-                _pending_action = NAV_EDIT_DEC;
-                _btn2.last_repeat_ms = now;
+                _pending_action = NAV_BTN2_SHORT;
             }
-        } else if (_btn2.is_down) {
-            uint32_t hold_time = now - _btn2.press_start_ms;
-            if (hold_time >= REPEAT_DELAY_MS) {
-                uint32_t interval = (hold_time > 1800) ? 60 : 150;
-                if (now - _btn2.last_repeat_ms >= interval) {
-                    _btn2.last_repeat_ms = now;
-                    _pending_action = NAV_EDIT_DEC;
-                }
-            }
-        }
-    } else {
-        if (_btn1.single_pending) {
-            if (!_btn1.is_down) {
-                if (now - _btn1.pending_since_ms >= CHORD_WINDOW_MS) {
-                    _btn1.single_pending = false;
-                    _pending_action = NAV_BTN1_SHORT;
-                }
-            } else {
-                if (now - _btn1.press_start_ms >= LONG_PRESS_TIME_MS) {
-                    _btn1.single_pending = false;
-                    _btn1.long_press_fired = true;
-                    _pending_action = NAV_BTN1_LONG;
-                }
-            }
-        }
-
-        if (_btn2.single_pending) {
-            if (!_btn2.is_down) {
-                if (now - _btn2.pending_since_ms >= CHORD_WINDOW_MS) {
-                    _btn2.single_pending = false;
-                    _pending_action = NAV_BTN2_SHORT;
-                }
-            } else {
-                if (now - _btn2.press_start_ms >= LONG_PRESS_TIME_MS) {
-                    _btn2.single_pending = false;
-                    _btn2.long_press_fired = true;
-                    _pending_action = NAV_BTN2_LONG;
-                }
+        } else {
+            if (now - _btn2.press_start_ms >= LONG_PRESS_TIME_MS) {
+                _btn2.single_pending = false;
+                _btn2.long_press_fired = true;
+                _pending_action = NAV_BTN2_LONG;
             }
         }
     }

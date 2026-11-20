@@ -10,10 +10,6 @@ public:
     void begin();
     void update();
 
-    // Mode switch: changes button behavior between normal menu/dash navigation and value editing
-    void setEditMode(bool in_edit);
-    bool isInEditMode() const { return _in_edit_mode; }
-
     NavAction getNavAction();
 
     void setActiveScreen(DashboardScreen screen) {
@@ -91,7 +87,6 @@ private:
     ButtonState _btn1;
     ButtonState _btn2;
     NavAction   _pending_action;
-    bool        _in_edit_mode;
 
     bool        _chord_active;
     uint32_t    _all_up_since_ms;
