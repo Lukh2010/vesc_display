@@ -212,7 +212,7 @@ void ButtonHandler::processTouch(uint32_t now) {
             // 2b. Fast 500ms Long Press on Top-Right Settings Icon (Ride Dash) -> Open Settings Menu
             if (!_is_locked && !ModeManager::instance().isLocked() && !_speed_touch_started && !_touch_long_fired &&
                 (_active_screen == SCREEN_RIDE_DASH || _active_screen == SCREEN_LIGHTS) &&
-                _touch_start_y < 80 && _touch_start_x > 620 &&
+                ((_touch_start_y <= 65 && _touch_start_x >= 680) || (_touch_start_y < 80 && _touch_start_x > 620)) &&
                 (now - _touch_start_ms >= 500)) {
                 int16_t dx = tx - _touch_start_x;
                 int16_t dy = ty - _touch_start_y;
@@ -250,7 +250,7 @@ void ButtonHandler::processTouch(uint32_t now) {
                         // Long press on bottom-left status strip -> Reset Trip Odometer
                         // (Touches on x >= 400 are action buttons [ BOOST ] / [ MODE ], prevent accidental reset)
                         _pending_action = NAV_BTN2_LONG;
-                    } else if (_touch_start_y < 80 && _touch_start_x > 620) {
+                    } else if ((_touch_start_y <= 65 && _touch_start_x >= 680) || (_touch_start_y < 80 && _touch_start_x > 620)) {
                         // Long press top right -> Open Settings Menu
                         _pending_action = NAV_BTN1_LONG;
                     }
@@ -436,6 +436,10 @@ void ButtonHandler::processTouch(uint32_t now) {
                         if (_last_tap_x <= 135 && _last_tap_y <= 65) {
                             _pending_action = NAV_SCREEN_STATS;
                         }
+                        // 1b. Hidden Top Right Settings Touch Button (short tap OR long hold) -> Open Settings Menu
+                        else if (_last_tap_x >= 680 && _last_tap_y <= 65) {
+                            _pending_action = NAV_BTN1_LONG;
+                        }
                         // 2. Interactive Headlight Badge Touch Toggle (Top Slot 50,354 or Bottom Slot 50,416)
                         else if (Settings.get().show_light_btn != 0 && ({
                             bool both_gf_inc = Settings.get().incline_gforce_enabled && 
@@ -448,11 +452,9 @@ void ButtonHandler::processTouch(uint32_t now) {
                         })) {
                             _pending_action = NAV_LIGHT_TOGGLE;
                         }
-                        // 3. Action Buttons on Ride Dash (Bottom Right: BOOST & MODE in Tuning, wide MODE in Legal)
+                        // 3. Action Buttons on Ride Dash (Bottom Right: BOOST & MODE in all modes)
                         else if (_last_tap_y >= 360 && _last_tap_y <= 465 && _last_tap_x >= 430 && _last_tap_x <= 775) {
-                            if (!_tuning_mode) {
-                                _pending_action = NAV_MODE_CYCLE;
-                            } else if (_last_tap_x <= 605) {
+                            if (_last_tap_x <= 605) {
                                 _pending_action = NAV_BOOST_TOGGLE;
                             } else {
                                 _pending_action = NAV_MODE_CYCLE;

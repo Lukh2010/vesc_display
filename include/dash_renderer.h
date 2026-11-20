@@ -19,14 +19,12 @@ public:
     };
 
     enum SettingsTab : uint8_t {
-        TAB_ECO    = 0,
-        TAB_SPORT  = 1,
-        TAB_RACE   = 2,
-        TAB_DRAGY  = 3,
-        TAB_DASH   = 4,
-        TAB_SYSTEM = 5,
-        TAB_PIN    = 6,
-        TAB_COUNT  = 7
+        TAB_SPEED  = 0,
+        TAB_DRAGY  = 1,
+        TAB_DASH   = 2,
+        TAB_SYSTEM = 3,
+        TAB_PIN    = 4,
+        TAB_COUNT  = 5
     };
 
     DashboardRenderer();
@@ -219,7 +217,7 @@ private:
         bool tuning_mode;
         bool banner_active;
         int8_t boost_btn_tuning;
-        bool boost_active;
+        int8_t boost_active;
         bool hazard_active;
         uint8_t light_mode;
         uint8_t light_hue;
@@ -289,7 +287,7 @@ private:
             tuning_mode = false;
             banner_active = false;
             boost_btn_tuning = -1;
-            boost_active = false;
+            boost_active = -1;
             hazard_active = false;
             lights_enabled = -1;
             light_mode = 255;

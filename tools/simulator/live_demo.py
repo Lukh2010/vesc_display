@@ -967,9 +967,7 @@ class DesktopDemoApp:
         self.root.bind("<KeyPress-W>", lambda e: self.on_up_press())
         self.root.bind("<KeyRelease-W>", lambda e: self.on_up_release())
 
-        # Number keys 1-9 for partial throttle (10% .. 90%), 0 for 0%
-        for digit in range(1, 10):
-            self.root.bind(f"<{digit}>", lambda e, p=digit * 10.0: self.on_digit_press(p))
+        # 0 key cleanly zeros throttle (1..9 disabled to prevent accidental permanent cruise-control)
         self.root.bind("<0>", lambda e: self.on_digit_press(0.0))
 
         # Mouse Wheel for fine throttle adjustment (+/- 5%) or Menu Scroll
@@ -1024,6 +1022,7 @@ class DesktopDemoApp:
         self.root.bind("<Control-b>", lambda e: self.trigger_boot_anim())
         self.root.bind("<F6>", lambda e: self.trigger_boot_anim())
         self.root.bind("<Escape>", lambda e: self.on_esc_press())
+        self.root.bind("<FocusOut>", lambda e: self.on_focus_out())
 
         self.tk_img = ImageTk.PhotoImage(initial_image)
         self.image_item = self.canvas.create_image(0, 0, image=self.tk_img, anchor=tk.NW)
@@ -1085,8 +1084,16 @@ class DesktopDemoApp:
                 self.trigger_nav(NAV_BTN1_SHORT)
             else:
                 self.trigger_nav(NAV_BTN2_SHORT)
-        elif not current_telemetry.is_locked:
-            self.adjust_throttle(5.0 if direction > 0 else -5.0)
+
+    def on_focus_out(self):
+        if self._up_release_timer:
+            self.root.after_cancel(self._up_release_timer)
+            self._up_release_timer = None
+        if self._down_release_timer:
+            self.root.after_cancel(self._down_release_timer)
+            self._down_release_timer = None
+        self.set_throttle(0.0)
+        self.set_brake(0.0)
 
     def on_enter_press(self):
         if current_telemetry.screen == SCREEN_SETTINGS_MENU:

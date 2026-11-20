@@ -875,7 +875,7 @@ void loop() {
         if (Buttons.getLastTap(&tx, &ty)) {
             Renderer.handleSettingsTouch(tx, ty, telemetry);
             Buttons.clearNavAction(); // Clear any pending action to prevent double-invocation
-        } else if (Buttons.isTouching() && Renderer.getSettingsTab() < 3) {
+        } else if (Buttons.isTouching() && Renderer.getSettingsTab() <= DashboardRenderer::TAB_SPEED) {
             int16_t cx = Buttons.getTouchX();
             int16_t cy = Buttons.getTouchY();
             Renderer.handleSettingsSliderDrag(cx, cy, telemetry);
@@ -1117,10 +1117,6 @@ void loop() {
                     break;
 
                 case NAV_BOOST_TOGGLE:
-                    if (!telemetry.tuning_mode) {
-                        Serial.println("[NAV] Boost blocked: Tuning mode is OFF (Police Mode)");
-                        break;
-                    }
                     telemetry.boost_active = !telemetry.boost_active;
                     if (telemetry.boost_active) {
                         telemetry.boost_start_ms = now;
@@ -1133,6 +1129,7 @@ void loop() {
                         telemetry.current_amps = 0.0f;
                         telemetry.phase_amps = 0.0f;
                     }
+                    Renderer.markScreenDirty();
                     Serial.printf("[NAV] Toggled Hyper Boost: %s (Battery Limit: %.1f A)\n",
                                   telemetry.boost_active ? "ACTIVE (70A)" : "OFF (60A)",
                                   ModeManager::instance().getActiveLimits().max_battery_amps);

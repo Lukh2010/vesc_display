@@ -337,17 +337,7 @@ void DashboardRenderer::drawPillToggle(int x, int y, bool on, const ColorThemePa
 }
 
 void DashboardRenderer::drawSettingsGearIcon(int cx, int cy, uint16_t col, uint16_t bg) {
-    // 8 crisp radial gear teeth + solid annulus ring + clean center cutout
-    const float deg2rad = 3.14159265f / 180.0f;
-    for (int i = 0; i < 8; i++) {
-        float ang = i * 45.0f * deg2rad;
-        int tx = cx + (int)roundf(cosf(ang) * 9.5f);
-        int ty = cy + (int)roundf(sinf(ang) * 9.5f);
-        _canvas->fillCircle(tx, ty, 2, col);
-    }
-    _canvas->fillCircle(cx, cy, 7, col);
-    _canvas->fillCircle(cx, cy, 4, bg);
-    _canvas->drawCircle(cx, cy, 4, col);
+    // Hidden / clean top-right corner (no visible gear wheel)
 }
 
 void DashboardRenderer::drawLockIcon(int cx, int cy, uint16_t col, uint16_t bg) {
@@ -400,11 +390,13 @@ void DashboardRenderer::skipBootAnimation() {
     if (_boot_anim_active) {
         _boot_anim_active = false;
         _boot_anim_phase = 3;
-        _pin_screen_drawn = false;
         _wizard_inited = false;
         _last_wizard_step = -1;
+        invalidateCache();
         _screen_dirty = true;
-        _cache.invalidate();
+        if (_canvas) {
+            _canvas->fillScreen(currentTheme().bg);
+        }
         if (!Settings.get().pin_lock_enabled) {
             triggerNeedleSweep();
         }
@@ -572,16 +564,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         }
 
         if (should_auto_advance) {
-            _boot_anim_active = false;
-            _boot_anim_phase = 3;
-            _pin_screen_drawn = false;
-            _wizard_inited = false;
-            _last_wizard_step = -1;
-            _screen_dirty = true;
-            _cache.invalidate();
-            if (!Settings.get().pin_lock_enabled) {
-                triggerNeedleSweep();
-            }
+            skipBootAnimation();
         } else {
             renderBootAnimation(elapsed_ms, telemetry);
             return;
@@ -1002,11 +985,6 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
         _canvas->fillRoundRect(sX, sY, sW, sH, 18, pal.surface);
         _canvas->drawRoundRect(sX, sY, sW, sH, 18, pal.border);
         drawSmoothText(UIF_BODY, "STATS", sX + sW / 2, sY + sH / 2, textdatum_t::middle_center, pal.text, pal.surface);
-
-        // Top-Right Subtle Settings Gear Button (x=756, y=34, visual cue for 500ms long-press)
-        _canvas->fillCircle(756, 34, 17, pal.surface);
-        _canvas->drawCircle(756, 34, 17, pal.border);
-        drawSettingsGearIcon(756, 34, pal.muted, pal.surface);
     }
 
     // 1. Speedometer Gauge Background Arc (270 degree sweep: 135° to 405°)
@@ -1085,13 +1063,15 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     float deg2rad = 3.14159265f / 180.0f;
     int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
     int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
+    int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
+    int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
 
     float spd = _is_sweeping ? _sweep_speed : telemetry.speed_kmh;
     if (spd < 0.8f) spd = 0.0f;
     float spd_anim = (_is_sweeping) ? _sweep_speed : ((_anim_speed > 0.0f) ? _anim_speed : spd);
     if (spd_anim < 0.8f) spd_anim = 0.0f;
     float frac = spd_anim / 100.0f;
-    if (frac > 1.0f) frac = 1.0f;
+    if (frac >= 0.992f) frac = 1.0f;
 
     uint16_t arcCol = pal.primary;
     if (_is_sweeping) {
@@ -1106,10 +1086,16 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (frac <= 0.005f) target_angle = 135.0f;
 
     // 1. Speedometer Active Arc (Zero-flicker differential update)
+    bool reached_full = (target_angle >= 404.5f && _last_arc_angle < 404.5f);
+    bool left_full    = (target_angle < 404.5f && _last_arc_angle >= 404.5f);
+
     if (!_hyper_inited) {
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
             _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
+            if (target_angle >= 404.5f) {
+                _canvas->fillCircle(e_cap_x, e_cap_y, 14, arcCol);
+            }
         } else {
             _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         }
@@ -1118,27 +1104,40 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     } else if (target_angle <= 135.0f && _last_arc_angle > 135.0f) {
         _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, _last_arc_angle + 1.0f, pal.track);
         _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
+        _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
         _last_arc_angle = 135.0f;
         _last_arc_col = arcCol;
     } else if (arcCol != _last_arc_col) {
         if (target_angle < _last_arc_angle) {
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 1.0f, pal.track);
+            if (_last_arc_angle >= 404.5f && target_angle < 404.5f) {
+                _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
+            }
         }
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
             _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
+            if (target_angle >= 404.5f) {
+                _canvas->fillCircle(e_cap_x, e_cap_y, 14, arcCol);
+            }
         } else {
             _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
-    } else if (fabsf(target_angle - _last_arc_angle) >= 0.8f) {
+    } else if (reached_full || left_full || fabsf(target_angle - _last_arc_angle) >= 0.8f) {
         if (target_angle > _last_arc_angle) {
             if (_last_arc_angle <= 135.0f) {
                 _canvas->fillCircle(s_cap_x, s_cap_y, 14, arcCol);
             }
             _canvas->fillArc(cx, cy, r_in, r_out, _last_arc_angle - 0.5f, target_angle, arcCol);
+            if (target_angle >= 404.5f) {
+                _canvas->fillCircle(e_cap_x, e_cap_y, 14, arcCol);
+            }
         } else {
+            if (_last_arc_angle >= 404.5f) {
+                _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
+            }
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 0.5f, pal.track);
             if (target_angle <= 135.0f) {
                 _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
@@ -1381,60 +1380,35 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     }
 
     // 9. Right Column: Bottom Touch Action Buttons
-    // Legal Mode (!tuning_mode): HIDE BOOST, draw wide MODE button across x=445..765 (w=320)
-    // Tuning Mode (tuning_mode): Dual buttons [ BOOST ] (445..597) and [ MODE ] (613..765)
-    int8_t cur_tm_btn = telemetry.tuning_mode ? 1 : 0;
-    bool btn_layout_changed = (!_hyper_inited || _cache.boost_btn_tuning != cur_tm_btn);
-    if (btn_layout_changed) {
-        _cache.boost_btn_tuning = cur_tm_btn;
-        _canvas->fillRect(442, 376, 328, 82, pal.bg);
+    // ALWAYS render BOTH buttons in bottom-right in all modes: [ BOOST ] (x: 445..597) and [ MODE ] (x: 613..765)
+    bool btn_layout_changed = !_hyper_inited;
+    int8_t cur_boost = telemetry.boost_active ? 1 : 0;
+
+    if (btn_layout_changed || cur_boost != _cache.boost_active) {
+        _cache.boost_active = cur_boost;
+        if (telemetry.boost_active) {
+            _canvas->fillRoundRect(445, 380, 152, 72, 16, pal.primary);
+            _canvas->drawRoundRect(445, 380, 152, 72, 16, pal.primary);
+            drawSmoothText(UIF_HEADING, "BOOST", 521, 416, textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
+        } else {
+            _canvas->fillRoundRect(445, 380, 152, 72, 16, pal.surface);
+            _canvas->drawRoundRect(445, 380, 152, 72, 16, pal.border);
+            drawSmoothText(UIF_HEADING, "BOOST", 521, 416, textdatum_t::middle_center, pal.text, pal.surface);
+        }
     }
 
-    if (telemetry.tuning_mode) {
-        if (btn_layout_changed || telemetry.boost_active != _cache.boost_active) {
-            _cache.boost_active = telemetry.boost_active;
-            if (telemetry.boost_active) {
-                _canvas->fillRoundRect(445, 380, 152, 72, 16, pal.primary);
-                _canvas->drawRoundRect(445, 380, 152, 72, 16, pal.primary);
-                drawSmoothText(UIF_HEADING, "BOOST", 521, 416, textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
-            } else {
-                _canvas->fillRoundRect(445, 380, 152, 72, 16, pal.surface);
-                _canvas->drawRoundRect(445, 380, 152, 72, 16, pal.border);
-                drawSmoothText(UIF_HEADING, "BOOST", 521, 416, textdatum_t::middle_center, pal.text, pal.surface);
-            }
-        }
-
-        if (btn_layout_changed || (int)telemetry.ride_mode != _cache.ride_mode || banner_now != _cache.banner_active) {
-            _cache.ride_mode = (int)telemetry.ride_mode;
-            _cache.banner_active = banner_now;
-            if (banner_now) {
-                _canvas->fillRoundRect(613, 380, 152, 72, 16, mCol);
-                _canvas->drawRoundRect(613, 380, 152, 72, 16, mCol);
-                drawSmoothText(UIF_HEADING, mNames[mIdx], 689, 416, textdatum_t::middle_center, onPrimaryFg(pal), mCol);
-            } else {
-                _canvas->fillRoundRect(613, 380, 152, 72, 16, pal.surface);
-                _canvas->drawRoundRect(613, 380, 152, 72, 16, mCol);
-                _canvas->drawRoundRect(614, 381, 150, 70, 15, mCol);
-                drawSmoothText(UIF_HEADING, mNames[mIdx], 689, 416, textdatum_t::middle_center, mCol, pal.surface);
-            }
-        }
-    } else {
-        // Legal Mode: Clean full-width MODE button across x=445..765
-        _cache.boost_active = false;
-        if (btn_layout_changed || (int)telemetry.ride_mode != _cache.ride_mode || banner_now != _cache.banner_active) {
-            _cache.ride_mode = (int)telemetry.ride_mode;
-            _cache.banner_active = banner_now;
-            if (banner_now) {
-                _canvas->fillRoundRect(445, 380, 320, 72, 16, mCol);
-                _canvas->drawRoundRect(445, 380, 320, 72, 16, mCol);
-                drawSmoothText(UIF_MED_NUM, mNames[mIdx], 605, 416, textdatum_t::middle_center, onPrimaryFg(pal), mCol);
-            } else {
-                _canvas->fillRoundRect(445, 380, 320, 72, 16, pal.surface);
-                _canvas->drawRoundRect(445, 380, 320, 72, 16, mCol);
-                _canvas->drawRoundRect(446, 381, 318, 70, 15, mCol);
-                _canvas->fillCircle(472, 416, 6, mCol);
-                drawSmoothText(UIF_MED_NUM, mNames[mIdx], 605, 416, textdatum_t::middle_center, mCol, pal.surface);
-            }
+    if (btn_layout_changed || (int)telemetry.ride_mode != _cache.ride_mode || banner_now != _cache.banner_active) {
+        _cache.ride_mode = (int)telemetry.ride_mode;
+        _cache.banner_active = banner_now;
+        if (banner_now) {
+            _canvas->fillRoundRect(613, 380, 152, 72, 16, mCol);
+            _canvas->drawRoundRect(613, 380, 152, 72, 16, mCol);
+            drawSmoothText(UIF_HEADING, mNames[mIdx], 689, 416, textdatum_t::middle_center, onPrimaryFg(pal), mCol);
+        } else {
+            _canvas->fillRoundRect(613, 380, 152, 72, 16, pal.surface);
+            _canvas->drawRoundRect(613, 380, 152, 72, 16, mCol);
+            _canvas->drawRoundRect(614, 381, 150, 70, 15, mCol);
+            drawSmoothText(UIF_HEADING, mNames[mIdx], 689, 416, textdatum_t::middle_center, mCol, pal.surface);
         }
     }
 
@@ -1575,75 +1549,79 @@ void DashboardRenderer::renderLightsScreen(const DashTelemetry &telemetry) {
 #endif
 
 // ==============================================================================
-// SCREEN 2: UPGRADED TELEMETRIE & STATISTIK + 60s LIVE SPARKLINE (800x480)
+// SCREEN 2: TELEMETRIE & STATISTIK — RESTORED CLASSIC 6-CARD DASH (800x480)
 // ==============================================================================
 void DashboardRenderer::initRtGraphsScreen(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillScreen(pal.bg);
 
-    // 1. Clean Top Bar (y: 12..46)
-    _canvas->fillRoundRect(20, 12, 108, 34, 17, pal.surface);
-    _canvas->drawRoundRect(20, 12, 108, 34, 17, pal.border);
-    drawSmoothText(UIF_BODY, "< DASH", 74, 29, textdatum_t::middle_center, pal.text, pal.surface);
+    // Top Bar: Back Button [< DASH], [ RACE ] Button, Center Title, Reset Trip Button
+    _canvas->fillRoundRect(20, 12, 110, 36, 18, pal.surface);
+    _canvas->drawRoundRect(20, 12, 110, 36, 18, pal.border);
+    drawSmoothText(UIF_BODY, "< DASH", 75, 30, textdatum_t::middle_center, pal.text, pal.surface);
 
-    // Sleek [ RACE ] pill ONLY in Tuning Mode
+    // Styled [ RACE ] touch button (only visible when tuning mode is active)
     if (telemetry.tuning_mode) {
         uint16_t raceBg = blendRgb565(pal.surface, pal.accent_danger, pal.is_light ? 28 : 48);
-        _canvas->fillRoundRect(138, 12, 96, 34, 17, raceBg);
-        _canvas->drawRoundRect(138, 12, 96, 34, 17, pal.accent_danger);
-        drawSmoothText(UIF_BODY, "RACE", 186, 29, textdatum_t::middle_center, pal.accent_danger, raceBg);
+        _canvas->fillRoundRect(140, 12, 100, 36, 18, raceBg);
+        _canvas->drawRoundRect(140, 12, 100, 36, 18, pal.accent_danger);
+        drawSmoothText(UIF_BODY, "RACE", 190, 30, textdatum_t::middle_center, pal.accent_danger, raceBg);
     }
 
-    int titleX = telemetry.tuning_mode ? 446 : 400;
-    drawSmoothText(UIF_HEADING, "TELEMETRIE & STATISTIK", titleX, 29, textdatum_t::middle_center, pal.text, pal.bg);
+    int titleX = telemetry.tuning_mode ? 430 : 380;
+    drawSmoothText(UIF_HEADING, "FAHRDATEN & STATISTIK", titleX, 30, textdatum_t::middle_center, pal.primary, pal.bg);
 
-    _canvas->fillRoundRect(668, 12, 112, 34, 17, pal.surface);
-    _canvas->drawRoundRect(668, 12, 112, 34, 17, pal.border);
-    drawSmoothText(UIF_BODY, "RESET", 724, 29, textdatum_t::middle_center, pal.muted, pal.surface);
+    _canvas->fillRoundRect(640, 12, 140, 36, 18, pal.surface);
+    _canvas->drawRoundRect(640, 12, 140, 36, 18, pal.border);
+    drawSmoothText(UIF_BODY, "RESET TRIP", 710, 30, textdatum_t::middle_center, pal.text, pal.surface);
 
-    // 2. Top KPI Hero Strip (4 clean metrics with subtle vertical dividers, y=54..140)
-    drawCard(20, 54, 760, 86, pal.surface, pal.border, 12);
-    _canvas->drawFastVLine(210, 66, 62, pal.border);
-    _canvas->drawFastVLine(400, 66, 62, pal.border);
-    _canvas->drawFastVLine(590, 66, 62, pal.border);
+    // Top Summary Card: Trip & Movement Overview (4 KPI strips)
+    drawCard(20, 56, 760, 92, pal.surface, pal.border, 12);
+    _canvas->drawFastVLine(210, 66, 72, pal.border);
+    _canvas->drawFastVLine(400, 66, 72, pal.border);
+    _canvas->drawFastVLine(590, 66, 72, pal.border);
 
-    drawSmoothText(UIF_SMALL, "STRECKE",   34,  63, textdatum_t::top_left, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "FAHRZEIT",  224, 63, textdatum_t::top_left, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "MAX SPEED", 414, 63, textdatum_t::top_left, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "ENERGIE",   604, 63, textdatum_t::top_left, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "STRECKE",   36,  66, textdatum_t::top_left, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "FAHRZEIT",  225, 66, textdatum_t::top_left, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "MAX SPEED", 415, 66, textdatum_t::top_left, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "ENERGIE",   605, 66, textdatum_t::top_left, pal.muted, pal.surface);
 
-    // 3. Middle Row: 3 Polished Cards with Thin Colored Top Accent Bars (y=150..274, h=124)
-    // Card 1: MAX LEISTUNG
-    drawCard(20, 150, 244, 124, pal.surface, pal.border, 12);
-    _canvas->fillRoundRect(32, 150, 220, 3, 1, pal.accent_warn);
-    drawSmoothText(UIF_SMALL, "MAX LEISTUNG", 34, 161, textdatum_t::top_left, pal.muted, pal.surface);
+    // Middle Performance Tile Grid (6 Large Tiles, 2x3 grid):
+    // Row 1: y = 160, h = 142
+    // Tile 1: MAX LEISTUNG (PEAK WATT)
+    drawCard(20, 160, 244, 142, pal.surface, pal.border, 12);
+    _canvas->fillRoundRect(32, 160, 220, 3, 1, pal.primary);
+    drawSmoothText(UIF_SMALL, "MAX LEISTUNG (PEAK)", 32, 172, textdatum_t::top_left, pal.primary, pal.surface);
+    drawSmoothText(UIF_SMALL, "Spitzenleistung ab Akku", 32, 268, textdatum_t::top_left, pal.muted, pal.surface);
 
-    // Card 2: STROM (AKKU / PHASE)
-    drawCard(278, 150, 244, 124, pal.surface, pal.border, 12);
-    _canvas->fillRoundRect(290, 150, 220, 3, 1, pal.primary);
-    drawSmoothText(UIF_SMALL, "PEAK STROM", 292, 161, textdatum_t::top_left, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "AKKU",  292, 190, textdatum_t::top_left, pal.muted, pal.surface);
-    _canvas->drawFastHLine(292, 220, 216, pal.border);
-    drawSmoothText(UIF_SMALL, "PHASE", 292, 236, textdatum_t::top_left, pal.muted, pal.surface);
+    // Tile 2: PEAK AKKU-STROM
+    drawCard(278, 160, 244, 142, pal.surface, pal.border, 12);
+    _canvas->fillRoundRect(290, 160, 220, 3, 1, pal.primary);
+    drawSmoothText(UIF_SMALL, "PEAK AKKU-STROM", 290, 172, textdatum_t::top_left, pal.primary, pal.surface);
+    drawSmoothText(UIF_SMALL, "Maximaler Batterie-Strom", 290, 268, textdatum_t::top_left, pal.muted, pal.surface);
 
-    // Card 3: AKKU & THERMIK
-    drawCard(536, 150, 244, 124, pal.surface, pal.border, 12);
-    _canvas->fillRoundRect(548, 150, 220, 3, 1, pal.accent_ok);
-    drawSmoothText(UIF_SMALL, "AKKU & THERMIK", 550, 161, textdatum_t::top_left, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "SPANNUNG",  550, 188, textdatum_t::top_left, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "EFFIZIENZ", 550, 214, textdatum_t::top_left, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "MAX TEMP",  550, 240, textdatum_t::top_left, pal.muted, pal.surface);
+    // Tile 3: PEAK PHASENSTROM
+    drawCard(536, 160, 244, 142, pal.surface, pal.border, 12);
+    _canvas->fillRoundRect(548, 160, 220, 3, 1, pal.primary);
+    drawSmoothText(UIF_SMALL, "PEAK PHASENSTROM", 548, 172, textdatum_t::top_left, pal.primary, pal.surface);
+    drawSmoothText(UIF_SMALL, "Max. Motor-Drehmoment", 548, 268, textdatum_t::top_left, pal.muted, pal.surface);
 
-    // 4. Bottom Wide Card: LIVE VERLAUF (60s) Dual-Curve Sparkline (y=284..466, h=182)
-    drawCard(20, 284, 760, 182, pal.surface, pal.border, 12);
-    drawSmoothText(UIF_BODY, "LIVE VERLAUF (60s)", 34, 294, textdatum_t::top_left, pal.text, pal.surface);
+    // Row 2: y = 314, h = 142
+    // Tile 4: VERBRAUCH & EFFIZIENZ
+    drawCard(20, 314, 244, 142, pal.surface, pal.border, 12);
+    _canvas->fillRoundRect(32, 314, 220, 3, 1, pal.primary);
+    drawSmoothText(UIF_SMALL, "VERBRAUCH & EFFIZIENZ", 32, 326, textdatum_t::top_left, pal.primary, pal.surface);
 
-    // Legend in header right
-    _canvas->fillRoundRect(490, 300, 14, 4, 2, pal.primary);
-    drawSmoothText(UIF_SMALL, "Speed (km/h)", 510, 295, textdatum_t::top_left, pal.primary, pal.surface);
+    // Tile 5: AKKU-SPANNUNG (MIN/MAX)
+    drawCard(278, 314, 244, 142, pal.surface, pal.border, 12);
+    _canvas->fillRoundRect(290, 314, 220, 3, 1, pal.primary);
+    drawSmoothText(UIF_SMALL, "AKKU-SPANNUNG (MIN/MAX)", 290, 326, textdatum_t::top_left, pal.primary, pal.surface);
 
-    _canvas->fillRoundRect(625, 300, 14, 4, 2, pal.secondary);
-    drawSmoothText(UIF_SMALL, "Power (kW)", 645, 295, textdatum_t::top_left, pal.secondary, pal.surface);
+    // Tile 6: MAX TEMPERATUR
+    drawCard(536, 314, 244, 142, pal.surface, pal.border, 12);
+    _canvas->fillRoundRect(548, 314, 220, 3, 1, pal.primary);
+    drawSmoothText(UIF_SMALL, "MAX TEMPERATUR", 548, 326, textdatum_t::top_left, pal.primary, pal.surface);
+    drawSmoothText(UIF_SMALL, "Motor / Inverter FETs", 548, 422, textdatum_t::top_left, pal.muted, pal.surface);
 
     _stats_cache.invalidate();
     _stats_cache.tuning_mode = telemetry.tuning_mode ? 1 : 0;
@@ -1651,125 +1629,7 @@ void DashboardRenderer::initRtGraphsScreen(const DashTelemetry &telemetry) {
 }
 
 void DashboardRenderer::drawStatsSparkline(const DashTelemetry &telemetry, const ColorThemePalette &pal) {
-    const int gx = 68;
-    const int gy = 318;
-    const int gw = 656;
-    const int gh = 124;
-
-    uint16_t plotBg = pal.is_light ? pal.bg : blendRgb565(pal.bg, pal.surface, 110);
-    _canvas->fillRoundRect(gx, gy, gw, gh, 6, plotBg);
-    _canvas->drawRoundRect(gx, gy, gw, gh, 6, pal.border);
-
-    // Horizontal grid lines (25%, 50%, 75%)
-    for (int i = 1; i <= 3; i++) {
-        int y_line = gy + (gh * i) / 4;
-        _canvas->drawFastHLine(gx + 1, y_line, gw - 2, pal.border);
-    }
-
-    // Determine dynamic clean axis caps (respecting Police Mode masking!)
-    float max_spd_seen = 0.0f;
-    float max_pwr_seen = 0.0f;
-    for (int i = 0; i < WAVE_HISTORY_LEN; i++) {
-        float sv = telemetry.tuning_mode ? telemetry.speed_history[i] : std::min(telemetry.speed_history[i], 22.0f);
-        float pv = telemetry.tuning_mode ? telemetry.power_history[i] : std::min(telemetry.power_history[i], 500.0f);
-        if (sv > max_spd_seen) max_spd_seen = sv;
-        if (pv > max_pwr_seen) max_pwr_seen = pv;
-    }
-
-    float max_spd = 30.0f;
-    if (!telemetry.tuning_mode) max_spd = 25.0f;
-    else if (max_spd_seen > 60.0f) max_spd = 100.0f;
-    else if (max_spd_seen > 30.0f) max_spd = 60.0f;
-
-    float max_pwr = 1000.0f;
-    if (!telemetry.tuning_mode) max_pwr = 1000.0f;
-    else if (max_pwr_seen > 15000.0f) max_pwr = 35000.0f;
-    else if (max_pwr_seen > 6000.0f)  max_pwr = 15000.0f;
-    else if (max_pwr_seen > 3000.0f)  max_pwr = 6000.0f;
-    else if (max_pwr_seen > 1000.0f)  max_pwr = 3000.0f;
-
-    // Clear & draw Left Y-Axis (Speed)
-    _canvas->fillRect(24, gy - 4, 42, gh + 10, pal.surface);
-    char yBuf[16];
-    snprintf(yBuf, sizeof(yBuf), "%.0f", max_spd);
-    drawSmoothText(UIF_SMALL, yBuf, gx - 5, gy + 5, textdatum_t::middle_right, pal.primary, pal.surface);
-    snprintf(yBuf, sizeof(yBuf), "%.0f", max_spd * 0.5f);
-    drawSmoothText(UIF_SMALL, yBuf, gx - 5, gy + gh / 2, textdatum_t::middle_right, pal.primary, pal.surface);
-    drawSmoothText(UIF_SMALL, "0", gx - 5, gy + gh - 5, textdatum_t::middle_right, pal.muted, pal.surface);
-
-    // Clear & draw Right Y-Axis (Power kW)
-    _canvas->fillRect(gx + gw + 2, gy - 4, 52, gh + 10, pal.surface);
-    snprintf(yBuf, sizeof(yBuf), "%.0fkW", max_pwr / 1000.0f);
-    drawSmoothText(UIF_SMALL, yBuf, gx + gw + 5, gy + 5, textdatum_t::middle_left, pal.secondary, pal.surface);
-    snprintf(yBuf, sizeof(yBuf), "%.1fk", (max_pwr * 0.5f) / 1000.0f);
-    drawSmoothText(UIF_SMALL, yBuf, gx + gw + 5, gy + gh / 2, textdatum_t::middle_left, pal.secondary, pal.surface);
-    drawSmoothText(UIF_SMALL, "0", gx + gw + 5, gy + gh - 5, textdatum_t::middle_left, pal.muted, pal.surface);
-
-    // Bottom X-Axis labels
-    drawSmoothText(UIF_SMALL, "-60s",  gx,          gy + gh + 4, textdatum_t::top_left,   pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "-30s",  gx + gw / 2, gy + gh + 4, textdatum_t::top_center, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "JETZT", gx + gw,     gy + gh + 4, textdatum_t::top_right,  pal.muted, pal.surface);
-
-    const int n = WAVE_HISTORY_LEN;
-    float dx = (float)(gw - 4) / (float)(n - 1);
-    int base_y = gy + gh - 2;
-    uint16_t fillCol = blendRgb565(plotBg, pal.primary, pal.is_light ? 42 : 38);
-
-    auto mapY = [&](float val, float cap) -> int {
-        if (val < 0.0f) val = 0.0f;
-        if (val > cap) val = cap;
-        return base_y - (int)((val / cap) * (float)(gh - 8));
-    };
-
-    // Pass 1: Subtle shaded area under Speed curve
-    int prev_x = gx + 2;
-    float s0 = telemetry.tuning_mode ? telemetry.speed_history[0] : std::min(telemetry.speed_history[0], 22.0f);
-    int prev_sy = mapY(s0, max_spd);
-    for (int i = 1; i < n; i++) {
-        float sv = telemetry.tuning_mode ? telemetry.speed_history[i] : std::min(telemetry.speed_history[i], 22.0f);
-        int curr_x = gx + 2 + (int)(i * dx);
-        int curr_sy = mapY(sv, max_spd);
-        _canvas->fillTriangle(prev_x, prev_sy, curr_x, curr_sy, prev_x, base_y, fillCol);
-        _canvas->fillTriangle(curr_x, curr_sy, curr_x, base_y, prev_x, base_y, fillCol);
-        prev_x = curr_x;
-        prev_sy = curr_sy;
-    }
-
-    // Re-draw subtle grid lines faintly over shaded fill
-    for (int i = 1; i <= 3; i++) {
-        int y_line = gy + (gh * i) / 4;
-        _canvas->drawFastHLine(gx + 1, y_line, gw - 2, blendRgb565(plotBg, pal.border, 160));
-    }
-
-    // Pass 2: Power curve (secondary accent, 2px)
-    prev_x = gx + 2;
-    float p0 = telemetry.tuning_mode ? telemetry.power_history[0] : std::min(telemetry.power_history[0], 500.0f);
-    int prev_py = mapY(p0, max_pwr);
-    for (int i = 1; i < n; i++) {
-        float pv = telemetry.tuning_mode ? telemetry.power_history[i] : std::min(telemetry.power_history[i], 500.0f);
-        int curr_x = gx + 2 + (int)(i * dx);
-        int curr_py = mapY(pv, max_pwr);
-        _canvas->drawLine(prev_x, prev_py, curr_x, curr_py, pal.secondary);
-        _canvas->drawLine(prev_x, prev_py - 1, curr_x, curr_py - 1, pal.secondary);
-        prev_x = curr_x;
-        prev_py = curr_py;
-    }
-    _canvas->fillCircle(prev_x, prev_py, 3, pal.secondary);
-
-    // Pass 3: Speed curve (primary accent, 2px + crisp tip dot)
-    prev_x = gx + 2;
-    prev_sy = mapY(s0, max_spd);
-    for (int i = 1; i < n; i++) {
-        float sv = telemetry.tuning_mode ? telemetry.speed_history[i] : std::min(telemetry.speed_history[i], 22.0f);
-        int curr_x = gx + 2 + (int)(i * dx);
-        int curr_sy = mapY(sv, max_spd);
-        _canvas->drawLine(prev_x, prev_sy, curr_x, curr_sy, pal.primary);
-        _canvas->drawLine(prev_x, prev_sy - 1, curr_x, curr_sy - 1, pal.primary);
-        prev_x = curr_x;
-        prev_sy = curr_sy;
-    }
-    _canvas->fillCircle(prev_x, prev_sy, 4, pal.primary);
-    _canvas->fillCircle(prev_x, prev_sy, 2, onPrimaryFg(pal));
+    // Replaced by classic 6-card telemetry grid
 }
 
 void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
@@ -1780,155 +1640,155 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _stats_cache.invalidate();
         _stats_cache.tuning_mode = cur_tm;
 
-        // Re-render top bar middle/race area cleanly
-        _canvas->fillRect(136, 10, 526, 38, pal.bg);
+        // Toggle [ RACE ] button in top bar (x: 140..240, y: 12..48)
         if (cur_tm) {
             uint16_t raceBg = blendRgb565(pal.surface, pal.accent_danger, pal.is_light ? 28 : 48);
-            _canvas->fillRoundRect(138, 12, 96, 34, 17, raceBg);
-            _canvas->drawRoundRect(138, 12, 96, 34, 17, pal.accent_danger);
-            drawSmoothText(UIF_BODY, "RACE", 186, 29, textdatum_t::middle_center, pal.accent_danger, raceBg);
+            _canvas->fillRoundRect(140, 12, 100, 36, 18, raceBg);
+            _canvas->drawRoundRect(140, 12, 100, 36, 18, pal.accent_danger);
+            drawSmoothText(UIF_BODY, "RACE", 190, 30, textdatum_t::middle_center, pal.accent_danger, raceBg);
+        } else {
+            _canvas->fillRect(140, 12, 100, 36, pal.bg);
         }
-        int titleX = cur_tm ? 446 : 400;
-        drawSmoothText(UIF_HEADING, "TELEMETRIE & STATISTIK", titleX, 29, textdatum_t::middle_center, pal.text, pal.bg);
+        int titleX = cur_tm ? 430 : 380;
+        _canvas->fillRect(250, 12, 380, 36, pal.bg);
+        drawSmoothText(UIF_HEADING, "FAHRDATEN & STATISTIK", titleX, 30, textdatum_t::middle_center, pal.primary, pal.bg);
     }
 
-    // Police Mode Masking
-    float disp_max_spd   = telemetry.tuning_mode ? telemetry.stats.max_speed_kmh    : std::min(telemetry.stats.max_speed_kmh, 22.0f);
-    float disp_live_spd  = telemetry.tuning_mode ? telemetry.speed_kmh              : std::min(telemetry.speed_kmh, 22.0f);
-    float disp_avg_spd   = telemetry.tuning_mode ? telemetry.stats.avg_speed_kmh    : std::min(telemetry.stats.avg_speed_kmh, 20.0f);
-    float disp_peak_pwr  = telemetry.tuning_mode ? telemetry.stats.peak_power_watts : std::min(telemetry.stats.peak_power_watts, 500.0f);
+    // Police Mode Masking: When tuning_mode == false, limit high-performance stats
+    // to strictly legal-compliant values (Max 22 km/h, 500 W peak, 20 A battery, 45 A phase, 20 km/h avg).
+    float disp_max_spd   = telemetry.tuning_mode ? telemetry.stats.max_speed_kmh   : std::min(telemetry.stats.max_speed_kmh, 22.0f);
+    float disp_live_spd  = telemetry.tuning_mode ? telemetry.speed_kmh             : std::min(telemetry.speed_kmh, 22.0f);
+    float disp_avg_spd   = telemetry.tuning_mode ? telemetry.stats.avg_speed_kmh   : std::min(telemetry.stats.avg_speed_kmh, 20.0f);
+    float disp_peak_pwr  = telemetry.tuning_mode ? telemetry.stats.peak_power_watts: std::min(telemetry.stats.peak_power_watts, 500.0f);
     float disp_peak_curr = telemetry.tuning_mode ? telemetry.stats.peak_current_amps: std::min(telemetry.stats.peak_current_amps, 20.0f);
-    float disp_peak_pha  = telemetry.tuning_mode ? telemetry.stats.peak_phase_amps  : std::min(telemetry.stats.peak_phase_amps, 45.0f);
+    float disp_peak_pha  = telemetry.tuning_mode ? telemetry.stats.peak_phase_amps : std::min(telemetry.stats.peak_phase_amps, 45.0f);
 
-    // Top KPI Strip — Col 1: STRECKE / ODO
+    // Col 1: STRECKE (Trip km & ODO km)
     int cur_trip = (int)(telemetry.trip_km * 10.0f + 0.5f);
     int cur_odo  = (int)(telemetry.odo_km * 10.0f + 0.5f);
     if (!_stats_inited || cur_trip != _stats_cache.trip_x10 || cur_odo != _stats_cache.odo_x10) {
         _stats_cache.trip_x10 = cur_trip;
         _stats_cache.odo_x10 = cur_odo;
-        _canvas->fillRect(34, 80, 170, 52, pal.surface);
+        _canvas->fillRect(36, 86, 168, 56, pal.surface);
         char distBuf[24]; snprintf(distBuf, sizeof(distBuf), "%.1f km", telemetry.trip_km);
-        drawSmoothText(UIF_HEADING, distBuf, 34, 82, textdatum_t::top_left, pal.text, pal.surface);
-        char odoBuf[24]; snprintf(odoBuf, sizeof(odoBuf), "ODO %.1f km", telemetry.odo_km);
-        drawSmoothText(UIF_SMALL, odoBuf, 34, 114, textdatum_t::top_left, pal.muted, pal.surface);
+        drawSmoothText(UIF_HEADING, distBuf, 36, 86, textdatum_t::top_left, pal.text, pal.surface);
+        char odoBuf[24]; snprintf(odoBuf, sizeof(odoBuf), "ODO: %.1f km", telemetry.odo_km);
+        drawSmoothText(UIF_SMALL, odoBuf, 36, 122, textdatum_t::top_left, pal.muted, pal.surface);
     }
 
-    // Col 2: FAHRZEIT / AVG
+    // Col 2: FAHRZEIT (Ride time & Avg speed)
     uint32_t sec = telemetry.stats.ride_time_sec;
     int cur_avg = (int)(disp_avg_spd * 10.0f + 0.5f);
     if (!_stats_inited || sec != _stats_cache.ride_sec || cur_avg != _stats_cache.avg_spd_x10) {
         _stats_cache.ride_sec = sec;
         _stats_cache.avg_spd_x10 = cur_avg;
-        _canvas->fillRect(224, 80, 170, 52, pal.surface);
+        _canvas->fillRect(225, 86, 168, 56, pal.surface);
         char timeBuf[24];
         if (sec >= 3600) {
-            snprintf(timeBuf, sizeof(timeBuf), "%u:%02u:%02u", (unsigned)(sec / 3600), (unsigned)((sec % 3600) / 60), (unsigned)(sec % 60));
+            snprintf(timeBuf, sizeof(timeBuf), "%u:%02u:%02u", (unsigned int)(sec / 3600), (unsigned int)((sec % 3600) / 60), (unsigned int)(sec % 60));
         } else {
-            snprintf(timeBuf, sizeof(timeBuf), "%02u:%02u", (unsigned)(sec / 60), (unsigned)(sec % 60));
+            snprintf(timeBuf, sizeof(timeBuf), "%02u:%02u", (unsigned int)(sec / 60), (unsigned int)(sec % 60));
         }
-        drawSmoothText(UIF_HEADING, timeBuf, 224, 82, textdatum_t::top_left, pal.text, pal.surface);
-        char avgBuf[24]; snprintf(avgBuf, sizeof(avgBuf), "AVG %.1f km/h", disp_avg_spd);
-        drawSmoothText(UIF_SMALL, avgBuf, 224, 114, textdatum_t::top_left, pal.muted, pal.surface);
+        drawSmoothText(UIF_HEADING, timeBuf, 225, 86, textdatum_t::top_left, pal.text, pal.surface);
+        char avgSpd[24]; snprintf(avgSpd, sizeof(avgSpd), "Avg: %.1f km/h", disp_avg_spd);
+        drawSmoothText(UIF_SMALL, avgSpd, 225, 122, textdatum_t::top_left, pal.muted, pal.surface);
     }
 
-    // Col 3: MAX SPEED / LIVE
+    // Col 3: MAX SPEED (Max speed & Live speed)
     int cur_max_spd  = (int)(disp_max_spd * 10.0f + 0.5f);
     int cur_live_spd = (int)(disp_live_spd * 10.0f + 0.5f);
     if (!_stats_inited || cur_max_spd != _stats_cache.max_spd_x10 || cur_live_spd != _stats_cache.live_spd_x10) {
         _stats_cache.max_spd_x10 = cur_max_spd;
         _stats_cache.live_spd_x10 = cur_live_spd;
-        _canvas->fillRect(414, 80, 170, 52, pal.surface);
-        char maxBuf[24]; snprintf(maxBuf, sizeof(maxBuf), "%.1f km/h", disp_max_spd);
-        drawSmoothText(UIF_HEADING, maxBuf, 414, 82, textdatum_t::top_left, pal.primary, pal.surface);
-        char liveBuf[24]; snprintf(liveBuf, sizeof(liveBuf), "Live %.1f km/h", disp_live_spd);
-        drawSmoothText(UIF_SMALL, liveBuf, 414, 114, textdatum_t::top_left, pal.muted, pal.surface);
+        _canvas->fillRect(415, 86, 168, 56, pal.surface);
+        char maxSpd[24]; snprintf(maxSpd, sizeof(maxSpd), "%.1f km/h", disp_max_spd);
+        drawSmoothText(UIF_HEADING, maxSpd, 415, 86, textdatum_t::top_left, pal.text, pal.surface);
+        char liveSpd[24]; snprintf(liveSpd, sizeof(liveSpd), "Live: %.1f km/h", disp_live_spd);
+        drawSmoothText(UIF_SMALL, liveSpd, 415, 122, textdatum_t::top_left, pal.muted, pal.surface);
     }
 
-    // Col 4: ENERGIE / REST
+    // Col 4: ENERGIE (Trip Wh & Remaining Wh)
     int cur_wh  = (int)(telemetry.stats.trip_wh + 0.5f);
     int cur_rem = (int)(telemetry.remaining_wh + 0.5f);
     if (!_stats_inited || cur_wh != _stats_cache.trip_wh || cur_rem != _stats_cache.rem_wh) {
         _stats_cache.trip_wh = cur_wh;
         _stats_cache.rem_wh = cur_rem;
-        _canvas->fillRect(604, 80, 166, 52, pal.surface);
-        char whBuf[20]; snprintf(whBuf, sizeof(whBuf), "%.0f Wh", telemetry.stats.trip_wh);
-        drawSmoothText(UIF_HEADING, whBuf, 604, 82, textdatum_t::top_left, pal.text, pal.surface);
-        char remBuf[24]; snprintf(remBuf, sizeof(remBuf), "Rest %.0f Wh", telemetry.remaining_wh);
-        drawSmoothText(UIF_SMALL, remBuf, 604, 114, textdatum_t::top_left, pal.muted, pal.surface);
+        _canvas->fillRect(605, 86, 168, 56, pal.surface);
+        char whBuf[16]; snprintf(whBuf, sizeof(whBuf), "%.0f Wh", telemetry.stats.trip_wh);
+        drawSmoothText(UIF_HEADING, whBuf, 605, 86, textdatum_t::top_left, pal.text, pal.surface);
+        char remWh[16]; snprintf(remWh, sizeof(remWh), "Rest: %.0f Wh", telemetry.remaining_wh);
+        drawSmoothText(UIF_SMALL, remWh, 605, 122, textdatum_t::top_left, pal.muted, pal.surface);
     }
 
-    // Middle Card 1: MAX LEISTUNG (W + PS)
+    // Tile 1: MAX LEISTUNG (PEAK WATT & PS)
     int cur_pwr = (int)(disp_peak_pwr + 0.5f);
     if (!_stats_inited || cur_pwr != _stats_cache.peak_watts) {
         _stats_cache.peak_watts = cur_pwr;
-        _canvas->fillRect(32, 184, 220, 80, pal.surface);
-        char pwrBuf[20]; snprintf(pwrBuf, sizeof(pwrBuf), "%.0f W", disp_peak_pwr);
-        drawSmoothText(UIF_MED_NUM, pwrBuf, 34, 188, textdatum_t::top_left, pal.text, pal.surface);
+        _canvas->fillRect(32, 202, 220, 62, pal.surface);
+        char pwrBuf[16]; snprintf(pwrBuf, sizeof(pwrBuf), "%.0f W", disp_peak_pwr);
+        drawSmoothText(UIF_HEADING, pwrBuf, 32, 202, textdatum_t::top_left, pal.text, pal.surface);
 
         float ps_stat = disp_peak_pwr * 0.00135962f;
-        char psBuf[28]; snprintf(psBuf, sizeof(psBuf), "%.1f PS  •  Spitze", ps_stat);
-        drawSmoothText(UIF_BODY, psBuf, 34, 236, textdatum_t::top_left, pal.accent_warn, pal.surface);
+        char psBuf[16]; snprintf(psBuf, sizeof(psBuf), "%.1f PS", ps_stat);
+        drawSmoothText(UIF_BODY, psBuf, 32, 238, textdatum_t::top_left, pal.primary, pal.surface);
     }
 
-    // Middle Card 2: PEAK STROM (AKKU / PHASE)
+    // Tile 2: PEAK AKKU-STROM
     int cur_curr = (int)(disp_peak_curr * 10.0f + 0.5f);
-    int cur_pha  = (int)(disp_peak_pha * 10.0f + 0.5f);
-    if (!_stats_inited || cur_curr != _stats_cache.peak_curr_x10 || cur_pha != _stats_cache.peak_phase_x10) {
+    if (!_stats_inited || cur_curr != _stats_cache.peak_curr_x10) {
         _stats_cache.peak_curr_x10 = cur_curr;
-        _stats_cache.peak_phase_x10 = cur_pha;
-        _canvas->fillRect(356, 182, 156, 32, pal.surface);
-        _canvas->fillRect(356, 228, 156, 32, pal.surface);
+        _canvas->fillRect(290, 202, 220, 62, pal.surface);
         char curBuf[16]; snprintf(curBuf, sizeof(curBuf), "%.1f A", disp_peak_curr);
-        drawSmoothText(UIF_HEADING, curBuf, 508, 185, textdatum_t::top_right, pal.primary, pal.surface);
-        char phaBuf[16]; snprintf(phaBuf, sizeof(phaBuf), "%.1f A", disp_peak_pha);
-        drawSmoothText(UIF_HEADING, phaBuf, 508, 231, textdatum_t::top_right, pal.text, pal.surface);
+        drawSmoothText(UIF_HEADING, curBuf, 290, 202, textdatum_t::top_left, pal.text, pal.surface);
     }
 
-    // Middle Card 3: AKKU & THERMIK (Min/Max V, Wh/km, Max Mot/ESC °C)
+    // Tile 3: PEAK PHASENSTROM
+    int cur_pha = (int)(disp_peak_pha * 10.0f + 0.5f);
+    if (!_stats_inited || cur_pha != _stats_cache.peak_phase_x10) {
+        _stats_cache.peak_phase_x10 = cur_pha;
+        _canvas->fillRect(548, 202, 220, 62, pal.surface);
+        char phaBuf[16]; snprintf(phaBuf, sizeof(phaBuf), "%.1f A", disp_peak_pha);
+        drawSmoothText(UIF_HEADING, phaBuf, 548, 202, textdatum_t::top_left, pal.text, pal.surface);
+    }
+
+    // Tile 4: VERBRAUCH & EFFIZIENZ
     int cur_eff = (int)(telemetry.stats.trip_wh_km * 10.0f + 0.5f);
+    float dynWh = (telemetry.stats.dynamic_wh_km > 0.0f) ? telemetry.stats.dynamic_wh_km : telemetry.dynamic_wh_km;
+    int cur_dyn = (int)(dynWh * 10.0f + 0.5f);
+    if (!_stats_inited || cur_eff != _stats_cache.trip_wh_km_x10 || cur_dyn != _stats_cache.dyn_wh_km_x10) {
+        _stats_cache.trip_wh_km_x10 = cur_eff;
+        _stats_cache.dyn_wh_km_x10 = cur_dyn;
+        _canvas->fillRect(32, 356, 220, 68, pal.surface);
+        char effBuf[24]; snprintf(effBuf, sizeof(effBuf), "%.1f Wh/km", telemetry.stats.trip_wh_km);
+        drawSmoothText(UIF_HEADING, effBuf, 32, 356, textdatum_t::top_left, pal.text, pal.surface);
+        char dynBuf[32]; snprintf(dynBuf, sizeof(dynBuf), "Rollend (2km): %.1f Wh/km", dynWh);
+        drawSmoothText(UIF_SMALL, dynBuf, 32, 400, textdatum_t::top_left, pal.muted, pal.surface);
+    }
+
+    // Tile 5: AKKU-SPANNUNG (MIN/MAX)
     int cur_min_v = (int)(telemetry.stats.min_voltage * 10.0f + 0.5f);
     int cur_max_v = (int)(telemetry.stats.max_voltage * 10.0f + 0.5f);
-    int cur_max_mot = (int)(telemetry.stats.max_temp_motor + 0.5f);
-    int cur_max_esc = (int)(telemetry.stats.max_temp_esc + 0.5f);
-
-    if (!_stats_inited || cur_min_v != _stats_cache.min_v_x10 || cur_max_v != _stats_cache.max_v_x10) {
+    int cur_live_v = (int)(telemetry.voltage * 10.0f + 0.5f);
+    if (!_stats_inited || cur_min_v != _stats_cache.min_v_x10 || cur_max_v != _stats_cache.max_v_x10 || cur_live_v != _stats_cache.live_v_x10) {
         _stats_cache.min_v_x10 = cur_min_v;
         _stats_cache.max_v_x10 = cur_max_v;
-        _canvas->fillRect(622, 184, 148, 22, pal.surface);
-        char vBuf[28];
-        if (telemetry.stats.max_voltage > 1.0f) {
-            snprintf(vBuf, sizeof(vBuf), "%.1f–%.1f V", telemetry.stats.min_voltage, telemetry.stats.max_voltage);
-        } else {
-            snprintf(vBuf, sizeof(vBuf), "%.1f V", telemetry.voltage);
-        }
-        drawSmoothText(UIF_BODY, vBuf, 766, 186, textdatum_t::top_right, pal.text, pal.surface);
+        _stats_cache.live_v_x10 = cur_live_v;
+        _canvas->fillRect(290, 356, 220, 68, pal.surface);
+        char vBuf[32]; snprintf(vBuf, sizeof(vBuf), "%.1fV / %.1fV", telemetry.stats.min_voltage, telemetry.stats.max_voltage);
+        drawSmoothText(UIF_HEADING, vBuf, 290, 356, textdatum_t::top_left, pal.text, pal.surface);
+        char vSub[32]; snprintf(vSub, sizeof(vSub), "Live: %.1fV (Sag Check)", telemetry.voltage);
+        drawSmoothText(UIF_SMALL, vSub, 290, 400, textdatum_t::top_left, pal.muted, pal.surface);
     }
 
-    if (!_stats_inited || cur_eff != _stats_cache.trip_wh_km_x10) {
-        _stats_cache.trip_wh_km_x10 = cur_eff;
-        _canvas->fillRect(622, 210, 148, 22, pal.surface);
-        char effBuf[24]; snprintf(effBuf, sizeof(effBuf), "%.1f Wh/km", telemetry.stats.trip_wh_km);
-        drawSmoothText(UIF_BODY, effBuf, 766, 212, textdatum_t::top_right, pal.primary, pal.surface);
-    }
-
+    // Tile 6: MAX TEMPERATUR
+    int cur_max_mot = (int)(telemetry.stats.max_temp_motor + 0.5f);
+    int cur_max_esc = (int)(telemetry.stats.max_temp_esc + 0.5f);
     if (!_stats_inited || cur_max_mot != _stats_cache.max_temp_mot || cur_max_esc != _stats_cache.max_temp_esc) {
         _stats_cache.max_temp_mot = cur_max_mot;
         _stats_cache.max_temp_esc = cur_max_esc;
-        _canvas->fillRect(622, 236, 148, 22, pal.surface);
-        char tmpBuf[24]; snprintf(tmpBuf, sizeof(tmpBuf), "%.0f° / %.0f°C", telemetry.stats.max_temp_motor, telemetry.stats.max_temp_esc);
-        uint16_t tCol = (telemetry.stats.max_temp_motor >= 75.0f || telemetry.stats.max_temp_esc >= 75.0f) ? pal.accent_warn : pal.text;
-        drawSmoothText(UIF_BODY, tmpBuf, 766, 238, textdatum_t::top_right, tCol, pal.surface);
-    }
-
-    // Bottom Wide Card: LIVE VERLAUF (60s) Sparkline (differential signature check)
-    uint32_t sig = (uint32_t)(telemetry.tuning_mode ? 1u : 0u);
-    for (int i = 0; i < WAVE_HISTORY_LEN; i += 3) {
-        sig = sig * 131u + (uint32_t)((int)(telemetry.speed_history[i] * 10.0f) ^ ((int)telemetry.power_history[i]));
-    }
-    sig = sig * 131u + (uint32_t)((int)(telemetry.speed_history[WAVE_HISTORY_LEN - 1] * 10.0f));
-    if (!_stats_inited || sig != _stats_cache.sparkline_sig) {
-        _stats_cache.sparkline_sig = sig;
-        drawStatsSparkline(telemetry, pal);
+        _canvas->fillRect(548, 356, 220, 60, pal.surface);
+        char tmpBuf[32]; snprintf(tmpBuf, sizeof(tmpBuf), "%.0f °C / %.0f °C", telemetry.stats.max_temp_motor, telemetry.stats.max_temp_esc);
+        drawSmoothText(UIF_HEADING, tmpBuf, 548, 356, textdatum_t::top_left, pal.text, pal.surface);
     }
 
     _stats_inited = true;
@@ -2153,18 +2013,17 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
 }
 
 // ==============================================================================
-// SCREEN 3: MODERN AUTOMOTIVE SETTINGS (7 Tabs Tuning / 3 Legal Stealth Tabs)
+// SCREEN 3: MODERN AUTOMOTIVE SETTINGS (5 Tabs Tuning / 3 Legal Stealth Tabs)
 // ==============================================================================
 void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
-    // Stealth enforcement: in legal mode, only TAB_DASH (4), TAB_SYSTEM (5), TAB_PIN (6) are accessible!
+    // Stealth enforcement: in legal mode, only TAB_DASH, TAB_SYSTEM, TAB_PIN are accessible!
     if (!telemetry.tuning_mode) {
         if (_settings_tab_idx < TAB_DASH || _settings_tab_idx >= TAB_COUNT) {
             _settings_tab_idx = TAB_DASH;
         }
     } else {
         if (_settings_tab_idx >= TAB_COUNT) {
-            _settings_tab_idx = (uint8_t)telemetry.ride_mode;
-            if (_settings_tab_idx >= TAB_COUNT) _settings_tab_idx = TAB_ECO;
+            _settings_tab_idx = TAB_SPEED;
         }
     }
     _pin_modal_open = false;
@@ -2228,11 +2087,10 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         _settings_inited = true;
     }
 
-    // 2. Segmented Tab Bar (Stealth-safe: Legal = 3 tabs, Tuning = 7 tabs)
-    static const char *ALL_TAB_NAMES[TAB_COUNT] = { "ECO", "SPORT", "RACE", "DRAGY", "DASH", "SYSTEM", "PIN" };
+    // 2. Segmented Tab Bar (Stealth-safe: Legal = 3 tabs, Tuning = 5 tabs)
+    static const char *ALL_TAB_NAMES[TAB_COUNT] = { "SPEED", "DRAGY", "DASH", "SYSTEM", "PIN" };
     uint16_t tabAccents[TAB_COUNT] = {
-        pal.accent_ok, pal.primary, pal.accent_danger, pal.accent_warn,
-        pal.primary, pal.primary, pal.primary
+        pal.primary, pal.accent_warn, pal.primary, pal.primary, pal.primary
     };
 
     if (tabChanged) {
@@ -2245,10 +2103,10 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         const int tabH = 46;
 
         if (telemetry.tuning_mode) {
-            // 7 clean tabs across x=20..776 (w=102, gap=7)
+            // 5 clean tabs across x=20..780 (w=144, gap=10, pitch=154)
             for (int i = 0; i < TAB_COUNT; i++) {
-                int tx = 20 + i * 109;
-                int tw = 102;
+                int tx = 20 + i * 154;
+                int tw = 144;
                 bool isSel = (i == _settings_tab_idx);
                 uint16_t accent = tabAccents[i];
                 uint16_t bgCol = isSel ? blendRgb565(pal.surface, accent, pal.is_light ? 30 : 48) : pal.surface;
@@ -2258,7 +2116,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
                 _canvas->fillRoundRect(tx, tabY, tw, tabH, 10, bgCol);
                 _canvas->drawRoundRect(tx, tabY, tw, tabH, 10, bdCol);
                 if (isSel) {
-                    _canvas->fillRoundRect(tx + 16, tabY + tabH - 4, tw - 32, 3, 1, accent);
+                    _canvas->fillRoundRect(tx + 24, tabY + tabH - 4, tw - 48, 3, 1, accent);
                 }
                 drawSmoothText(UIF_BODY, ALL_TAB_NAMES[i], tx + tw / 2, tabY + tabH / 2 - 1,
                                textdatum_t::middle_center, fgCol, bgCol);
@@ -2291,7 +2149,62 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     }
 
     // ------------------------------------------------------------------
-    // TAB 3: DRAGY SPLITS (Tuning Mode Only)
+    // TAB 3: SPEED — TUNED TOPSPEED PER MODE (3 STACKED ROWS)
+    // ------------------------------------------------------------------
+    if (_settings_tab_idx == TAB_SPEED) {
+        VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+        static const char *MODE_TITLES[3] = { "ECO TOPSPEED", "SPORT TOPSPEED", "RACE TOPSPEED" };
+        uint16_t modeCols[3] = { pal.accent_ok, pal.primary, pal.accent_danger };
+
+        for (int m = 0; m < 3; m++) {
+            int ry = 118 + m * 112;
+            int rh = 104;
+            ModeLimits &lim = cfg.tuned_modes[m];
+            if (lim.max_speed_kmh < 15.0f) lim.max_speed_kmh = 15.0f;
+            if (lim.max_speed_kmh > 100.0f) lim.max_speed_kmh = 100.0f;
+            uint16_t col = modeCols[m];
+
+            drawCard(20, ry, 760, rh, pal.surface, pal.border, 12);
+            _canvas->fillRoundRect(20, ry + 14, 4, rh - 28, 2, col);
+
+            drawSmoothText(UIF_HEADING, MODE_TITLES[m], 40, ry + 12, textdatum_t::top_left, col, pal.surface);
+
+            char spdBuf[24];
+            snprintf(spdBuf, sizeof(spdBuf), "%.0f km/h", lim.max_speed_kmh);
+            drawSmoothText(UIF_MED_NUM, spdBuf, 760, ry + 6, textdatum_t::top_right, pal.text, pal.surface);
+
+            // [-] Button (x: 40..100, y: ry+48..ry+94)
+            _canvas->fillRoundRect(40, ry + 48, 60, 44, 10, pal.surface_alt);
+            _canvas->drawRoundRect(40, ry + 48, 60, 44, 10, pal.border);
+            drawSmoothText(UIF_HEADING, "-", 70, ry + 70, textdatum_t::middle_center, pal.text, pal.surface_alt);
+
+            // [+] Button (x: 700..760, y: ry+48..ry+94)
+            _canvas->fillRoundRect(700, ry + 48, 60, 44, 10, pal.surface_alt);
+            _canvas->drawRoundRect(700, ry + 48, 60, 44, 10, pal.border);
+            drawSmoothText(UIF_HEADING, "+", 730, ry + 70, textdatum_t::middle_center, pal.text, pal.surface_alt);
+
+            // Speed Slider Track (x: 120..680, w: 560)
+            _canvas->fillRoundRect(120, ry + 62, 560, 16, 8, pal.track);
+            float frac = (lim.max_speed_kmh - 15.0f) / (100.0f - 15.0f);
+            frac = std::min(std::max(frac, 0.0f), 1.0f);
+            int fillW = (int)(frac * 560.0f);
+            if (fillW > 6) {
+                _canvas->fillRoundRect(120, ry + 62, fillW, 16, 8, col);
+            }
+            int knobX = 120 + fillW;
+            _canvas->fillCircle(knobX, ry + 70, 12, pal.surface);
+            _canvas->drawCircle(knobX, ry + 70, 12, col);
+            _canvas->drawCircle(knobX, ry + 70, 11, col);
+            _canvas->fillCircle(knobX, ry + 70, 4, col);
+        }
+
+        drawSmoothText(UIF_SMALL, "Tuned Topspeed pro Modus (15–100 km/h)  •  Speichert automatisch bei FERTIG",
+                       400, 462, textdatum_t::middle_center, pal.muted, pal.bg);
+        return;
+    }
+
+    // ------------------------------------------------------------------
+    // TAB 4: DRAGY SPLITS (Tuning Mode Only)
     // ------------------------------------------------------------------
     if (_settings_tab_idx == TAB_DRAGY) {
         auto drawSplitCol = [&](int col_idx, const char *title, uint8_t split_spd, uint16_t col) {
@@ -2524,89 +2437,6 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     // ------------------------------------------------------------------
     // TABS 0/1/2: ECO / SPORT / RACE LIMITS (Tuning Mode Only)
     // ------------------------------------------------------------------
-    VehicleModeConfig &cfg = ModeManager::instance().getConfig();
-    uint8_t m = (_settings_tab_idx < 3) ? _settings_tab_idx : 1;
-    ModeLimits &lim = cfg.tuned_modes[m];
-    uint16_t activeCol = tabAccents[m];
-
-    if (lim.max_speed_kmh < 15.0f) lim.max_speed_kmh = 15.0f;
-    if (lim.max_speed_kmh > 100.0f) lim.max_speed_kmh = 100.0f;
-    if (lim.max_power_watts < 250.0f) lim.max_power_watts = 250.0f;
-    if (lim.max_power_watts > 25000.0f) lim.max_power_watts = 25000.0f;
-
-    // Card 1: Max Speed (y: 120..274, h: 154)
-    drawCard(20, 120, 760, 154, pal.surface, pal.border, 12);
-    drawSmoothText(UIF_BODY, "MAXIMALE GESCHWINDIGKEIT", 40, 138, textdatum_t::top_left, pal.muted, pal.surface);
-
-    char spdStr[24];
-    snprintf(spdStr, sizeof(spdStr), "%.0f km/h", lim.max_speed_kmh);
-    drawSmoothText(UIF_MED_NUM, spdStr, 760, 130, textdatum_t::top_right, activeCol, pal.surface);
-
-    // [-] & [+] buttons
-    _canvas->fillRoundRect(40, 182, 64, 52, 12, pal.surface_alt);
-    _canvas->drawRoundRect(40, 182, 64, 52, 12, pal.border);
-    drawSmoothText(UIF_HEADING, "-", 72, 208, textdatum_t::middle_center, pal.text, pal.surface_alt);
-
-    _canvas->fillRoundRect(696, 182, 64, 52, 12, pal.surface_alt);
-    _canvas->drawRoundRect(696, 182, 64, 52, 12, pal.border);
-    drawSmoothText(UIF_HEADING, "+", 728, 208, textdatum_t::middle_center, pal.text, pal.surface_alt);
-
-    // Sleek Speed Slider
-    _canvas->fillRoundRect(124, 198, 552, 20, 10, pal.track);
-    float fracSpd = (lim.max_speed_kmh - 15.0f) / (100.0f - 15.0f);
-    fracSpd = std::min(std::max(fracSpd, 0.0f), 1.0f);
-    int fillWSpd = (int)(fracSpd * 552.0f);
-    if (fillWSpd > 8) {
-        _canvas->fillRoundRect(124, 198, fillWSpd, 20, 10, activeCol);
-    }
-    int knobX = 124 + fillWSpd;
-    _canvas->fillCircle(knobX, 208, 14, pal.surface);
-    _canvas->drawCircle(knobX, 208, 14, activeCol);
-    _canvas->drawCircle(knobX, 208, 13, activeCol);
-    _canvas->fillCircle(knobX, 208, 5, activeCol);
-
-    drawSmoothText(UIF_SMALL, "15 km/h",  124, 238, textdatum_t::top_left,  pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "100 km/h", 676, 238, textdatum_t::top_right, pal.muted, pal.surface);
-
-    // Card 2: Max Watt (y: 288..442, h: 154)
-    drawCard(20, 288, 760, 154, pal.surface, pal.border, 12);
-    drawSmoothText(UIF_BODY, "MAXIMALE LEISTUNG (WATT)", 40, 306, textdatum_t::top_left, pal.muted, pal.surface);
-
-    char wattStr[32];
-    if (lim.max_power_watts >= 1000.0f) {
-        snprintf(wattStr, sizeof(wattStr), "%.1f kW", lim.max_power_watts / 1000.0f);
-    } else {
-        snprintf(wattStr, sizeof(wattStr), "%.0f W", lim.max_power_watts);
-    }
-    drawSmoothText(UIF_MED_NUM, wattStr, 760, 298, textdatum_t::top_right, activeCol, pal.surface);
-
-    _canvas->fillRoundRect(40, 350, 64, 52, 12, pal.surface_alt);
-    _canvas->drawRoundRect(40, 350, 64, 52, 12, pal.border);
-    drawSmoothText(UIF_HEADING, "-", 72, 376, textdatum_t::middle_center, pal.text, pal.surface_alt);
-
-    _canvas->fillRoundRect(696, 350, 64, 52, 12, pal.surface_alt);
-    _canvas->drawRoundRect(696, 350, 64, 52, 12, pal.border);
-    drawSmoothText(UIF_HEADING, "+", 728, 376, textdatum_t::middle_center, pal.text, pal.surface_alt);
-
-    _canvas->fillRoundRect(124, 366, 552, 20, 10, pal.track);
-    float fracWatt = (lim.max_power_watts - 250.0f) / (25000.0f - 250.0f);
-    fracWatt = std::min(std::max(fracWatt, 0.0f), 1.0f);
-    int fillWWatt = (int)(fracWatt * 552.0f);
-    if (fillWWatt > 8) {
-        _canvas->fillRoundRect(124, 366, fillWWatt, 20, 10, activeCol);
-    }
-    int knobXW = 124 + fillWWatt;
-    _canvas->fillCircle(knobXW, 376, 14, pal.surface);
-    _canvas->drawCircle(knobXW, 376, 14, activeCol);
-    _canvas->drawCircle(knobXW, 376, 13, activeCol);
-    _canvas->fillCircle(knobXW, 376, 5, activeCol);
-
-    drawSmoothText(UIF_SMALL, "250 W",   124, 406, textdatum_t::top_left,  pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "25.0 kW", 676, 406, textdatum_t::top_right, pal.muted, pal.surface);
-
-    drawSmoothText(UIF_SMALL, "Speichert sauber beim Schließen (kein NVS-Flash-Spam beim Ziehen)",
-                   400, 462, textdatum_t::middle_center, pal.muted, pal.bg);
-
     if (_pin_modal_open) {
         drawPinChangeModal();
     }
@@ -2716,12 +2546,14 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
         return;
     }
 
-    if (!telemetry.tuning_mode || _settings_tab_idx >= 3) {
+    if (!telemetry.tuning_mode || _settings_tab_idx != TAB_SPEED) {
         return;
     }
 
+    uint8_t mIdx = (uint8_t)telemetry.ride_mode;
+    if (mIdx >= 3) mIdx = 1;
     VehicleModeConfig &cfg = ModeManager::instance().getConfig();
-    ModeLimits &lim = cfg.tuned_modes[_settings_tab_idx];
+    ModeLimits &lim = cfg.tuned_modes[mIdx];
 
     if (action == NAV_EDIT_INC || action == NAV_BTN2_SHORT) {
         lim.max_speed_kmh += 1.0f;
@@ -2825,9 +2657,9 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
     if (ty >= 54 && ty <= 110) {
         uint8_t target_tab = 255;
         if (telemetry.tuning_mode) {
-            // 7 tabs across x=20..776 (pitch 109)
+            // 5 tabs across x=20..780 (pitch 154)
             if (tx >= 12 && tx <= 788) {
-                int idx = (tx - 16) / 109;
+                int idx = (tx - 15) / 154;
                 if (idx < 0) idx = 0;
                 if (idx >= TAB_COUNT) idx = TAB_COUNT - 1;
                 target_tab = (uint8_t)idx;
@@ -2859,7 +2691,40 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
     }
 
     // ------------------------------------------------------------------
-    // TAB 3: DRAGY SPLITS
+    // TAB 3: SPEED — TUNED TOPSPEED PER MODE (3 STACKED ROWS)
+    // ------------------------------------------------------------------
+    if (_settings_tab_idx == TAB_SPEED) {
+        VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+        for (int m = 0; m < 3; m++) {
+            int ry = 118 + m * 112;
+            if (ty >= ry && ty <= ry + 104) {
+                ModeLimits &lim = cfg.tuned_modes[m];
+                if (tx >= 30 && tx <= 110) {
+                    lim.max_speed_kmh -= 1.0f;
+                    if (lim.max_speed_kmh < 15.0f) lim.max_speed_kmh = 15.0f;
+                    _menu_dirty = true;
+                    return true;
+                }
+                if (tx >= 690 && tx <= 770) {
+                    lim.max_speed_kmh += 1.0f;
+                    if (lim.max_speed_kmh > 100.0f) lim.max_speed_kmh = 100.0f;
+                    _menu_dirty = true;
+                    return true;
+                }
+                if (tx >= 114 && tx <= 686) {
+                    float frac = (float)(tx - 120) / 560.0f;
+                    frac = std::min(std::max(frac, 0.0f), 1.0f);
+                    lim.max_speed_kmh = roundf(15.0f + frac * (100.0f - 15.0f));
+                    _menu_dirty = true;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------------------
+    // TAB 4: DRAGY SPLITS
     // ------------------------------------------------------------------
     if (_settings_tab_idx == TAB_DRAGY) {
         if (ty >= 350 && ty <= 435) {
@@ -3106,98 +2971,32 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
         return false;
     }
 
-    // ------------------------------------------------------------------
-    // TABS 0/1/2: MODE LIMITS SLIDERS (no NVS write here — saved cleanly on exit!)
-    // ------------------------------------------------------------------
-    VehicleModeConfig &cfg = ModeManager::instance().getConfig();
-    uint8_t m = (_settings_tab_idx < 3) ? _settings_tab_idx : 1;
-    ModeLimits &lim = cfg.tuned_modes[m];
-
-    // Speed Slider & Buttons (y: 120..274)
-    if (ty >= 120 && ty <= 274) {
-        if (tx >= 30 && tx <= 114) {
-            lim.max_speed_kmh -= 1.0f;
-            if (lim.max_speed_kmh < 15.0f) lim.max_speed_kmh = 15.0f;
-            _menu_dirty = true;
-            return true;
-        }
-        if (tx >= 686 && tx <= 770) {
-            lim.max_speed_kmh += 1.0f;
-            if (lim.max_speed_kmh > 100.0f) lim.max_speed_kmh = 100.0f;
-            _menu_dirty = true;
-            return true;
-        }
-        if (tx >= 118 && tx <= 682) {
-            float frac = (float)(tx - 124) / 552.0f;
-            frac = std::min(std::max(frac, 0.0f), 1.0f);
-            lim.max_speed_kmh = roundf(15.0f + frac * (100.0f - 15.0f));
-            _menu_dirty = true;
-            return true;
-        }
-    }
-
-    // Watt Slider & Buttons (y: 288..442)
-    if (ty >= 288 && ty <= 442) {
-        if (tx >= 30 && tx <= 114) {
-            lim.max_power_watts -= (lim.max_power_watts > 5000.0f) ? 500.0f : 250.0f;
-            if (lim.max_power_watts < 250.0f) lim.max_power_watts = 250.0f;
-            lim.max_pull_watts = lim.max_power_watts * 1.25f;
-            _menu_dirty = true;
-            return true;
-        }
-        if (tx >= 686 && tx <= 770) {
-            lim.max_power_watts += (lim.max_power_watts >= 5000.0f) ? 500.0f : 250.0f;
-            if (lim.max_power_watts > 25000.0f) lim.max_power_watts = 25000.0f;
-            lim.max_pull_watts = lim.max_power_watts * 1.25f;
-            _menu_dirty = true;
-            return true;
-        }
-        if (tx >= 118 && tx <= 682) {
-            float frac = (float)(tx - 124) / 552.0f;
-            frac = std::min(std::max(frac, 0.0f), 1.0f);
-            float rawWatt = 250.0f + frac * (25000.0f - 250.0f);
-            lim.max_power_watts = roundf(rawWatt / 50.0f) * 50.0f;
-            if (lim.max_power_watts < 250.0f) lim.max_power_watts = 250.0f;
-            if (lim.max_power_watts > 25000.0f) lim.max_power_watts = 25000.0f;
-            lim.max_pull_watts = lim.max_power_watts * 1.25f;
-            _menu_dirty = true;
-            return true;
-        }
-    }
-
     return false;
 }
 
 bool DashboardRenderer::handleSettingsSliderDrag(int16_t cx, int16_t cy, DashTelemetry &telemetry) {
     if (_pin_modal_open) return false;
-    if (!telemetry.tuning_mode || _settings_tab_idx >= 3) return false;
+    if (!telemetry.tuning_mode) return false;
 
-    VehicleModeConfig &cfg = ModeManager::instance().getConfig();
-    ModeLimits &lim = cfg.tuned_modes[_settings_tab_idx];
-
-    if (cy >= 172 && cy <= 248 && cx >= 118 && cx <= 682) {
-        float frac = (float)(cx - 124) / 552.0f;
-        frac = std::min(std::max(frac, 0.0f), 1.0f);
-        float new_spd = roundf(15.0f + frac * (100.0f - 15.0f));
-        if (new_spd != lim.max_speed_kmh) {
-            lim.max_speed_kmh = new_spd;
-            _menu_dirty = true;
-            return true;
+    if (_settings_tab_idx == TAB_SPEED) {
+        VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+        for (int m = 0; m < 3; m++) {
+            int ry = 118 + m * 112;
+            if (cy >= ry + 38 && cy <= ry + 100 && cx >= 114 && cx <= 686) {
+                float frac = (float)(cx - 120) / 560.0f;
+                frac = std::min(std::max(frac, 0.0f), 1.0f);
+                float new_spd = roundf(15.0f + frac * (100.0f - 15.0f));
+                if (new_spd != cfg.tuned_modes[m].max_speed_kmh) {
+                    cfg.tuned_modes[m].max_speed_kmh = new_spd;
+                    _menu_dirty = true;
+                    return true;
+                }
+                return false;
+            }
         }
-    } else if (cy >= 340 && cy <= 416 && cx >= 118 && cx <= 682) {
-        float frac = (float)(cx - 124) / 552.0f;
-        frac = std::min(std::max(frac, 0.0f), 1.0f);
-        float rawWatt = 250.0f + frac * (25000.0f - 250.0f);
-        float new_watt = roundf(rawWatt / 50.0f) * 50.0f;
-        if (new_watt < 250.0f) new_watt = 250.0f;
-        if (new_watt > 25000.0f) new_watt = 25000.0f;
-        if (new_watt != lim.max_power_watts) {
-            lim.max_power_watts = new_watt;
-            lim.max_pull_watts = lim.max_power_watts * 1.25f;
-            _menu_dirty = true;
-            return true;
-        }
+        return false;
     }
+
     return false;
 }
 
@@ -3414,14 +3213,13 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
         }
     }
 
-    if (telemetry.race_state == 1) { // 1 = ARMED / BEREIT (Auto-Rollout!)
+    if (telemetry.race_state == 1) { // 1 = COUNTDOWN (5s)
         telemetry.boost_active = true;
         ModeManager::instance().setBoostActive(true);
         telemetry.boost_end_ms = now + 10000;
-        telemetry.race_elapsed_sec = 0.0f;
-
-        // Instant millisecond rollout trigger as soon as speed >= 1.0 km/h!
-        if (telemetry.speed_kmh >= 1.0f) {
+        uint32_t elapsed_cd = now - telemetry.race_countdown_start_ms;
+        telemetry.race_elapsed_sec = (float)elapsed_cd / 1000.0f;
+        if (elapsed_cd >= 5000) {
             telemetry.race_state = 2; // 2 = MEASURING
             telemetry.race_launch_start_ms = now;
             telemetry.race_elapsed_sec = 0.0f;
@@ -3603,12 +3401,17 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     float mid_r = 144.0f;
     float deg2rad = 3.14159265f / 180.0f;
 
-    // Evaluate state changes ONCE BEFORE overwriting caches (fixes _last_race_countdown overwrite bug!)
+    int cur_cd = (telemetry.race_state == 1) ? (5 - (int)telemetry.race_elapsed_sec) : -1;
+    if (cur_cd < 1) cur_cd = 1;
+    if (cur_cd > 5) cur_cd = 5;
+
+    // Evaluate state changes ONCE BEFORE overwriting caches
     bool state_changed = (telemetry.race_state != _last_race_state);
     bool timer_needs_update = state_changed ||
+                              (telemetry.race_state == 1 && cur_cd != _last_race_countdown) ||
                               (telemetry.race_state == 2 && fabsf(telemetry.race_elapsed_sec - _last_race_elapsed_sec) >= 0.04f);
 
-    // 1. Top-Center Timer / Auto-Rollout Status Header
+    // 1. Top-Center Timer Display
     if (timer_needs_update) {
         _last_race_elapsed_sec = telemetry.race_elapsed_sec;
         _canvas->fillRect(134, 8, 336, 44, pal.bg);
@@ -3619,8 +3422,10 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
             drawSmoothText(UIF_MED_NUM, timeBuf, 304, 30, textdatum_t::middle_center,
                            (telemetry.race_state == 3) ? pal.accent_ok : pal.text, pal.bg);
         } else if (telemetry.race_state == 1) {
-            drawSmoothText(UIF_HEADING, "BEREIT — GAS GEBEN!", 304, 30,
-                           textdatum_t::middle_center, pal.accent_ok, pal.bg);
+            char cdTitle[24];
+            snprintf(cdTitle, sizeof(cdTitle), "LAUNCH IN %d s", cur_cd);
+            drawSmoothText(UIF_HEADING, cdTitle, 304, 30,
+                           textdatum_t::middle_center, pal.accent_warn, pal.bg);
         } else {
             drawSmoothText(UIF_HEADING, "LAUNCH CONTROL", 304, 30,
                            textdatum_t::middle_center, pal.muted, pal.bg);
@@ -3633,7 +3438,7 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     float frac = std::min(spd / 100.0f, 1.0f);
     float target_angle = (frac <= 0.005f) ? 135.0f : (135.0f + frac * 270.0f);
 
-    uint16_t arcCol = (telemetry.race_state == 1) ? pal.accent_ok : pal.primary;
+    uint16_t arcCol = (telemetry.race_state == 1) ? pal.accent_warn : pal.primary;
     int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
     int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
 
@@ -3667,7 +3472,8 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     }
 
     // 3. Center Action Button cleanly below the horseshoe ring (ZERO arc overlap!)
-    if (state_changed) {
+    bool btn_needs_update = state_changed || (telemetry.race_state == 1 && cur_cd != _last_race_countdown);
+    if (btn_needs_update) {
         const int btnY = 368;
         const int btnH = 48;
         _canvas->fillRect(cx - 116, btnY - 4, 232, btnH + 8, pal.bg);
@@ -3681,11 +3487,17 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
                 _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, pal.primary);
                 drawSmoothText(UIF_BODY, "START LAUNCH", cx, btnY + btnH / 2, textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
             }
-        } else if (telemetry.race_state == 1) { // ARMED / BEREIT
-            uint16_t armBg = blendRgb565(pal.surface, pal.accent_ok, pal.is_light ? 26 : 48);
+        } else if (telemetry.race_state == 1) { // COUNTDOWN (5s)
+            char cdBuf[16];
+            if (cur_cd == 1) {
+                snprintf(cdBuf, sizeof(cdBuf), "1 ... GO!");
+            } else {
+                snprintf(cdBuf, sizeof(cdBuf), "%d ...", cur_cd);
+            }
+            uint16_t armBg = blendRgb565(pal.surface, pal.accent_warn, pal.is_light ? 26 : 48);
             _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, armBg);
-            _canvas->drawRoundRect(cx - 106, btnY, 212, btnH, 24, pal.accent_ok);
-            drawSmoothText(UIF_BODY, "BEREIT • ABBRUCH", cx, btnY + btnH / 2, textdatum_t::middle_center, pal.accent_ok, armBg);
+            _canvas->drawRoundRect(cx - 106, btnY, 212, btnH, 24, pal.accent_warn);
+            drawSmoothText(UIF_BODY, cdBuf, cx, btnY + btnH / 2, textdatum_t::middle_center, pal.accent_warn, armBg);
         } else if (telemetry.race_state == 2) { // MEASURING
             uint16_t runBg = blendRgb565(pal.surface, pal.accent_danger, pal.is_light ? 26 : 48);
             _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, runBg);
@@ -3700,7 +3512,7 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
 
     // Commit state cache AFTER both header and button updated
     _last_race_state = telemetry.race_state;
-    _last_race_countdown = (telemetry.race_state == 1) ? 1 : -1;
+    _last_race_countdown = (telemetry.race_state == 1) ? cur_cd : -1;
 
     // 4. Right Splits Values
     bool s1_changed = (telemetry.race_split_0_22 != _last_race_split_0_22);
@@ -3792,54 +3604,30 @@ void DashboardRenderer::drawRaceRecordsModal(const DashTelemetry &telemetry) {
 void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
     int mx = 100, my = 45, mw = 600, mh = 390;
+
+    // Dark modal surface card with primary border
     drawCard(mx, my, mw, mh, pal.surface, pal.primary, 16);
     _canvas->drawRoundRect(mx + 1, my + 1, mw - 2, mh - 2, 15, pal.primary);
 
+    // Modal Header
     drawSmoothText(UIF_HEADING, "LEISTUNGSDIAGRAMM & TELEMETRIE", mx + 22, my + 16, textdatum_t::top_left, pal.primary, pal.surface);
 
+    // Top-Right Close Button [ X ]
     _canvas->fillRoundRect(mx + mw - 50, my + 12, 36, 32, 8, pal.surface_alt);
     _canvas->drawRoundRect(mx + mw - 50, my + 12, 36, 32, 8, pal.border);
     drawSmoothText(UIF_BODY, "X", mx + mw - 32, my + 28, textdatum_t::middle_center, pal.text, pal.surface_alt);
 
-    bool has_real_data = (telemetry.race_dyno.sample_count >= 5);
-
-    // Clean Empty State (FIX: Never show fake 3.5 kW / 1.15 G / 4.25 s demo numbers!)
-    if (!has_real_data) {
-        drawCard(mx + 24, my + 64, mw - 48, 250, pal.surface_alt, pal.border, 12);
-
-        // Simple clean vector chart icon in empty state
-        int icx = mx + mw / 2;
-        int icy = my + 138;
-        _canvas->drawFastHLine(icx - 36, icy + 22, 72, pal.border);
-        _canvas->drawFastVLine(icx - 36, icy - 22, 44, pal.border);
-        _canvas->drawLine(icx - 32, icy + 16, icx - 10, icy + 2,  pal.muted);
-        _canvas->drawLine(icx - 10, icy + 2,  icx + 12, icy - 8,  pal.muted);
-        _canvas->drawLine(icx + 12, icy - 8,  icx + 32, icy - 18, pal.primary);
-        _canvas->fillCircle(icx + 32, icy - 18, 4, pal.primary);
-
-        drawSmoothText(UIF_HEADING, "Noch kein Lauf aufgezeichnet", mx + mw / 2, my + 198,
-                       textdatum_t::middle_center, pal.text, pal.surface_alt);
-        drawSmoothText(UIF_BODY, "Starte einen Launch! Messung startet automatisch ab 1 km/h.", mx + mw / 2, my + 234,
-                       textdatum_t::middle_center, pal.muted, pal.surface_alt);
-
-        int btnW = 200, btnH = 42;
-        int btnX = mx + (mw - btnW) / 2;
-        int btnY = my + mh - 56;
-        _canvas->fillRoundRect(btnX, btnY, btnW, btnH, 12, pal.surface_alt);
-        _canvas->drawRoundRect(btnX, btnY, btnW, btnH, 12, pal.border);
-        drawSmoothText(UIF_BODY, "SCHLIESSEN", btnX + btnW / 2, btnY + btnH / 2,
-                       textdatum_t::middle_center, pal.text, pal.surface_alt);
-        return;
-    }
-
-    // Real recorded run data!
-    float peak_w  = telemetry.race_dyno.peak_watts;
+    // Determine Peak & Summary Statistics
+    // Fall back to realistic scooter specs if no run has been recorded yet
+    float peak_w  = (telemetry.race_dyno.peak_watts > 100.0f) ? telemetry.race_dyno.peak_watts : 3520.0f;
     float peak_kw = peak_w / 1000.0f;
     float peak_ps = peak_w * 0.00135962f;
-    float peak_g  = telemetry.race_dyno.peak_g_force;
-    float peak_i  = telemetry.race_dyno.peak_phase_amps;
-    float t_70    = (telemetry.race_split_0_70 > 0.01f) ? telemetry.race_split_0_70 : telemetry.race_elapsed_sec;
+    float peak_g  = (telemetry.race_dyno.peak_g_force > 0.05f) ? telemetry.race_dyno.peak_g_force : 1.15f;
+    float peak_i  = (telemetry.race_dyno.peak_phase_amps > 5.0f) ? telemetry.race_dyno.peak_phase_amps : 85.0f;
+    float t_70    = (telemetry.race_split_0_70 > 0.01f) ? telemetry.race_split_0_70 :
+                    (telemetry.race_records.best_0_70_sec > 0.01f ? telemetry.race_records.best_0_70_sec : 4.25f);
 
+    // 4 Stat Tiles: MAX WATT, MAX G-FORCE, 0-70 KM/H, MAX PHASEN-I
     int tile_y = my + 52;
     int tile_w = 132;
     int tile_h = 54;
@@ -3850,7 +3638,7 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
         int tx = tile_x0 + idx * (tile_w + tile_gap);
         drawCard(tx, tile_y, tile_w, tile_h, pal.surface_alt, pal.border, 8);
         drawSmoothText(UIF_SMALL, label, tx + tile_w / 2, tile_y + 4, textdatum_t::top_center, pal.muted, pal.surface_alt);
-        if (sub_val && sub_val[0] != '\0') {
+        if (sub_val && sub_val[0] != 0) {
             drawSmoothText(UIF_BODY, val, tx + tile_w / 2, tile_y + 20, textdatum_t::top_center, valColor, pal.surface_alt);
             drawSmoothText(UIF_SMALL, sub_val, tx + tile_w / 2, tile_y + 38, textdatum_t::top_center, pal.accent_warn, pal.surface_alt);
         } else {
@@ -3859,74 +3647,114 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
     };
 
     char b1[16], sub_b1[16], b2[16], b3[16], b4[16];
-    if (peak_kw >= 1.0f) snprintf(b1, sizeof(b1), "%.1f kW", peak_kw);
-    else snprintf(b1, sizeof(b1), "%.0f W", peak_w);
+    if (peak_kw >= 1.0f) {
+        snprintf(b1, sizeof(b1), "%.1f kW", peak_kw);
+    } else {
+        snprintf(b1, sizeof(b1), "%.0f W", peak_w);
+    }
     snprintf(sub_b1, sizeof(sub_b1), "%.1f PS", peak_ps);
     snprintf(b2, sizeof(b2), "+%.2f G", peak_g);
     snprintf(b3, sizeof(b3), "%.2f s", t_70);
     snprintf(b4, sizeof(b4), "%.0f A", peak_i);
 
-    char dynoSplitLabel[24];
-    snprintf(dynoSplitLabel, sizeof(dynoSplitLabel), "0 – %d KM/H", Settings.get().race_split3_kmh);
     drawStatTile(0, "MAX WATT", b1, sub_b1, pal.primary);
     drawStatTile(1, "MAX G-FORCE", b2, nullptr, pal.accent_warn);
+    char dynoSplitLabel[24];
+    snprintf(dynoSplitLabel, sizeof(dynoSplitLabel), "0 - %d KM/H", Settings.get().race_split3_kmh);
     drawStatTile(2, dynoSplitLabel, b3, nullptr, pal.accent_ok);
-    drawStatTile(3, "MAX PHASE", b4, nullptr, pal.text);
+    drawStatTile(3, "MAX PHASEN-I", b4, nullptr, pal.text);
 
-    // Chart Area
-    int gx = mx + 58;
-    int gy = my + 116;
-    int gw = mw - 116;
-    int gh = 178;
+    // Dyno Chart Area
+    int gx = mx + 55;
+    int gy = my + 115;
+    int gw = mw - 110; // 490px
+    int gh = 185;
 
-    uint16_t chartBg = pal.is_light ? pal.bg : blendRgb565(pal.bg, pal.surface, 90);
+    // Background of chart
+    uint16_t chartBg = pal.is_light ? pal.bg : blendRgb565(pal.bg, pal.surface, 120);
     _canvas->fillRect(gx, gy, gw, gh, chartBg);
     _canvas->drawRect(gx, gy, gw, gh, pal.border);
 
+    // Grid lines (horizontal: 25%, 50%, 75%)
     for (int i = 1; i <= 3; i++) {
-        _canvas->drawFastHLine(gx, gy + (gh * i) / 4, gw, pal.border);
-        _canvas->drawFastVLine(gx + (gw * i) / 4, gy, gh, pal.border);
+        int y_line = gy + (gh * i) / 4;
+        _canvas->drawFastHLine(gx, y_line, gw, pal.surface_alt);
+    }
+    // Vertical grid lines (25%, 50%, 75%)
+    for (int i = 1; i <= 3; i++) {
+        int x_line = gx + (gw * i) / 4;
+        _canvas->drawFastVLine(x_line, gy, gh, pal.surface_alt);
     }
 
+    // Y-Axis Left (Power in kW, pal.primary)
     float max_kw_scale = 6.0f;
     if (peak_kw > 10.0f) max_kw_scale = 15.0f;
     else if (peak_kw > 7.5f) max_kw_scale = 10.0f;
     else if (peak_kw > 5.5f) max_kw_scale = 8.0f;
-
     char kwBuf[16];
-    snprintf(kwBuf, sizeof(kwBuf), "%.0fkW", max_kw_scale);
-    drawSmoothText(UIF_SMALL, kwBuf, gx - 5, gy + 6, textdatum_t::middle_right, pal.primary, pal.surface);
-    snprintf(kwBuf, sizeof(kwBuf), "%.1f", max_kw_scale * 0.5f);
+    snprintf(kwBuf, sizeof(kwBuf), "%.1fkW", max_kw_scale);
+    drawSmoothText(UIF_SMALL, kwBuf, gx - 5, gy + 4, textdatum_t::middle_right, pal.primary, pal.surface);
+    snprintf(kwBuf, sizeof(kwBuf), "%.1fkW", max_kw_scale * 0.5f);
     drawSmoothText(UIF_SMALL, kwBuf, gx - 5, gy + gh / 2, textdatum_t::middle_right, pal.primary, pal.surface);
-    drawSmoothText(UIF_SMALL, "0", gx - 5, gy + gh - 6, textdatum_t::middle_right, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "0 kW", gx - 5, gy + gh - 4, textdatum_t::middle_right, pal.primary, pal.surface);
 
+    // Y-Axis Right (G-Force, pal.accent_warn)
     float max_g_scale = 1.5f;
     if (peak_g > 1.8f) max_g_scale = 2.5f;
     else if (peak_g > 1.35f) max_g_scale = 2.0f;
-
     char gBuf[16];
-    snprintf(gBuf, sizeof(gBuf), "%.1fG", max_g_scale);
-    drawSmoothText(UIF_SMALL, gBuf, gx + gw + 5, gy + 6, textdatum_t::middle_left, pal.accent_warn, pal.surface);
-    snprintf(gBuf, sizeof(gBuf), "%.1f", max_g_scale * 0.5f);
+    snprintf(gBuf, sizeof(gBuf), "%.1f G", max_g_scale);
+    drawSmoothText(UIF_SMALL, gBuf, gx + gw + 5, gy + 4, textdatum_t::middle_left, pal.accent_warn, pal.surface);
+    snprintf(gBuf, sizeof(gBuf), "%.2f G", max_g_scale * 0.5f);
     drawSmoothText(UIF_SMALL, gBuf, gx + gw + 5, gy + gh / 2, textdatum_t::middle_left, pal.accent_warn, pal.surface);
-    drawSmoothText(UIF_SMALL, "0.0", gx + gw + 5, gy + gh - 6, textdatum_t::middle_left, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "0.0 G", gx + gw + 5, gy + gh - 4, textdatum_t::middle_left, pal.accent_warn, pal.surface);
 
-    drawSmoothText(UIF_SMALL, "0",   gx,          gy + gh + 4, textdatum_t::top_center, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "25",  gx + gw / 4, gy + gh + 4, textdatum_t::top_center, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "50",  gx + gw / 2, gy + gh + 4, textdatum_t::top_center, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "75",  gx + (gw * 3) / 4, gy + gh + 4, textdatum_t::top_center, pal.muted, pal.surface);
-    drawSmoothText(UIF_SMALL, "100", gx + gw,     gy + gh + 4, textdatum_t::top_center, pal.muted, pal.surface);
+    // X-Axis Speed Labels under chart
+    drawSmoothText(UIF_SMALL, "0 km/h", gx, gy + gh + 10, textdatum_t::top_center, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "25 km/h", gx + gw / 4, gy + gh + 10, textdatum_t::top_center, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "50 km/h", gx + gw / 2, gy + gh + 10, textdatum_t::top_center, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "75 km/h", gx + (gw * 3) / 4, gy + gh + 10, textdatum_t::top_center, pal.muted, pal.surface);
+    drawSmoothText(UIF_SMALL, "100 km/h", gx + gw, gy + gh + 10, textdatum_t::top_center, pal.muted, pal.surface);
 
-    int num_points = telemetry.race_dyno.sample_count;
+    // Draw Curves
+    bool has_real_data = (telemetry.race_dyno.sample_count >= 5);
+    int num_points = has_real_data ? telemetry.race_dyno.sample_count : 40;
+
     int prev_px = -1, prev_py_power = -1, prev_py_g = -1;
-    for (int i = 0; i < num_points; i++) {
-        float x_ratio = std::min(std::max(telemetry.race_dyno.samples_speed[i] / 100.0f, 0.0f), 1.0f);
-        float p_ratio = std::min(std::max((telemetry.race_dyno.samples_power[i] / 1000.0f) / max_kw_scale, 0.0f), 1.0f);
-        float g_ratio = std::min(std::max(telemetry.race_dyno.samples_g[i] / max_g_scale, 0.0f), 1.0f);
 
-        int px     = gx + (int)(x_ratio * (gw - 2));
+    for (int i = 0; i < num_points; i++) {
+        float spd_val = 0.0f;
+        float pwr_val = 0.0f;
+        float g_val   = 0.0f;
+
+        if (has_real_data) {
+            spd_val = telemetry.race_dyno.samples_speed[i];
+            pwr_val = telemetry.race_dyno.samples_power[i];
+            g_val   = telemetry.race_dyno.samples_g[i];
+        } else {
+            // Realistic preview curve
+            float t_norm = (num_points > 1) ? ((float)i / (float)(num_points - 1)) : 0.0f;
+            spd_val = 80.0f * (1.0f - expf(-2.2f * t_norm));
+            float p_frac = (t_norm < 0.25f) ? (t_norm / 0.25f) : (1.0f - 0.12f * (t_norm - 0.25f));
+            pwr_val = peak_kw * 1000.0f * p_frac;
+            g_val = peak_g * expf(-1.1f * t_norm);
+        }
+
+        float x_ratio = spd_val / 100.0f;
+        if (x_ratio < 0.0f) x_ratio = 0.0f;
+        if (x_ratio > 1.0f) x_ratio = 1.0f;
+        int px = gx + (int)(x_ratio * (gw - 2));
+
+        float p_kw = pwr_val / 1000.0f;
+        float p_ratio = p_kw / max_kw_scale;
+        if (p_ratio < 0.0f) p_ratio = 0.0f;
+        if (p_ratio > 1.0f) p_ratio = 1.0f;
         int py_pwr = gy + gh - 2 - (int)(p_ratio * (gh - 4));
-        int py_g   = gy + gh - 2 - (int)(g_ratio * (gh - 4));
+
+        float g_ratio = g_val / max_g_scale;
+        if (g_ratio < 0.0f) g_ratio = 0.0f;
+        if (g_ratio > 1.0f) g_ratio = 1.0f;
+        int py_g = gy + gh - 2 - (int)(g_ratio * (gh - 4));
 
         if (i > 0 && prev_px >= 0) {
             _canvas->drawLine(prev_px, prev_py_power, px, py_pwr, pal.primary);
@@ -3934,25 +3762,31 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
             _canvas->drawLine(prev_px, prev_py_g, px, py_g, pal.accent_warn);
             _canvas->drawLine(prev_px, prev_py_g + 1, px, py_g + 1, pal.accent_warn);
         }
+
         prev_px = px;
         prev_py_power = py_pwr;
         prev_py_g = py_g;
     }
 
-    // Legend
+    // Legend & Mode Tag under Chart
     int leg_y = gy + gh + 22;
-    _canvas->fillRoundRect(gx, leg_y + 4, 16, 4, 2, pal.primary);
-    drawSmoothText(UIF_SMALL, "Leistung (kW)", gx + 22, leg_y + 6, textdatum_t::middle_left, pal.primary, pal.surface);
-    _canvas->fillRoundRect(gx + 140, leg_y + 4, 16, 4, 2, pal.accent_warn);
-    drawSmoothText(UIF_SMALL, "Beschleunigung (+G)", gx + 162, leg_y + 6, textdatum_t::middle_left, pal.accent_warn, pal.surface);
+    _canvas->fillRoundRect(gx + 10, leg_y + 4, 18, 4, 2, pal.primary);
+    drawSmoothText(UIF_SMALL, "Leistung (kW)", gx + 34, leg_y + 6, textdatum_t::middle_left, pal.primary, pal.surface);
 
-    // Bottom [ SCHLIESSEN ]
+    _canvas->fillRoundRect(gx + 160, leg_y + 4, 18, 4, 2, pal.accent_warn);
+    drawSmoothText(UIF_SMALL, "Beschleunigung (+G)", gx + 184, leg_y + 6, textdatum_t::middle_left, pal.accent_warn, pal.surface);
+
+    drawSmoothText(UIF_SMALL, has_real_data ? "[Live Dyno Telemetrie]" : "[Vorschau / Letzter Lauf]",
+                   gx + gw, leg_y + 6, textdatum_t::middle_right, pal.muted, pal.surface);
+
+    // Bottom Action Button: [ SCHLIESSEN ]
     int btnW = 200, btnH = 40;
     int btnX = mx + (mw - btnW) / 2;
-    int btnY = my + mh - 48;
+    int btnY = my + mh - 50;
     _canvas->fillRoundRect(btnX, btnY, btnW, btnH, 12, pal.surface_alt);
     _canvas->drawRoundRect(btnX, btnY, btnW, btnH, 12, pal.border);
-    drawSmoothText(UIF_BODY, "SCHLIESSEN", btnX + btnW / 2, btnY + btnH / 2, textdatum_t::middle_center, pal.text, pal.surface_alt);
+    drawSmoothText(UIF_BODY, "SCHLIESSEN", btnX + btnW / 2, btnY + btnH / 2,
+                   textdatum_t::middle_center, pal.text, pal.surface_alt);
 }
 
 // ==============================================================================
