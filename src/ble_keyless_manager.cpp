@@ -1,7 +1,76 @@
 #include "ble_keyless_manager.h"
+#include "board_config.h"
+
+#if !defined(NATIVE_SIMULATOR) && !ENABLE_BLE_KEYLESS
+// ==============================================================================
+// BLE Keyless-Go Disabled on ESP32 (ENABLE_BLE_KEYLESS == 0)
+// Lightweight no-op implementation: completely excludes ESP32 BLE stack from
+// Flash & RAM while preserving link compatibility for any callers.
+// ==============================================================================
+
+BleKeylessManager& BleKeylessManager::instance() {
+    static BleKeylessManager inst;
+    return inst;
+}
+
+BleKeylessManager::BleKeylessManager()
+    : _inited(false)
+    , _connected(false)
+    , _pairing_active(false)
+    , _rssi(0)
+    , _connect_time_ms(0)
+    , _disconnect_time_ms(0)
+    , _last_rssi_poll_ms(0)
+    , _conn_id(0)
+    , _last_telemetry(nullptr)
+{
+    memset(_peer_bda, 0, sizeof(_peer_bda));
+}
+
+void BleKeylessManager::begin() {
+    _inited = true;
+}
+
+bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
+    (void)bda;
+    (void)connId;
+    return false;
+}
+
+void BleKeylessManager::onClientDisconnect() {
+    _connected = false;
+    _conn_id = 0;
+    _rssi = 0;
+}
+
+void BleKeylessManager::updateRssi(int8_t rssi) {
+    (void)rssi;
+}
+
+uint8_t BleKeylessManager::getSignalBars() const {
+    return 0;
+}
+
+void BleKeylessManager::startPairing() {}
+void BleKeylessManager::cancelPairing() {}
+void BleKeylessManager::unpair() {}
+
+void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
+    (void)now_ms;
+    _last_telemetry = &telemetry;
+    telemetry.ble_connected = false;
+    telemetry.ble_rssi = 0;
+    telemetry.ble_signal_bars = 0;
+    telemetry.ble_pairing_active = false;
+}
+
+#else
+// ==============================================================================
+// Active BLE Keyless-Go (ESP32 when ENABLE_BLE_KEYLESS == 1, or NATIVE_SIMULATOR mock)
+// ==============================================================================
 #include "dash_renderer.h"
 
-#if !defined(NATIVE_SIMULATOR)
+#if !defined(NATIVE_SIMULATOR) && ENABLE_BLE_KEYLESS
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -105,7 +174,7 @@ void BleKeylessManager::begin() {
     if (_inited) return;
     _inited = true;
 
-#if !defined(NATIVE_SIMULATOR)
+#if !defined(NATIVE_SIMULATOR) && ENABLE_BLE_KEYLESS
     // Clear any test laptop pairing address so user phone can pair immediately
     if (strncmp(Settings.get().ble_paired_addr, "E0:3A", 5) == 0 ||
         strncmp(Settings.get().ble_paired_addr, "99:64", 5) == 0) {
@@ -123,7 +192,7 @@ void BleKeylessManager::begin() {
     pSecurity->setCapability(ESP_IO_CAP_NONE);
     pSecurity->setAuthenticationMode(true, false, true); // Bond=true, MITM=false, SC=true
     pSecurity->setForceAuthentication(true);             // Triggers permanent OS bonding request on first connect!
-    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK); // Distribute LTK encryption key and IRK identity key (Required for iOS RPA reconnect)
+    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
     pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
     pSecurity->setKeySize(16);
     BLEDevice::setSecurityCallbacks(new VescSecurityCallbacks());
@@ -131,25 +200,23 @@ void BleKeylessManager::begin() {
     s_bleServer = BLEDevice::createServer();
     s_bleServer->setCallbacks(new VescKeylessServerCallbacks());
 
-    // 1. HID Consumer Device Profile
-    // Makes 'VESC-Keyless' immediately discoverable in iOS & Android native Bluetooth settings menus!
     static const uint8_t hidReportDescriptor[] = {
-        0x05, 0x0C, // Usage Page (Consumer Devices)
-        0x09, 0x01, // Usage (Consumer Control)
-        0xA1, 0x01, // Collection (Application)
-        0x85, 0x01, //   Report ID (1)
-        0x09, 0xE9, //   Usage (Volume Increment)
-        0x09, 0xEA, //   Usage (Volume Decrement)
-        0x09, 0xCD, //   Usage (Play/Pause)
-        0x15, 0x00, //   Logical Minimum (0)
-        0x25, 0x01, //   Logical Maximum (1)
-        0x75, 0x01, //   Report Size (1)
-        0x95, 0x03, //   Report Count (3)
-        0x81, 0x02, //   Input (Data, Variable, Absolute)
-        0x75, 0x05, //   Report Size (5) - padding
-        0x95, 0x01, //   Report Count (1)
-        0x81, 0x03, //   Input (Constant)
-        0xC0        // End Collection
+        0x05, 0x0C,
+        0x09, 0x01,
+        0xA1, 0x01,
+        0x85, 0x01,
+        0x09, 0xE9,
+        0x09, 0xEA,
+        0x09, 0xCD,
+        0x15, 0x00,
+        0x25, 0x01,
+        0x75, 0x01,
+        0x95, 0x03,
+        0x81, 0x02,
+        0x75, 0x05,
+        0x95, 0x01,
+        0x81, 0x03,
+        0xC0
     };
 
     s_hidDevice = new BLEHIDDevice(s_bleServer);
@@ -160,7 +227,6 @@ void BleKeylessManager::begin() {
     s_hidDevice->setBatteryLevel(100);
     s_hidDevice->startServices();
 
-    // 2. Custom Keyless Service
     BLEService *pKeylessService = s_bleServer->createService(SERVICE_UUID_KEYLESS);
     s_statusChar = pKeylessService->createCharacteristic(
         CHAR_UUID_STATUS,
@@ -171,13 +237,12 @@ void BleKeylessManager::begin() {
     s_statusChar->setValue(&initVal, 1);
     pKeylessService->start();
 
-    // 3. Configure Advertising
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->setAppearance(0x0180); // HID Generic Remote Control appearance (Apple Accessory Guidelines)
-    pAdvertising->addServiceUUID(s_hidDevice->hidService()->getUUID()); // 0x1812
-    pAdvertising->addServiceUUID(BLEUUID((uint16_t)0x180F));            // 0x180F Battery
-    pAdvertising->setMinInterval(32); // 20 ms fast Apple & Android reconnection interval
-    pAdvertising->setMaxInterval(48); // 30 ms
+    pAdvertising->setAppearance(0x0180);
+    pAdvertising->addServiceUUID(s_hidDevice->hidService()->getUUID());
+    pAdvertising->addServiceUUID(BLEUUID((uint16_t)0x180F));
+    pAdvertising->setMinInterval(32);
+    pAdvertising->setMaxInterval(48);
 
     BLEAdvertisementData scanResponseData;
     scanResponseData.setCompleteServices(BLEUUID(SERVICE_UUID_KEYLESS));
@@ -185,11 +250,11 @@ void BleKeylessManager::begin() {
     pAdvertising->setScanResponseData(scanResponseData);
 
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x0C); // 15 ms connection interval (Apple Accessory Guidelines)
-    pAdvertising->setMaxPreferred(0x18); // 30 ms connection interval
+    pAdvertising->setMinPreferred(0x0C);
+    pAdvertising->setMaxPreferred(0x18);
     BLEDevice::startAdvertising();
 
-    Serial.println("[BLE KEYLESS] Bluetooth Low Energy active: Advertising as 'VESC-Keyless' (HID+Battery, ScanRsp: Custom UUID)");
+    Serial.println("[BLE KEYLESS] Bluetooth Low Energy active: Advertising as 'VESC-Keyless'");
 #else
     Serial.println("[BLE KEYLESS] Simulator BLE Mock initialized.");
 #endif
@@ -199,7 +264,7 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
     if (!bda) {
         Serial.println("[BLE KEYLESS] Connection attempt with null address rejected.");
         _connected = false;
-#if !defined(NATIVE_SIMULATOR)
+#if !defined(NATIVE_SIMULATOR) && ENABLE_BLE_KEYLESS
         if (s_bleServer) {
             s_bleServer->disconnect(connId);
             BLEDevice::startAdvertising();
@@ -212,7 +277,6 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
     snprintf(addrStr, sizeof(addrStr), "%02X:%02X:%02X:%02X:%02X:%02X",
              bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
 
-    // If not paired yet (or in active pairing mode): Pair with this client
     if (!Settings.get().ble_paired || _pairing_active) {
         strncpy(Settings.get().ble_paired_addr, addrStr, sizeof(Settings.get().ble_paired_addr));
         Settings.get().ble_paired = true;
@@ -220,23 +284,21 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
         Settings.save();
         Serial.printf("[BLE KEYLESS] Paired successfully with %s! Saved to NVS.\n", addrStr);
     } else {
-        // Paired smartphone reconnected! (iOS/Android RPA random private addresses resolve seamlessly via BLE bonding)
         Serial.printf("[BLE KEYLESS] Paired smartphone reconnected! Address: %s\n", addrStr);
     }
 
     _connected = true;
     _conn_id = connId;
     _connect_time_ms = millis();
-    _rssi = -55; // Initial proximity RSSI
+    _rssi = -55;
     memcpy(_peer_bda, bda, 6);
 
-#if !defined(NATIVE_SIMULATOR)
+#if !defined(NATIVE_SIMULATOR) && ENABLE_BLE_KEYLESS
     if (s_bleServer) {
-        s_bleServer->updateConnParams(connId, 12, 24, 0, 600); // 15ms-30ms interval, 6s timeout (Apple Accessory Guidelines)
+        s_bleServer->updateConnParams(connId, 12, 24, 0, 600);
     }
 #endif
 
-    // Immediately update telemetry so settings and status reflect connection with zero delay
     if (_last_telemetry) {
         _last_telemetry->ble_connected = true;
         _last_telemetry->ble_paired = Settings.get().ble_paired;
@@ -290,7 +352,7 @@ void BleKeylessManager::startPairing() {
     if (_last_telemetry) {
         _last_telemetry->ble_pairing_active = true;
     }
-#if !defined(NATIVE_SIMULATOR)
+#if !defined(NATIVE_SIMULATOR) && ENABLE_BLE_KEYLESS
     BLEDevice::startAdvertising();
 #endif
     Renderer.markMenuDirty();
@@ -313,7 +375,7 @@ void BleKeylessManager::unpair() {
     strncpy(Settings.get().ble_paired_name, "Smartphone", sizeof(Settings.get().ble_paired_name));
     Settings.save();
     _pairing_active = false;
-#if !defined(NATIVE_SIMULATOR)
+#if !defined(NATIVE_SIMULATOR) && ENABLE_BLE_KEYLESS
 #if defined(CONFIG_BLUEDROID_ENABLED)
     int dev_num = esp_ble_get_bond_device_num();
     if (dev_num > 0) {
@@ -359,7 +421,6 @@ void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
                          (telemetry.ble_pairing_active != _pairing_active) ||
                          (telemetry.ble_signal_bars != getSignalBars());
 
-    // 1. Sync telemetry state
     telemetry.ble_keyless_enabled  = Settings.get().ble_keyless_enabled;
     telemetry.ble_autolock_enabled = Settings.get().ble_autolock_enabled;
     telemetry.ble_paired           = Settings.get().ble_paired;
@@ -385,9 +446,6 @@ void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
         Renderer.markScreenDirty();
     }
 
-
-
-    // 3. KEYLESS-GO AUTO-UNLOCK LOGIC
     if (telemetry.is_locked && Settings.get().ble_keyless_enabled) {
         if (_connected) {
             if (_connect_time_ms == 0 || (now_ms >= _connect_time_ms && (now_ms - _connect_time_ms >= 300))) {
@@ -405,12 +463,10 @@ void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
         }
     }
 
-    // 4. WALK-AWAY AUTO-LOCK LOGIC
-    // STRICT SAFETY INVARIANT: ONLY lock when stationary (speed < 0.5 km/h) - NEVER lock while moving!
-    if (!telemetry.is_locked && 
-        Settings.get().ble_keyless_enabled && 
-        Settings.get().ble_autolock_enabled && 
-        Settings.get().ble_paired) 
+    if (!telemetry.is_locked &&
+        Settings.get().ble_keyless_enabled &&
+        Settings.get().ble_autolock_enabled &&
+        Settings.get().ble_paired)
     {
         if (telemetry.speed_kmh < 0.5f) {
             if (!_connected && _disconnect_time_ms > 0 && now_ms >= _disconnect_time_ms) {
@@ -425,3 +481,4 @@ void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
         }
     }
 }
+#endif

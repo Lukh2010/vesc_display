@@ -49,13 +49,20 @@ public:
     float getCalibratedDiameterInch() const { return _calibrated_diam_in; }
     float getBaselineDiameterInch() const { return _baseline_diam_in; }
     float getRollingDiameterInch() const { return _rolling_diam_in; }
+    void  startManualCalibration();
+    bool  isCalibrating() const { return _manual_calib_active; }
 
     // Simulation / testing injection hooks
     void setSimulatedSlipSpeed(float slip_kmh) { _sim_slip_override = slip_kmh; }
     void clearSimulatedSlip() { _sim_slip_override = -1.0f; }
     void setSimulatedDiameterDropPct(float drop_pct) { _sim_drop_pct_override = drop_pct; }
     void clearSimulatedDiameterDrop() { _sim_drop_pct_override = -1.0f; }
-    void setBaselineDiameter(float diam_in) { _baseline_diam_in = diam_in; _rolling_diam_in = diam_in; }
+    void setBaselineDiameter(float diam_in) {
+        _baseline_diam_in = diam_in;
+        _rolling_diam_in = diam_in;
+        _calibrated_diam_in = diam_in;
+        _has_calibrated_baseline = true;
+    }
 
     void reset();
 
@@ -68,15 +75,21 @@ private:
     float    _slip_speed_kmh;
     float    _slip_ratio;
     float    _throttle_scale;
-    float    _imu_ref_speed_kmh;
+    float    _prev_v_vesc;
+    bool     _has_prev_v_vesc;
+    float    _phys_ref_speed_kmh;
+    float    _filtered_dv_dt;
+    float    _spin_accel_duration_sec;
     uint32_t _last_slip_active_ms;
     float    _sim_slip_override;
 
-    // GPS Autonomous Calibration State
+    // GPS Autonomous / Manual Calibration State
     float    _steady_speed_ref;
     float    _steady_timer_sec;
+    float    _calib_converge_sec;
     float    _calibrated_diam_in;
     bool     _has_calibrated_baseline;
+    bool     _manual_calib_active;
     uint32_t _last_calib_eval_ms;
 
     // Virtual TPMS State

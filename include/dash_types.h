@@ -23,28 +23,35 @@ enum DashboardStyle {
     STYLE_COUNT
 };
 
-// Selectable Dashboard Color Themes & Palettes
+// Selectable Dashboard Color Themes & Palettes (4 Clean Automotive Themes)
 enum DashTheme {
-    THEME_CYBER_CYAN   = 0,  // Electric Neon Cyan & Magenta (Default Cyberpunk)
-    THEME_SYNTHWAVE    = 1,  // Neon Pink / Sunset Orange / Deep Violet (80s Outrun)
-    THEME_TOXIC_GREEN  = 2,  // Toxic Viper Green / Electric Lime (Matrix)
-    THEME_RACING_RED   = 3,  // Corse Racing Red & Gold Amber (Ducati)
-    THEME_CLEAN_ICE    = 4,  // Minimalist Arctic Ice White & Silver (Tesla)
-    THEME_COUNT
+    THEME_OBSIDIAN_DARK  = 0,  // Pure black OLED dark, graphite cards, crisp white text & ice accent
+    THEME_ARCTIC_LIGHT   = 1,  // Clean crisp white/light daylight theme, dark obsidian text & slate-blue accent
+    THEME_CARBON_STEALTH = 2,  // Matte charcoal stealth, warm titanium/silver & crisp white accents
+    THEME_NIGHT_DIM      = 3,  // Low-glare night mode (software dimmer, pure black bg, muted amber/gray digits)
+    THEME_COUNT          = 4
 };
+using ColorTheme = DashTheme;
 
-// Theme Color Palette Definition
+// Theme Color Palette Definition (RGB565 — supports both Dark and Light themes)
 struct ColorThemePalette {
     uint8_t     id;
     const char *name;
     const char *subtitle;
-    uint16_t    primary;        // Main accent & speed gauge glow
-    uint16_t    secondary;      // Secondary highlight / mode / boost
-    uint16_t    track;          // Circular gauge & bar background tracks
-    uint16_t    surface;        // Card background
-    uint16_t    border;         // Card border outline
-    uint16_t    needle;         // Needle / tip indicator dot
-    uint16_t    text_accent;    // Text accent color
+    uint16_t    bg;             // Main screen background
+    uint16_t    surface;        // Primary card background
+    uint16_t    surface_alt;    // Secondary / elevated card background
+    uint16_t    border;         // Card & widget border outline
+    uint16_t    text;           // Primary foreground text & hero digits
+    uint16_t    muted;          // Secondary labels, captions & units
+    uint16_t    primary;        // Main accent & speed gauge highlight
+    uint16_t    secondary;      // Secondary accent / mode / boost
+    uint16_t    track;          // Circular gauge & progress bar background track
+    uint16_t    needle;         // Gauge needle / tip indicator dot
+    uint16_t    accent_ok;      // Semantic OK / Eco / Safe (green)
+    uint16_t    accent_warn;    // Semantic Warning / Caution (amber)
+    uint16_t    accent_danger;  // Semantic Danger / Fault / Race (red)
+    bool        is_light;       // true for light themes (Arctic Light), false for dark themes
 };
 
 // Ride Modes (Eco, Sport, Race - Video Exact)
@@ -222,8 +229,8 @@ struct DashSettings {
     bool    incline_gforce_enabled; // Enable IMU pitch/incline & G-force gauges (default true)
     bool    wifi_bridge_enabled;    // SoftAP WiFi bridge enabled (default false)
     bool    setup_completed;        // First-time setup wizard completed (default false)
-    uint8_t color_theme;            // DashTheme: 0=Cyber Cyan, 1=Synthwave, 2=Toxic Green, 3=Racing Red, 4=Clean Ice
-    bool    turbine_sound_enabled;  // FOC audio turbine whine while driving (default true)
+    uint8_t color_theme;            // DashTheme: 0=Obsidian Dark, 1=Arctic Light, 2=Carbon Stealth, 3=Night Dim
+    bool    turbine_sound_enabled;  // FOC audio turbine whine while driving (default false)
     bool    ble_keyless_enabled;    // Keyless-Go Auto-Unlock active (default true)
     bool    ble_autolock_enabled;   // Walk-Away Auto-Lock active (default true)
     bool    ble_paired;             // Phone paired (default false)
@@ -233,6 +240,9 @@ struct DashSettings {
     uint8_t show_incline;           // 1 = ON, 0 = OFF (default 1)
     uint8_t show_light_btn;         // 1 = ON, 0 = OFF (default 1)
     uint8_t brake_mode;             // 0 = AUS (Freilauf), 1 = MILD, 2 = MAXIMAL (default 2)
+    float   odo_km;                 // Persistent lifetime odometer in km (default 0.0f)
+    bool    tcs_enabled;            // Proactive Traction Control enabled (default false)
+    uint8_t battery_cells;          // Battery series cell count 10..24 (default 13)
 
     DashSettings()
         : dash_style(0),
@@ -257,7 +267,7 @@ struct DashSettings {
           incline_gforce_enabled(true),
           wifi_bridge_enabled(false),
           setup_completed(false),
-          color_theme(THEME_CLEAN_ICE),
+          color_theme(THEME_OBSIDIAN_DARK),
           turbine_sound_enabled(false),
           ble_keyless_enabled(true),
           ble_autolock_enabled(true),
@@ -265,7 +275,10 @@ struct DashSettings {
           show_gforce(1),
           show_incline(1),
           show_light_btn(1),
-          brake_mode(2)
+          brake_mode(2),
+          odo_km(0.0f),
+          tcs_enabled(false),
+          battery_cells(13)
     {
         strncpy(pin_code, "1234", sizeof(pin_code));
         ble_paired_addr[0] = '\0';
@@ -341,7 +354,7 @@ struct DashTelemetry {
     float    charge_est_minutes;  // estimated minutes until full
 
     // Active Color Theme & FOC Turbine Sound Engine
-    uint8_t  color_theme;          // DashTheme: 0=Cyber Cyan, 1=Synthwave, 2=Toxic Green, 3=Racing Red, 4=Clean Ice
+    uint8_t  color_theme;          // DashTheme: 0=Obsidian Dark, 1=Arctic Light, 2=Carbon Stealth, 3=Night Dim
     bool     turbine_sound_active; // true when vehicle is driving and FOC acoustic engine is generating turbine sound
     float    turbine_freq;         // Current turbine whine frequency (Hz, scales with speed)
     float    turbine_volts;        // Current turbine acoustic modulation voltage (V, scales with speed)

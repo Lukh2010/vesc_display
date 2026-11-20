@@ -14,10 +14,13 @@ enum VescSyncStatus {
 
 class VescHandler {
 public:
+    static constexpr uint8_t ESP_CAN_ID = 99;
+
     static VescHandler& instance();
     VescHandler();
     void begin();
     void update(DashTelemetry &telemetry);
+    float getVescTripWh() const { return _vesc_trip_wh; }
 
     // Transport Interface (UART / Loopback / Virtual)
     void setTransport(IVescTransport *transport) { _transport = transport; }
@@ -95,6 +98,7 @@ private:
     void sendVescGetValues();
     void sendVescGetDecodedAdc();
     bool parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &telemetry);
+    bool parseVescPayload(const uint8_t *payload, size_t payload_len, DashTelemetry &telemetry);
 
     IVescTransport *_transport;
 
@@ -112,6 +116,7 @@ private:
     int32_t _last_ah;           // Most recent raw Amp-hour reading from VESC
     bool    _wh_trip_inited;
     bool    _ah_trip_inited;
+    float   _vesc_trip_wh;      // Raw VESC-reported trip Wh (separate from BatteryManager integration)
 
     // Simulation Engine State
     float _sim_throttle;

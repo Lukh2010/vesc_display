@@ -1142,12 +1142,14 @@ void sim_step(uint32_t step_ms) {
                     ModeManager::instance().setRideMode(MODE_RACE);
                     g_telemetry.boost_active = true;
                     g_telemetry.boost_end_ms = g_sim_uptime_ms + 60000;
-                    g_telemetry.race_state = 1; // COUNTDOWN (5s)
+                    g_telemetry.race_state = 1; // ARMED (Auto-Rollout >= 1.0 km/h)
                     g_telemetry.race_countdown_start_ms = g_sim_uptime_ms;
+                    g_telemetry.race_launch_start_ms = 0;
                     g_telemetry.race_elapsed_sec = 0.0f;
                     g_telemetry.race_split_0_22 = 0.0f;
                     g_telemetry.race_split_0_50 = 0.0f;
                     g_telemetry.race_split_0_70 = 0.0f;
+                    g_telemetry.race_dyno.reset();
                     Buttons.setRaceState(1);
                     Renderer.markScreenDirty();
                     break;
@@ -1626,12 +1628,14 @@ void sim_trigger_nav(int nav_action) {
                 ModeManager::instance().setRideMode(MODE_RACE);
                 g_telemetry.boost_active = true;
                 g_telemetry.boost_end_ms = g_sim_uptime_ms + 60000;
-                g_telemetry.race_state = 1;
+                g_telemetry.race_state = 1; // ARMED (Auto-Rollout)
                 g_telemetry.race_countdown_start_ms = g_sim_uptime_ms;
+                g_telemetry.race_launch_start_ms = 0;
                 g_telemetry.race_elapsed_sec = 0.0f;
                 g_telemetry.race_split_0_22 = 0.0f;
                 g_telemetry.race_split_0_50 = 0.0f;
                 g_telemetry.race_split_0_70 = 0.0f;
+                g_telemetry.race_dyno.reset();
                 Buttons.setRaceState(1);
                 Renderer.markScreenDirty();
                 break;

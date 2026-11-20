@@ -1,6 +1,15 @@
 #include "battery_manager.h"
 #include "mode_manager.h"
+#include "settings_manager.h"
 #include <string.h>
+
+static uint8_t getSyncedBatteryCells() {
+    uint8_t m_cells = ModeManager::instance().getConfig().battery_cells;
+    if (m_cells >= 10 && m_cells <= 24) return m_cells;
+    uint8_t s_cells = Settings.get().battery_cells;
+    if (s_cells >= 10 && s_cells <= 24) return s_cells;
+    return 13;
+}
 
 BatteryManager Battery;
 
@@ -134,11 +143,8 @@ void BatteryManager::resetProfileLearning(uint8_t id) {
 
 // Multi-chemistry / Multi-S (10S to 24S) Li-Ion Open-Circuit Voltage calculation
 float BatteryManager::getOcvSoc(float v_pack) {
-    if (v_pack < 30.0f) return 0.0f;
-    uint8_t cfg_cells = ModeManager::instance().getConfig().battery_cells;
-    int s_count = (cfg_cells >= 10 && cfg_cells <= 24) ? cfg_cells : (int)roundf(v_pack / 3.75f);
-    if (s_count < 10) s_count = 10;
-    if (s_count > 24) s_count = 24;
+    if (v_pack < 28.0f) return 0.0f;
+    int s_count = (int)getSyncedBatteryCells();
 
     float cell_v = v_pack / (float)s_count;
     if (cell_v >= 4.15f) return 100.0f;
@@ -168,6 +174,14 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
         telemetry.est_range_km = -1.0f;
         return;
     }
+
+    // Re-seed OCV SoC if user changes battery series cell count at runtime
+    static uint8_t s_last_cells = 0;
+    uint8_t active_cells = getSyncedBatteryCells();
+    if (s_last_cells != 0 && s_last_cells != active_cells) {
+        _soc_inited = false;
+    }
+    s_last_cells = active_cells;
 
     // 0. Initial Boot OCV Initialization
     // On the first valid voltage reading at startup, seed SoC & remaining Wh from resting OCV
@@ -295,8 +309,7 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
     }
 
     // 6. Self-Learning Battery Degradation / Full-Cycle Detection
-    uint8_t cells = ModeManager::instance().getConfig().battery_cells;
-    if (cells < 10 || cells > 24) cells = 13;
+    uint8_t cells = active_cells;
     float full_charge_thresh_v = cells * 4.15f;   // e.g. 53.95V for 13S
     float low_discharge_thresh_v = cells * 3.45f; // e.g. 44.85V for 13S
 

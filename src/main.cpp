@@ -65,7 +65,8 @@ void setup() {
     telemetry.temp_motor          = 36.0f;
     telemetry.temp_esc            = 31.0f;
     telemetry.trip_km             = 0.0f;
-    telemetry.odo_km              = 142.0f;
+    telemetry.odo_km              = Settings.get().odo_km;
+    telemetry.color_theme         = Settings.get().color_theme;
     telemetry.stats.reset();
     telemetry.screen              = SCREEN_RIDE_DASH;
     telemetry.vesc_connected      = false;
@@ -115,6 +116,7 @@ void setup() {
 
     // 4b. Initialize Traction Control (TCS) & Virtual TPMS Engine
     TcsTpmsManager::instance().begin();
+    TcsTpmsManager::instance().setTcsEnabled(Settings.get().tcs_enabled);
 
     // 5. Initialize Touch and Input Handling (GT911 I2C SDA=8, SCL=9)
     Buttons.begin();
@@ -151,6 +153,7 @@ void setup() {
 
     // 9. Initialize Mode Profiles & Send Boot Stealth Limits to VESC (Requirement 1 & 4)
     ModeManager::instance().begin();
+    ModeManager::instance().setBatteryCells(Settings.get().battery_cells);
     if (!Settings.get().setup_completed) {
         telemetry.screen = SCREEN_SETUP_WIZARD;
         telemetry.is_locked = false;
@@ -1066,14 +1069,16 @@ void loop() {
                     telemetry.boost_start_ms = now;
                     ModeManager::instance().setBoostActive(true);
                     telemetry.boost_end_ms = now + 60000;
-                    telemetry.race_state = 1; // COUNTDOWN (5s)
+                    telemetry.race_state = 1; // ARMED (Auto-Rollout on speed >= 1.0 km/h)
                     telemetry.race_countdown_start_ms = now;
+                    telemetry.race_launch_start_ms = 0;
                     telemetry.race_elapsed_sec = 0.0f;
                     telemetry.race_split_0_22 = 0.0f;
                     telemetry.race_split_0_50 = 0.0f;
                     telemetry.race_split_0_70 = 0.0f;
+                    telemetry.race_dyno.reset();
                     Buttons.setRaceState(1);
-                    Serial.println("[RACE] 5-second launch countdown started!");
+                    Serial.println("[RACE] Launch Control ARMED — auto-rollout starts at >= 1.0 km/h!");
                     break;
 
                 case NAV_RACE_ABORT:
@@ -1253,12 +1258,27 @@ void loop() {
     TcsTpmsManager::instance().update(telemetry, tcs_dt);
 
     static float s_last_applied_tcs_scale = 1.0f;
-    if (fabsf(telemetry.tcs_throttle_scale - s_last_applied_tcs_scale) > 0.04f ||
-        (telemetry.tcs_active != (s_last_applied_tcs_scale < 0.98f))) {
-        s_last_applied_tcs_scale = telemetry.tcs_throttle_scale;
-        float base_phase = ModeManager::instance().getActiveLimits().max_phase_amps;
-        float scaled_phase = base_phase * telemetry.tcs_throttle_scale;
-        Vesc.sendTcsPhaseLimit(scaled_phase);
+    if (!telemetry.is_locked && !ModeManager::instance().isLocked() && TcsTpmsManager::instance().isTcsEnabled()) {
+        if (fabsf(telemetry.tcs_throttle_scale - s_last_applied_tcs_scale) > 0.04f ||
+            (telemetry.tcs_active != (s_last_applied_tcs_scale < 0.98f))) {
+            s_last_applied_tcs_scale = telemetry.tcs_throttle_scale;
+            float base_phase = ModeManager::instance().getActiveLimits().max_phase_amps;
+            float scaled_phase = base_phase * telemetry.tcs_throttle_scale;
+            Vesc.sendTcsPhaseLimit(scaled_phase);
+        }
+    } else {
+        s_last_applied_tcs_scale = 1.0f;
+    }
+
+    // 2b3. Smart Periodic Odometer Persistence (avoids NVS wear)
+    static float s_last_saved_odo_km = -1.0f;
+    if (s_last_saved_odo_km < 0.0f) {
+        s_last_saved_odo_km = telemetry.odo_km;
+    }
+    float odo_delta = telemetry.odo_km - s_last_saved_odo_km;
+    if (odo_delta >= 0.5f || (telemetry.speed_kmh < 0.5f && odo_delta >= 0.1f)) {
+        Settings.saveOdo(telemetry.odo_km);
+        s_last_saved_odo_km = telemetry.odo_km;
     }
 
     // 2c. Update Headlight MOSFET hardware state if changed

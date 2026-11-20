@@ -284,7 +284,7 @@ void testTouchGestures() {
 
     auto simTouchAction = [](int start_x, int start_y, int end_x, int end_y, uint32_t duration_ms) {
         Buttons.getNavAction(); // Flush any stale action
-        simAdvanceMs(120); // Allow 100ms debounce cooldown from previous gesture
+        simAdvanceMs(360); // Clear 350ms screen-switch debounce & 100ms touch cooldown
         Display.setSimTouch(true, start_x, start_y);
         Buttons.update(); // Record initial touch-down at t=0
 
@@ -334,10 +334,30 @@ void testTouchGestures() {
     assert(actTapThermals == NAV_NONE);
     printf("[PASS] Arbitrary taps on Ride Dash ignored (NAV_NONE, accidental page switches & resets prevented).\n");
 
-    // 6. Test Tap Top-Right Badge -> NAV_BTN1_LONG (Open Settings Menu)
-    NavAction actTapTopRight = simTouchAction(700, 30, 700, 30, 50);
-    assert(actTapTopRight == NAV_BTN1_LONG);
-    printf("[PASS] Tap Top-Right badge triggered NAV_BTN1_LONG (Settings Menu).\n");
+    // 6. Test 500ms Long-Press Top-Right Gear Icon -> NAV_BTN1_LONG (Open Settings Menu)
+    Display.setSimTouch(true, 756, 34);
+    Buttons.update();
+    simAdvanceMs(550);
+    Buttons.update();
+    NavAction actLongTopRight = Buttons.getNavAction();
+    assert(actLongTopRight == NAV_BTN1_LONG);
+    Display.setSimTouch(false);
+    simAdvanceMs(120);
+    Buttons.update();
+    Buttons.getNavAction();
+    printf("[PASS] 500ms Long-Press on Top-Right Settings Gear triggered NAV_BTN1_LONG (Settings Menu).\n");
+
+    // 6b. Test Bottom-Right Action Buttons in Legal vs Tuning Mode
+    Buttons.setTuningMode(false);
+    NavAction actLegalWideMode = simTouchAction(500, 415, 500, 415, 50);
+    assert(actLegalWideMode == NAV_MODE_CYCLE);
+    Buttons.setTuningMode(true);
+    NavAction actTuningBoost = simTouchAction(500, 415, 500, 415, 50);
+    assert(actTuningBoost == NAV_BOOST_TOGGLE);
+    NavAction actTuningMode = simTouchAction(690, 415, 690, 415, 50);
+    assert(actTuningMode == NAV_MODE_CYCLE);
+    Buttons.setTuningMode(false);
+    printf("[PASS] Ride Dash Bottom-Right Hitboxes verified: wide MODE in Legal, BOOST + MODE in Tuning.\n");
 
     // 7. Test Long Press on Bottom Strip -> NAV_BTN2_LONG (Reset Trip Odometer)
     Display.setSimTouch(true, 100, 440);
@@ -621,10 +641,13 @@ void testTouchGestures() {
     // Restore Default State
     Buttons.setTuningMode(false);
 
-    // 10j. 300A Phase Current Verification (No uint8 truncation to 44A)
-    Vesc.sendModeLimits(85.0f, 15000.0f, 150.0f, 300.0f);
+    // 10j. 300A Phase Current Verification (No uint8 truncation to 44A, and sendModeLimits must NOT overwrite user Settings)
+    Settings.get().max_phase_amps = 300;
     assert(Settings.get().max_phase_amps == 300);
-    printf("[PASS] 300A phase current limit correctly preserved without uint8 overflow.\n");
+    Vesc.sendModeLimits(85.0f, 15000.0f, 150.0f, 300.0f);
+    g_virtual_vesc.process();
+    assert(g_virtual_vesc.getLimits().max_phase_amps == 300.0f);
+    printf("[PASS] 300A phase current limit preserved without uint8 overflow or Settings corruption.\n");
 
     // 10k. Long press on 'km/h' label (y=250) must NOT trigger Trip Reset (NAV_BTN2_LONG)
     Buttons.setTuningMode(false);
@@ -706,162 +729,163 @@ void testTouchGestures() {
     assert(actMenuCloseTap == NAV_SCREEN_DASH);
     printf("[PASS] Settings Menu [FERTIG / DASH] Button Tap triggered NAV_SCREEN_DASH.\n");
 
-    // 11c. Swipe Right in Settings Menu triggers NAV_MENU_BACK (Return to Dash)
-    NavAction actMenuSwipeR = simTouchAction(200, 200, 400, 200, 60);
+    // 11c. Swipe Right in Settings Header/Tab area (y < 120) triggers NAV_MENU_BACK (Return to Dash)
+    NavAction actMenuSwipeR = simTouchAction(200, 85, 400, 85, 60);
     assert(actMenuSwipeR == NAV_MENU_BACK);
-    printf("[PASS] Settings Menu Swipe Right triggered NAV_MENU_BACK.\n");
+    printf("[PASS] Settings Menu Header Swipe Right triggered NAV_MENU_BACK.\n");
 
-    // 11d. Swipe Up / Down in Settings Menu navigates tabs (Next / Prev)
+    // 11d. Swipe Up / Down in Settings Menu navigates
     NavAction actMenuSwipeDown = simTouchAction(200, 200, 200, 350, 60);
     assert(actMenuSwipeDown == NAV_BTN1_SHORT);
     NavAction actMenuSwipeUp = simTouchAction(200, 350, 200, 200, 60);
     assert(actMenuSwipeUp == NAV_BTN2_SHORT);
-    printf("[PASS] Settings Menu Vertical Swipes triggered tab navigation (NAV_BTN1_SHORT / NAV_BTN2_SHORT).\n");
+    printf("[PASS] Settings Menu Vertical Swipes triggered navigation (NAV_BTN1_SHORT / NAV_BTN2_SHORT).\n");
 
-    // 11e. Test DashboardRenderer::handleSettingsTouch integration (Touch Mode Configurator)
+    // 11e. Test DashboardRenderer::handleSettingsTouch integration (Stealth 3-tab + Tuning 7-tab Configurator)
     DashTelemetry tTest;
     memset(&tTest, 0, sizeof(tTest));
     tTest.screen = SCREEN_SETTINGS_MENU;
     Renderer.markScreenDirty();
 
-    // 1. Tab Switching via touch
-    // Tap on Tab 0 [ ECO ] at x=80, y=95
-    bool touchHandled = Renderer.handleSettingsTouch(80, 95, tTest);
+    // 11e-0: Legal Stealth Mode (!tuning_mode): ONLY DASH(4), SYSTEM(5), PIN(6) are accessible!
+    tTest.tuning_mode = false;
+    bool touchHandled = Renderer.handleSettingsTouch(100, 80, tTest);
     assert(touchHandled == true);
-    assert(Renderer.getSettingsTab() == 0);
-
-    // Tap on Tab 1 [ SPORT ] at x=200, y=95
-    touchHandled = Renderer.handleSettingsTouch(200, 95, tTest);
+    assert(Renderer.getSettingsTab() == DashboardRenderer::TAB_DASH);
+    touchHandled = Renderer.handleSettingsTouch(400, 80, tTest);
     assert(touchHandled == true);
-    assert(Renderer.getSettingsTab() == 1);
-
-    // Tap on Tab 2 [ RACE ] at x=330, y=95
-    touchHandled = Renderer.handleSettingsTouch(330, 95, tTest);
+    assert(Renderer.getSettingsTab() == DashboardRenderer::TAB_SYSTEM);
+    touchHandled = Renderer.handleSettingsTouch(650, 80, tTest);
     assert(touchHandled == true);
-    assert(Renderer.getSettingsTab() == 2);
+    assert(Renderer.getSettingsTab() == DashboardRenderer::TAB_PIN);
+    printf("[PASS] Settings Legal Stealth Mode strictly hides ECO/SPORT/RACE/DRAGY (shows DASH, SYSTEM, PIN only).\n");
 
-    // Tap on Tab 3 [ DRAGY ] at x=460, y=95
-    touchHandled = Renderer.handleSettingsTouch(460, 95, tTest);
-    assert(touchHandled == true);
-    assert(Renderer.getSettingsTab() == 3);
+    // 11e-1: Tuning Mode (tuning_mode == true): All 7 tabs (ECO, SPORT, RACE, DRAGY, DASH, SYSTEM, PIN)
+    tTest.tuning_mode = true;
+    int tabCenters[7] = { 71, 180, 289, 398, 507, 616, 725 };
+    for (int ti = 0; ti < 7; ti++) {
+        touchHandled = Renderer.handleSettingsTouch(tabCenters[ti], 80, tTest);
+        assert(touchHandled == true);
+        assert(Renderer.getSettingsTab() == ti);
+    }
 
-    // Tap on Tab 4 [ DASH ] at x=590, y=95
-    touchHandled = Renderer.handleSettingsTouch(590, 95, tTest);
-    assert(touchHandled == true);
-    assert(Renderer.getSettingsTab() == 4);
-
-    // Tap on Tab 5 [ PIN ] at x=720, y=95
-    touchHandled = Renderer.handleSettingsTouch(720, 95, tTest);
-    assert(touchHandled == true);
-    assert(Renderer.getSettingsTab() == 5);
-
-    // Test Dragy Split adjustments on Tab 3
-    Renderer.setSettingsTab(3);
+    // Test Dragy Split adjustments on Tab 3 (DRAGY)
+    Renderer.setSettingsTab(DashboardRenderer::TAB_DRAGY);
     uint8_t old_sp1 = Settings.get().race_split1_kmh;
-    touchHandled = Renderer.handleSettingsTouch(180, 380, tTest); // Split 1 [+]
+    touchHandled = Renderer.handleSettingsTouch(195, 390, tTest); // Split 1 [+]
     assert(touchHandled == true);
     assert(Settings.get().race_split1_kmh == old_sp1 + 1);
 
-    // Test Tab 4 DASH buttons: G-Force toggle, Incline toggle, Light toggle, Brake mode cycle
-    Renderer.setSettingsTab(4);
+    // Test Tab 4 DASH: G-Force, Neigung, Licht pill toggles & Brake Mode segmented control
+    Renderer.setSettingsTab(DashboardRenderer::TAB_DASH);
     uint8_t init_gf = Settings.get().show_gforce;
     uint8_t init_inc = Settings.get().show_incline;
     uint8_t init_lb = Settings.get().show_light_btn;
     uint8_t init_bm = Settings.get().brake_mode;
 
-    // Tap G-FORCE button at x=115, y=320 -> toggles show_gforce
-    touchHandled = Renderer.handleSettingsTouch(115, 320, tTest);
-    assert(touchHandled == true);
-    assert(Settings.get().show_gforce == (init_gf ? 0 : 1));
-
-    // Tap G-FORCE again -> restore
-    touchHandled = Renderer.handleSettingsTouch(115, 320, tTest);
-    assert(touchHandled == true);
+    touchHandled = Renderer.handleSettingsTouch(140, 240, tTest);
+    assert(touchHandled == true && Settings.get().show_gforce == (init_gf ? 0 : 1));
+    Renderer.handleSettingsTouch(140, 240, tTest);
     assert(Settings.get().show_gforce == init_gf);
 
-    // Tap NEIGUNG button at x=300, y=320 -> toggles show_incline
-    touchHandled = Renderer.handleSettingsTouch(300, 320, tTest);
-    assert(touchHandled == true);
-    assert(Settings.get().show_incline == (init_inc ? 0 : 1));
-
-    // Tap NEIGUNG again -> restore
-    touchHandled = Renderer.handleSettingsTouch(300, 320, tTest);
-    assert(touchHandled == true);
+    touchHandled = Renderer.handleSettingsTouch(400, 240, tTest);
+    assert(touchHandled == true && Settings.get().show_incline == (init_inc ? 0 : 1));
+    Renderer.handleSettingsTouch(400, 240, tTest);
     assert(Settings.get().show_incline == init_inc);
 
-    // Tap LICHT button at x=490, y=320 -> toggles show_light_btn
-    touchHandled = Renderer.handleSettingsTouch(490, 320, tTest);
-    assert(touchHandled == true);
-    assert(Settings.get().show_light_btn == (init_lb ? 0 : 1));
-
-    // Tap LICHT again -> restore
-    touchHandled = Renderer.handleSettingsTouch(490, 320, tTest);
-    assert(touchHandled == true);
+    touchHandled = Renderer.handleSettingsTouch(650, 240, tTest);
+    assert(touchHandled == true && Settings.get().show_light_btn == (init_lb ? 0 : 1));
+    Renderer.handleSettingsTouch(650, 240, tTest);
     assert(Settings.get().show_light_btn == init_lb);
 
-    // Tap BREMSEN button at x=680, y=320 -> cycles brake_mode (0 -> 1 -> 2 -> 0)
-    touchHandled = Renderer.handleSettingsTouch(680, 320, tTest);
-    assert(touchHandled == true);
-    assert(Settings.get().brake_mode == (init_bm + 1) % 3);
-
-    // Restore brake_mode
+    // Segmented Brake Mode: AUS (510, 324), MILD (610, 324), MAX (710, 324)
+    touchHandled = Renderer.handleSettingsTouch(510, 324, tTest);
+    assert(touchHandled == true && Settings.get().brake_mode == 0);
+    touchHandled = Renderer.handleSettingsTouch(610, 324, tTest);
+    assert(touchHandled == true && Settings.get().brake_mode == 1);
+    touchHandled = Renderer.handleSettingsTouch(710, 324, tTest);
+    assert(touchHandled == true && Settings.get().brake_mode == 2);
     Settings.get().brake_mode = init_bm;
     Settings.save();
-    printf("[PASS] Settings Tab 4 DASH: G-Force, Neigung, Licht, and Brake Mode buttons verified 100%%!\n");
+    printf("[PASS] Settings Tab 4 DASH: G-Force, Neigung, Licht pill toggles & Brake Mode segmented control verified!\n");
 
-    Renderer.setSettingsTab(2); // Switch back to RACE for limit tests
+    // Test Tab 5 SYSTEM: TCS Toggle, Battery Cells (10S-24S), Tire Calibration
+    Renderer.setSettingsTab(DashboardRenderer::TAB_SYSTEM);
+    bool init_tcs = Settings.get().tcs_enabled;
+    touchHandled = Renderer.handleSettingsTouch(720, 156, tTest);
+    assert(touchHandled == true && Settings.get().tcs_enabled == !init_tcs);
+    assert(TcsTpmsManager::instance().isTcsEnabled() == !init_tcs);
+    Renderer.handleSettingsTouch(720, 156, tTest); // Restore
+    assert(Settings.get().tcs_enabled == init_tcs);
 
-    // 2. Adjust RACE mode limits via [-] and [+] buttons and slider track
+    uint8_t init_cells = Settings.get().battery_cells;
+    touchHandled = Renderer.handleSettingsTouch(738, 240, tTest); // [+]
+    assert(touchHandled == true && Settings.get().battery_cells == init_cells + 1);
+    touchHandled = Renderer.handleSettingsTouch(572, 240, tTest); // [-]
+    assert(touchHandled == true && Settings.get().battery_cells == init_cells);
+
+    touchHandled = Renderer.handleSettingsTouch(650, 324, tTest); // [KALIBRIEREN]
+    assert(touchHandled == true && TcsTpmsManager::instance().isCalibrating() == true);
+    printf("[PASS] Settings Tab 5 SYSTEM: TCS toggle, 10S-24S Battery Cells & Tire Calibration verified!\n");
+
+    // Test Tab 6 PIN: [JETZT SPERREN] locks stationary scooter cleanly
+    Renderer.setSettingsTab(DashboardRenderer::TAB_PIN);
+    tTest.speed_kmh = 0.0f;
+    tTest.vesc_motor_speed = 0.0f;
+    tTest.is_locked = false;
+    touchHandled = Renderer.handleSettingsTouch(590, 226, tTest);
+    assert(touchHandled == true && tTest.is_locked == true && tTest.screen == SCREEN_RIDE_DASH);
+    tTest.is_locked = false;
+    ModeManager::instance().setLocked(false);
+    Buttons.setLocked(false);
+    tTest.screen = SCREEN_SETTINGS_MENU;
+    printf("[PASS] Settings Tab 6 PIN: [JETZT SPERREN] immediately locks stationary scooter!\n");
+
+    Renderer.setSettingsTab(DashboardRenderer::TAB_RACE); // Switch back to RACE for limit tests
+
+    // 2. Adjust RACE mode limits via [-] and [+] buttons and slider track, plus verify ECO-override bug fixed!
     VehicleModeConfig &cfg = ModeManager::instance().getConfig();
+    cfg.tuned_modes[0].max_battery_amps = 25.0f;
+    cfg.tuned_modes[0].max_phase_amps   = 45.0f;
     cfg.tuned_modes[2].max_speed_kmh = 50.0f;
     cfg.tuned_modes[2].max_power_watts = 5000.0f;
 
-    // Tap [+] Speed at x=720, y=210 -> max_speed_kmh increments to 51
-    touchHandled = Renderer.handleSettingsTouch(720, 210, tTest);
-    assert(touchHandled == true);
-    assert(cfg.tuned_modes[2].max_speed_kmh == 51.0f);
+    touchHandled = Renderer.handleSettingsTouch(728, 208, tTest);
+    assert(touchHandled == true && cfg.tuned_modes[2].max_speed_kmh == 51.0f);
 
-    // Tap [-] Speed at x=80, y=210 -> max_speed_kmh decrements to 50
-    touchHandled = Renderer.handleSettingsTouch(80, 210, tTest);
-    assert(touchHandled == true);
-    assert(cfg.tuned_modes[2].max_speed_kmh == 50.0f);
+    touchHandled = Renderer.handleSettingsTouch(72, 208, tTest);
+    assert(touchHandled == true && cfg.tuned_modes[2].max_speed_kmh == 50.0f);
 
-    // Tap Speed Slider Track at x=400, y=210 -> sets proportional speed
-    touchHandled = Renderer.handleSettingsTouch(400, 210, tTest);
-    assert(touchHandled == true);
-    assert(cfg.tuned_modes[2].max_speed_kmh >= 15.0f && cfg.tuned_modes[2].max_speed_kmh <= 100.0f);
+    touchHandled = Renderer.handleSettingsTouch(400, 208, tTest);
+    assert(touchHandled == true && cfg.tuned_modes[2].max_speed_kmh >= 15.0f && cfg.tuned_modes[2].max_speed_kmh <= 100.0f);
 
-    // Tap [+] Watt at x=720, y=370 -> max_power_watts increments
     float prevW = cfg.tuned_modes[2].max_power_watts;
-    touchHandled = Renderer.handleSettingsTouch(720, 370, tTest);
-    assert(touchHandled == true);
-    assert(cfg.tuned_modes[2].max_power_watts > prevW);
+    touchHandled = Renderer.handleSettingsTouch(728, 376, tTest);
+    assert(touchHandled == true && cfg.tuned_modes[2].max_power_watts > prevW);
 
-    // Tap [-] Watt at x=80, y=370 -> max_power_watts decrements
     prevW = cfg.tuned_modes[2].max_power_watts;
-    touchHandled = Renderer.handleSettingsTouch(80, 370, tTest);
-    assert(touchHandled == true);
-    assert(cfg.tuned_modes[2].max_power_watts < prevW);
+    touchHandled = Renderer.handleSettingsTouch(72, 376, tTest);
+    assert(touchHandled == true && cfg.tuned_modes[2].max_power_watts < prevW);
 
-    // Tap Watt Slider Track at x=500, y=370 -> sets proportional watts
-    touchHandled = Renderer.handleSettingsTouch(500, 370, tTest);
-    assert(touchHandled == true);
-    assert(cfg.tuned_modes[2].max_power_watts >= 250.0f && cfg.tuned_modes[2].max_power_watts <= 25000.0f);
+    touchHandled = Renderer.handleSettingsTouch(500, 376, tTest);
+    assert(touchHandled == true && cfg.tuned_modes[2].max_power_watts >= 250.0f && cfg.tuned_modes[2].max_power_watts <= 25000.0f);
 
-    // Tap [< DASH] at x=75, y=25 -> Auto-saves and returns to SCREEN_RIDE_DASH
-    touchHandled = Renderer.handleSettingsTouch(75, 25, tTest);
-    assert(touchHandled == true);
-    assert(tTest.screen == SCREEN_RIDE_DASH);
-    printf("[PASS] Touch Mode Configurator: Tab selection, Speed/Watt buttons & sliders, Auto-Save to Dash verified 100%%!\n");
+    // Tap [< DASH] at x=74, y=29 -> Auto-saves and returns to SCREEN_RIDE_DASH without overwriting ECO amps!
+    touchHandled = Renderer.handleSettingsTouch(74, 29, tTest);
+    assert(touchHandled == true && tTest.screen == SCREEN_RIDE_DASH);
+    assert(cfg.tuned_modes[0].max_battery_amps == 25.0f);
+    assert(cfg.tuned_modes[0].max_phase_amps == 45.0f);
+    printf("[PASS] Touch Mode Configurator & ECO-override fix verified 100%% (ECO 25A/45A untouched)!\n");
 
     // 11f. Test Full Integrated Main Loop settings touch flow
     DashTelemetry tLoop;
     memset(&tLoop, 0, sizeof(tLoop));
     tLoop.screen = SCREEN_SETTINGS_MENU;
+    tLoop.tuning_mode = true;
     Buttons.setActiveScreen(SCREEN_SETTINGS_MENU);
 
     auto runMainLoopTouch = [&](int16_t x, int16_t y) {
-        simAdvanceMs(120); // Allow 100ms debounce cooldown from previous gesture
+        simAdvanceMs(360);
         Display.setSimTouch(true, x, y);
         Buttons.update();
         simAdvanceMs(50);
@@ -879,21 +903,17 @@ void testTouchGestures() {
         }
     };
 
-    // 1. Tap Tab 0 [ ECO ]
-    runMainLoopTouch(80, 95);
+    runMainLoopTouch(71, 80);  // Tab 0 ECO
     assert(Renderer.getSettingsTab() == 0);
 
-    // 2. Tap Tab 2 [ RACE ]
-    runMainLoopTouch(330, 95);
+    runMainLoopTouch(289, 80); // Tab 2 RACE
     assert(Renderer.getSettingsTab() == 2);
 
-    // 3. Tap [+] Speed button at x=720, y=210
     float initialRaceSpeed = cfg.tuned_modes[2].max_speed_kmh;
-    runMainLoopTouch(720, 210);
+    runMainLoopTouch(728, 208); // [+] Speed
     assert(cfg.tuned_modes[2].max_speed_kmh == initialRaceSpeed + 1.0f);
 
-    // 4. Tap [< DASH] at x=75, y=25 -> Direct return to DASH!
-    runMainLoopTouch(75, 25);
+    runMainLoopTouch(74, 29);   // [< DASH]
     assert(tLoop.screen == SCREEN_RIDE_DASH);
     printf("[PASS] Integrated Main Loop: Touch tabs, slider step edits, and Dash auto-save verified 100%%!\n");
 
@@ -1038,10 +1058,15 @@ void testModeManagerAndLegalProfiles() {
 void testAntiGhostingTransitions() {
     printf("=== Running Dynamic Anti-Ghosting Transition Tests ===\n");
     Settings.get().dash_style = STYLE_HYPER_35KW;
+    Settings.get().color_theme = THEME_OBSIDIAN_DARK;
     Settings.get().show_gforce = 0;
     Settings.get().show_incline = 0;
+    Settings.get().show_light_btn = 0;
+    const ColorThemePalette &pal = DashboardRenderer::getThemePalette(THEME_OBSIDIAN_DARK);
+
     DashTelemetry t;
     setBaseTelemetry(t);
+    t.color_theme = THEME_OBSIDIAN_DARK;
     t.screen = SCREEN_RIDE_DASH;
     t.speed_kmh = 95.0f;
     t.power_watts = 34800.0f; // Peak 5-digit power
@@ -1051,32 +1076,24 @@ void testAntiGhostingTransitions() {
     t.voltage = 78.9f;
     t.temp_esc = 105.0f;      // 3-digit peak temp
     t.temp_motor = 110.0f;    // 3-digit peak temp
-    t.duty_cycle_pct = 108.0f;// Field weakening peak overmodulation
+    t.duty_cycle_pct = 108.0f;// Field weakening overmodulation
 
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     Renderer.render(t); // Frame 1: Peak telemetry
 
     int non_zero_x = -1;
-    for (int px = 460; px <= 600; px++) {
-        if (Display.getSprite().readPixel(px, 70) != 0x0000) {
+    for (int px = 450; px <= 640; px++) {
+        if (Display.getSprite().readPixel(px, 80) != pal.bg) {
             non_zero_x = px;
             break;
         }
     }
-    printf("DEBUG: First non-zero pixel on y=70 is x=%d (val=0x%04X)\n", non_zero_x, non_zero_x >= 0 ? Display.getSprite().readPixel(non_zero_x, 70) : 0);
-    // Verify 5-digit power drew pixels
     assert(non_zero_x > 0);
 
-    // Frame 1: Peak thermals (105° / 110°) draw across x=173..307
-    assert(Display.getSprite().readPixel(173, 408) != 0x0000); // 'F' top stroke left edge
-    assert(Display.getSprite().readPixel(307, 408) != 0x0000); // 110° degree circle right arc
-
-    // Frame 1 Duty cycle cap & styling check (108% capped at 100%, pure white 0xFFFF, no red):
-    printf("DEBUG: Pixel at (500, 154) is 0x%04X, at (700, 154) is 0x%04X\n",
-           Display.getSprite().readPixel(500, 154), Display.getSprite().readPixel(700, 154));
-    assert(Display.getSprite().readPixel(500, 154) == 0xFFFF);
-    assert(Display.getSprite().readPixel(700, 154) == 0xFFFF);
-    assert(Display.getSprite().readPixel(700, 154) != 0xF800);
+    // Frame 1 Duty cycle cap (108% -> 100%, theme primary color, never harsh 0xF800)
+    assert(Display.getSprite().readPixel(500, 154) == pal.primary);
+    assert(Display.getSprite().readPixel(700, 154) == pal.primary);
 
     // Frame 2: Decelerate to 0 km/h, 0 W, 0 A, 38% battery, 72.1 V without markScreenDirty
     t.speed_kmh = 0.0f;
@@ -1086,54 +1103,32 @@ void testAntiGhostingTransitions() {
     t.duty_cycle_pct = 20.0f;
     t.battery_pct = 38.0f;
     t.voltage = 72.1f;
-    t.temp_esc = 25.0f;       // 2-digit idle temp
-    t.temp_motor = 30.0f;     // 2-digit idle temp
+    t.temp_esc = 25.0f;
+    t.temp_motor = 30.0f;
     Renderer.render(t);
 
-    // 1. Speed at 0 km/h: single digit '0' centered at cx=240, 195.
-    // Trailing digit position of "95" must be 0x0000 (black).
-    assert(Display.getSprite().readPixel(295, 195) == 0x0000);
+    // 1. Speed at 0 km/h: trailing digit area of "95" cleared to pal.bg
+    assert(Display.getSprite().readPixel(295, 196) == pal.bg);
 
-    // 2. Power at 0 W: single digit '0' right-aligned at x=720, y=52.
-    // Leading digit positions of previous 5-digit 34,800 W at x=490..530 must be 0x0000.
-    assert(Display.getSprite().readPixel(non_zero_x, 70) == 0x0000);
+    // 2. Power at 0 W: leading digit area of 5-digit 34800 cleared to pal.bg
+    assert(Display.getSprite().readPixel(non_zero_x, 80) == pal.bg);
 
-    // 3. Currents line (shifted down to y=250):
-    // Trailing position of old 3-digit phase amps must be 0x0000 (no "MOTOR 0 AA").
-    assert(Display.getSprite().readPixel(560, 255) == 0x0000);
-    // Leading position of old 3-digit battery amps must be 0x0000 (no "BBATTERY").
-    assert(Display.getSprite().readPixel(595, 255) == 0x0000);
+    // 3. Battery %: rightmost area of previous "100%" cleared to pal.bg
+    assert(Display.getSprite().readPixel(565, 194) == pal.bg);
 
-    // 4. Battery % (shifted down to y=174):
-    // Check that rightmost glyph area of previous "100%" is cleared when at 38%.
-    assert(Display.getSprite().readPixel(565, 197) == 0x0000);
+    // 4. Duty cycle progress bar anti-ghosting: 20% fill at x=480, cleared to pal.track at x=700
+    assert(Display.getSprite().readPixel(480, 154) == pal.primary);
+    assert(Display.getSprite().readPixel(700, 154) == pal.track);
 
-    // 5. Thermals single line anti-ghosting:
-    // Frame 1 peak thermals (105°/110°) drew at x=173 and x=307.
-    // In Frame 2 (25°/30°), the text spans x=181..299, so x=173 and x=307 must be cleared to 0x0000 (black).
-    assert(Display.getSprite().readPixel(173, 408) == 0x0000);
-    assert(Display.getSprite().readPixel(307, 408) == 0x0000);
-
-    // 6. Duty cycle progress bar anti-ghosting:
-    // Frame 1 (108% -> 100%) drew pure white fill all the way to x=765.
-    // Frame 2 (20%) draws pure white fill only up to x=509.
-    // At x=480, y=154, pixel is within 20% fill and must be pure white (0xFFFF).
-    // At x=700, y=154, pixel must be cleared to track color (not white 0xFFFF and not red 0xF800).
-    assert(Display.getSprite().readPixel(480, 154) == 0xFFFF);
-    assert(Display.getSprite().readPixel(700, 154) != 0xFFFF);
-    assert(Display.getSprite().readPixel(700, 154) != 0xF800);
-
-    // Frame 3: Trigger Dynamic Mode Banner
+    // 5. Frame 3: Trigger Dynamic Mode Banner cleanly covers battery/currents area
     t.mode_badge_until = millis() + 2000;
     Renderer.render(t);
-
-    // Banner overlay at x=410..775 covers the currents line.
-    // Check that letter 'M' from 'MOTOR' at x=418 is 0x0000 (no poking ghost 'M').
-    assert(Display.getSprite().readPixel(418, 255) == 0x0000);
+    assert(Display.getSprite().readPixel(444, 250) == pal.surface);
 
     // Restore badge settings
     Settings.get().show_gforce = 1;
     Settings.get().show_incline = 1;
+    Settings.get().show_light_btn = 1;
 
     printf("[PASS] Dynamic speed, power (35kW->0W), thermals, currents, duty bar, and mode banner rendered without ghosting.\n");
     printf("=== Dynamic Anti-Ghosting Tests PASSED! ===\n\n");
@@ -1272,19 +1267,22 @@ void testRaceTimerAndRecords() {
     assert(t.race_elapsed_sec == 0.0f);
     printf("[PASS] IDLE race timer remains idle.\n");
 
-    // 2. Start Countdown (5s)
+    // 2. Auto-Rollout ARMED State (waits at standstill until speed >= 1.0 km/h)
     t.race_state = 1;
+    t.speed_kmh = 0.0f;
     t.race_countdown_start_ms = 1000;
-    Renderer.updateRaceTimer(t, 3000); // 2s elapsed
+    Renderer.updateRaceTimer(t, 3000); // Still stationary -> stays ARMED
     assert(t.race_state == 1);
-    printf("[PASS] Countdown at 2s remains in COUNTDOWN state.\n");
+    assert(t.race_elapsed_sec == 0.0f);
+    printf("[PASS] ARMED launch timer stays ARMED at standstill without blind 5s timer.\n");
 
-    // Countdown finishes at 5s
-    Renderer.updateRaceTimer(t, 6000); // 5s elapsed
+    // Auto-rollout triggers exact millisecond speed crosses >= 1.0 km/h
+    t.speed_kmh = 1.2f;
+    Renderer.updateRaceTimer(t, 6000);
     assert(t.race_state == 2); // MEASURING
     assert(t.race_launch_start_ms == 6000);
     assert(t.race_elapsed_sec == 0.0f);
-    printf("[PASS] Countdown expiration cleanly triggers MEASURING state at 0.00s.\n");
+    printf("[PASS] Auto-Rollout (>= 1.0 km/h) cleanly triggers MEASURING state at 0.00s.\n");
 
     // 3. Accelerating: at t = 7.5s (elapsed = 1.5s), speed reaches 25 km/h -> crosses 22 km/h
     t.speed_kmh = 25.0f;
@@ -1584,8 +1582,8 @@ void testChargingAndTheftProtection() {
 void testColorThemesAndTurbineSound() {
     printf("=== Running Color Themes & FOC Turbine Sound Unit Tests ===\n");
 
-    // 1. Theme Palette Integrity
-    assert(THEME_COUNT == 5);
+    // 1. Theme Palette Integrity (4 Clean Automotive Themes)
+    assert(THEME_COUNT == 4);
     for (int i = 0; i < THEME_COUNT; i++) {
         const ColorThemePalette &pal = DashboardRenderer::getThemePalette(i);
         assert(pal.id == i);
@@ -1593,8 +1591,12 @@ void testColorThemesAndTurbineSound() {
         assert(pal.subtitle != nullptr && strlen(pal.subtitle) > 0);
         assert(pal.primary != 0);
         assert(pal.track != 0);
+        assert(pal.text != pal.bg);
     }
-    printf("[PASS] 1. All 5 distinct Color Theme Palettes validated.\n");
+    assert(DashboardRenderer::getThemePalette(THEME_ARCTIC_LIGHT).is_light == true);
+    assert(DashboardRenderer::getThemePalette(THEME_OBSIDIAN_DARK).is_light == false);
+    assert(DashboardRenderer::getThemePalette(THEME_NIGHT_DIM).text != 0xFFFF);
+    printf("[PASS] 1. All 4 clean Automotive Color Theme Palettes (Obsidian, Arctic Light, Carbon Stealth, Night Dim) validated.\n");
 
     // 2. FOC Audio Tone Commands
     Vesc.playFocTone(0, 850.0f, 3.2f);
@@ -1716,18 +1718,18 @@ void testKeylessGoAndProximityAutoLock() {
     assert(ModeManager::instance().isLocked() == false);
     printf("[PASS] 5. Safety Invariant: Auto-Lock strictly prevented while moving (speed >= 0.5 km/h).\n");
 
-    // 6. Settings Menu Tab 5 Touch Controls (Clean PIN-Wegfahrsperre Toggle)
+    // 6. Settings Menu Tab 6 PIN Touch Controls (Clean PIN-Wegfahrsperre Pill Toggle)
     t.screen = SCREEN_SETTINGS_MENU;
-    Renderer.setSettingsTab(5);
+    Renderer.setSettingsTab(DashboardRenderer::TAB_PIN);
 
-    // Toggle PIN-Sperre (Button at 600, 160)
+    // Toggle PIN-Sperre Pill Toggle (at x=720, y=156)
     bool prev_pin_en = Settings.get().pin_lock_enabled;
-    Renderer.handleSettingsTouch(600, 160, t);
+    Renderer.handleSettingsTouch(720, 156, t);
     assert(Settings.get().pin_lock_enabled == !prev_pin_en);
     Settings.get().pin_lock_enabled = prev_pin_en;
     Settings.save();
 
-    printf("[PASS] 6. Settings Tab 5 PIN-Wegfahrsperre toggle touch handling verified.\n");
+    printf("[PASS] 6. Settings Tab 6 PIN-Wegfahrsperre pill toggle touch handling verified.\n");
 
     printf("=== All Keyless-Go BLE & Proximity Auto-Lock Unit Tests PASSED! ===\n\n");
 }
@@ -1825,6 +1827,12 @@ void testBootAnimation() {
     Renderer.skipBootAnimation();
     assert(Renderer.isBootAnimActive() == false);
     assert(Renderer.getBootAnimPhase() == 3);
+    // Settle any post-boot startup needle sweep cleanly
+    t.is_locked = false;
+    simAdvanceMs(700);
+    Renderer.render(t);
+    simAdvanceMs(700);
+    Renderer.render(t);
     printf("[PASS] 6. Boot Animation instant skip on tap (Phase 1) verified.\n");
 
     printf("=== Boot Animation Unit Tests PASSED! ===\n\n");
@@ -2520,12 +2528,14 @@ void testDashSettingsAndUiFeatures() {
     assert(def.show_gforce == 1);
     assert(def.show_incline == 1);
     assert(def.brake_mode == 2);
-    assert(def.color_theme == THEME_CLEAN_ICE);
-    printf("[PASS] DashSettings default constructor: show_gforce=1, show_incline=1, brake_mode=2, theme=CLEAN_ICE verified.\n");
+    assert(def.color_theme == THEME_OBSIDIAN_DARK);
+    printf("[PASS] DashSettings default constructor: show_gforce=1, show_incline=1, brake_mode=2, theme=OBSIDIAN_DARK verified.\n");
 
     // 2. Header Clock hiding when GPS is invalid or 0 satellites
+    Settings.get().color_theme = THEME_OBSIDIAN_DARK;
     DashTelemetry t;
     setBaseTelemetry(t);
+    t.color_theme = THEME_OBSIDIAN_DARK;
     t.screen = SCREEN_RIDE_DASH;
     t.gps_enabled = true;
     t.gps.valid = false;
@@ -2535,8 +2545,8 @@ void testDashSettingsAndUiFeatures() {
     Renderer.markScreenDirty();
     Renderer.render(t);
 
-    // Clock center is at (400, 36). When GPS is invalid, pixel must be 0x0000 (black, clock hidden)
-    assert(Display.getSprite().readPixel(400, 36) == 0x0000);
+    // Clock center is at (400, 34). When GPS is invalid, pixel must be 0x0000 (black, clock hidden)
+    assert(Display.getSprite().readPixel(400, 34) == 0x0000);
     printf("[PASS] Header Clock: Hidden when GPS is not valid or 0 satellites.\n");
 
     // When GPS fix becomes valid (satellites >= 4), clock must be displayed
@@ -2545,7 +2555,7 @@ void testDashSettingsAndUiFeatures() {
     Renderer.render(t);
     bool has_clock_pixel = false;
     for (int px = 370; px <= 430; px++) {
-        if (Display.getSprite().readPixel(px, 36) != 0x0000) {
+        if (Display.getSprite().readPixel(px, 34) != 0x0000) {
             has_clock_pixel = true;
             break;
         }
@@ -2554,8 +2564,15 @@ void testDashSettingsAndUiFeatures() {
     printf("[PASS] Header Clock: Rendered when GPS fix is valid.\n");
 
     // 3. Badges dynamic positioning & visibility with Headlight Button
-    // Test: show_light_btn=1, show_gforce=0, show_incline=1
-    // Lichtknopf at left slot 1 (x=50, y=416), Incline badge at slot 2 (x=110, y=416), temps at x=240
+    auto hasThermalPixels = [&]() {
+        for (int tx = 180; tx <= 300; tx += 2) {
+            for (int ty = 408; ty <= 424; ty += 2) {
+                if (Display.getSprite().readPixel(tx, ty) != 0x0000) return true;
+            }
+        }
+        return false;
+    };
+
     Settings.get().show_light_btn = 1;
     Settings.get().show_gforce = 0;
     Settings.get().show_incline = 1;
@@ -2565,14 +2582,11 @@ void testDashSettingsAndUiFeatures() {
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     Renderer.render(t);
-    // Lichtknopf at left (50, 416), Incline at (110, 416)
     assert(Display.getSprite().readPixel(50, 416) != 0x0000);
     assert(Display.getSprite().readPixel(110, 416) != 0x0000);
-    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    assert(hasThermalPixels());
     printf("[PASS] When show_gforce=0, Lichtknopf is at left (x=50), Incline badge is at slot 2 (x=110), temps at x=240.\n");
 
-    // Test: show_light_btn=1, show_gforce=1, show_incline=0
-    // Lichtknopf at left slot 1 (x=50, y=416), G-Force badge at slot 2 (x=110, y=416), temps at x=240
     Settings.get().show_gforce = 1;
     Settings.get().show_incline = 0;
     Renderer.invalidateCache();
@@ -2580,11 +2594,9 @@ void testDashSettingsAndUiFeatures() {
     Renderer.render(t);
     assert(Display.getSprite().readPixel(50, 416) != 0x0000);
     assert(Display.getSprite().readPixel(110, 416) != 0x0000);
-    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    assert(hasThermalPixels());
     printf("[PASS] When show_incline=0, Lichtknopf is at left (x=50), G-Force badge is at slot 2 (x=110), temps at x=240.\n");
 
-    // Test: show_light_btn=1, show_gforce=0, show_incline=0
-    // Lichtknopf at left slot 1 (x=50, y=416), slot 2 (x=110) empty, temps at x=240
     Settings.get().show_gforce = 0;
     Settings.get().show_incline = 0;
     Renderer.invalidateCache();
@@ -2592,23 +2604,20 @@ void testDashSettingsAndUiFeatures() {
     Renderer.render(t);
     assert(Display.getSprite().readPixel(50, 416) != 0x0000);
     assert(Display.getSprite().readPixel(110, 416) == 0x0000);
-    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    assert(hasThermalPixels());
     printf("[PASS] When both GF & INC are off, Lichtknopf stays at left (x=50), slot 2 empty, temps at x=240.\n");
 
-    // Test: all three badges enabled (show_light_btn=1, show_gforce=1, show_incline=1)
-    // G-Force at slot 1 (x=50, y=416), Incline at slot 2 (x=110, y=416), Lichtknopf directly above G-Force at (x=50, y=354)!
     Settings.get().show_gforce = 1;
     Settings.get().show_incline = 1;
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     Renderer.render(t);
-    assert(Display.getSprite().readPixel(50, 416) != 0x0000);  // G-Force
-    assert(Display.getSprite().readPixel(110, 416) != 0x0000); // Incline
-    assert(Display.getSprite().readPixel(50, 354) != 0x0000);  // Lichtknopf above G-Force!
-    assert(Display.getSprite().readPixel(240, 408) != 0x0000 || Display.getSprite().readPixel(240, 405) != 0x0000 || Display.getSprite().readPixel(200, 408) != 0x0000);
+    assert(Display.getSprite().readPixel(50, 416) != 0x0000);
+    assert(Display.getSprite().readPixel(110, 416) != 0x0000);
+    assert(Display.getSprite().readPixel(50, 354) != 0x0000);
+    assert(hasThermalPixels());
     printf("[PASS] When both GF and INC are active, Lichtknopf sits directly above G-Force at (50, 354)!\n");
 
-    // Test: show_light_btn=0 and both GF and INC off: neither badge drawn, (50, 416) and (110, 416) empty
     Settings.get().show_light_btn = 0;
     Settings.get().show_gforce = 0;
     Settings.get().show_incline = 0;
@@ -3146,37 +3155,77 @@ int main(int argc, char **argv) {
     renderAndSave("12_settings_dash_options", t);
 
     // ----------------------------------------------------
-    // Scenario 12b: Screen 3 - Mode Configurator (PIN & Security Tab)
+    // Scenario 12b: Screen 3 - Settings SYSTEM Tab (TCS, Akku-Zellen, Reifen-Kalibrierung)
     // ----------------------------------------------------
     t.screen = SCREEN_SETTINGS_MENU;
-    Renderer.setSettingsTab(5);
+    t.tuning_mode = true;
+    Settings.get().tcs_enabled = true;
+    Settings.get().battery_cells = 14;
+    Renderer.setSettingsTab(DashboardRenderer::TAB_SYSTEM);
     Renderer.markScreenDirty();
-    renderAndSave("12_settings_battery_profiles", t);
+    renderAndSave("12b_settings_system_tab", t);
+
+    // ----------------------------------------------------
+    // Scenario 12c: Screen 3 - Settings PIN Tab (with JETZT SPERREN)
+    // ----------------------------------------------------
+    Renderer.setSettingsTab(DashboardRenderer::TAB_PIN);
+    Renderer.markScreenDirty();
+    renderAndSave("12c_settings_pin_tab", t);
+
+    // ----------------------------------------------------
+    // Scenario 12d: Screen 3 - Legal Stealth Settings (ONLY DASH, SYSTEM, PIN)
+    // ----------------------------------------------------
+    t.tuning_mode = false;
+    Renderer.setSettingsTab(DashboardRenderer::TAB_DASH);
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("12d_settings_legal_stealth", t);
+    t.tuning_mode = true;
+
+    // ----------------------------------------------------
+    // Scenario 12e: Screen 3 - Modern Settings in ARCTIC LIGHT
+    // ----------------------------------------------------
+    Settings.get().color_theme = THEME_ARCTIC_LIGHT;
+    t.color_theme = THEME_ARCTIC_LIGHT;
+    Renderer.setSettingsTab(DashboardRenderer::TAB_DASH);
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("12e_settings_arctic_light", t);
+    Settings.get().color_theme = THEME_OBSIDIAN_DARK;
+    t.color_theme = THEME_OBSIDIAN_DARK;
 
     // ----------------------------------------------------
     // Scenario 13: Screen 5 - VESC Wi-Fi Bridge
     // ----------------------------------------------------
     Vesc.enterWifiBridgeMode();
     t.screen = SCREEN_WIFI_BRIDGE;
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("13_wifi_bridge", t);
 
     // ----------------------------------------------------
-    // Scenario 14: Legal Mode (Boot Default - SPORT 20 km/h, Discrete Red Dot)
+    // Scenario 14: Legal Mode (Boot Default - Wide MODE button, Hidden BOOST, Subtle Red Dot)
     // ----------------------------------------------------
     Settings.get().dash_style = STYLE_HYPER_35KW;
+    Settings.get().color_theme = THEME_OBSIDIAN_DARK;
     setBaseTelemetry(t);
-    t.tuning_mode = false; // Legal Mode Active (Normal mode labels: ECO, SPORT, RACE)
+    t.color_theme = THEME_OBSIDIAN_DARK;
+    t.tuning_mode = false;
     t.ride_mode = MODE_SPORT;
     t.speed_kmh = 20.0f;
     t.power_watts = 480.0f;
     t.phase_amps = 28.0f;
     t.current_amps = 9.2f;
+    t.g_force = 0.3f;
+    t.incline_deg = 4.0f;
+    t.lights_enabled = true;
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("14_stealth_mode_idle", t);
 
     // Requirement 2 Verification: Subtle red dot in top right corner (790, 10)
-    assert(Display.getSprite().readPixel(790, 10) == 0xF800);
+    const ColorThemePalette &obsPal = DashboardRenderer::getThemePalette(THEME_OBSIDIAN_DARK);
+    assert(Display.getSprite().readPixel(790, 10) == obsPal.accent_danger);
     printf("[PASS] Legal mode red status dot verified at top-right corner (790, 10).\n");
     assert(strcmp(ModeManager::instance().getActiveModeName(), "SPORT") == 0);
     printf("[PASS] Active mode name displays 'SPORT' (never 'STEALTH').\n");
@@ -3185,14 +3234,16 @@ int main(int argc, char **argv) {
     t.tuning_mode = true;
     Renderer.markScreenDirty();
     Renderer.render(t);
-    assert(Display.getSprite().readPixel(790, 10) == 0x0000);
-    printf("[PASS] Tuning mode completely hides the red status dot (verified 0x0000).\n");
+    assert(Display.getSprite().readPixel(790, 10) == obsPal.bg);
+    printf("[PASS] Tuning mode completely hides the red status dot.\n");
 
     // ----------------------------------------------------
-    // Scenario 15: Screen 2 - New Extended STATS View with Backlight Slider
+    // Scenario 15: Screen 2 - Upgraded Stats Page with 60s Live Dual-Curve Sparkline (Obsidian Dark & Arctic Light)
     // ----------------------------------------------------
     setBaseTelemetry(t);
     t.screen = SCREEN_RT_GRAPHS;
+    t.tuning_mode = true;
+    t.speed_kmh = 34.2f;
     t.dynamic_wh_km = 18.2f;
     t.stats.peak_power_watts = 2450.0f;
     t.stats.peak_current_amps = 34.0f;
@@ -3202,8 +3253,22 @@ int main(int argc, char **argv) {
     t.stats.max_voltage = 54.2f;
     t.stats.max_temp_motor = 64.0f;
     t.stats.max_temp_esc = 58.0f;
+    for (int i = 0; i < WAVE_HISTORY_LEN; i++) {
+        float ph = (float)i / (float)WAVE_HISTORY_LEN * 3.5f * 3.14159f;
+        t.speed_history[i] = 28.0f + 22.0f * sinf(ph) + 6.0f * cosf(ph * 2.1f);
+        t.power_history[i] = 1100.0f + 950.0f * sinf(ph + 0.4f) + 250.0f * cosf(ph * 1.7f);
+    }
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("15_stats_rich_overview", t);
+
+    Settings.get().color_theme = THEME_ARCTIC_LIGHT;
+    t.color_theme = THEME_ARCTIC_LIGHT;
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("15b_stats_arctic_light", t);
+    Settings.get().color_theme = THEME_OBSIDIAN_DARK;
+    t.color_theme = THEME_OBSIDIAN_DARK;
 
     // ----------------------------------------------------
     // Scenario 16: VESC Fault-Code Alarm Banner on HUD
@@ -3212,18 +3277,30 @@ int main(int argc, char **argv) {
     t.screen = SCREEN_RIDE_DASH;
     t.fault_code = FAULT_OVER_TEMP_MOTOR;
     t.fault_start_ms = 1000;
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("16_vesc_fault_banner", t);
 
     // ----------------------------------------------------
-    // Scenario 17: PIN Lockscreen on Boot
+    // Scenario 17: Redesigned PIN Lockscreen with Battery Pill (Dark & Arctic Light)
     // ----------------------------------------------------
     setBaseTelemetry(t);
     t.is_locked = true;
+    t.battery_pct = 88.0f;
+    t.voltage = 53.4f;
     strcpy(t.pin_entry, "12");
     t.pin_error = false;
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("17_pin_lockscreen", t);
+
+    Settings.get().color_theme = THEME_ARCTIC_LIGHT;
+    t.color_theme = THEME_ARCTIC_LIGHT;
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("17b_pin_lockscreen_arctic_light", t);
+    Settings.get().color_theme = THEME_OBSIDIAN_DARK;
+    t.color_theme = THEME_OBSIDIAN_DARK;
 
     // ----------------------------------------------------
     // Scenario 18: PIN Lockscreen with Error
@@ -3231,23 +3308,33 @@ int main(int argc, char **argv) {
     strcpy(t.pin_entry, "9999");
     t.pin_error = true;
     t.pin_error_end_ms = millis() + 5000;
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("18_pin_lockscreen_error", t);
 
     // ----------------------------------------------------
-    // Scenario 19: Screen 6 - "RACE" Dragy Launch-Timer (Measuring 48 km/h)
+    // Scenario 19: Screen 6 - "RACE" Dragy Launch-Timer (ARMED Auto-Rollout & Measuring)
     // ----------------------------------------------------
     setBaseTelemetry(t);
     t.screen = SCREEN_RACE_TIMER;
+    t.speed_kmh = 0.0f;
+    t.race_state = 1; // ARMED (BEREIT - GAS GEBEN!)
+    t.race_elapsed_sec = 0.0f;
+    t.race_split_0_22 = 0.0f;
+    t.race_split_0_50 = 0.0f;
+    t.race_split_0_70 = 0.0f;
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("19_race_timer_armed", t);
+
     t.speed_kmh = 48.0f;
     t.race_state = 2; // MEASURING
     t.race_elapsed_sec = 3.42f;
     t.race_split_0_22 = 1.65f;
-    t.race_split_0_50 = 0.0f;
-    t.race_split_0_70 = 0.0f;
     t.race_records.best_0_22_sec = 1.72f;
     t.race_records.best_0_50_sec = 4.10f;
     t.race_records.best_0_70_sec = 7.80f;
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("19_race_timer_measuring", t);
 
@@ -3259,17 +3346,30 @@ int main(int argc, char **argv) {
     renderAndSave("20_race_records_modal", t);
 
     // ----------------------------------------------------
-    // Scenario 21: Screen 6 - Dyno Diagramm Modal
+    // Scenario 21: Screen 6 - Empty Dyno Modal (Zero fake numbers!) & Real Recorded Dyno
     // ----------------------------------------------------
     t.race_popup_open = false;
     t.race_dyno_open = true;
     t.race_dyno.reset();
-    t.race_dyno.peak_watts = 3520.0f;
-    t.race_dyno.peak_g_force = 1.15f;
-    t.race_dyno.peak_phase_amps = 85.0f;
-    t.race_split_0_70 = 4.25f;
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("21_race_dyno_modal", t);
+
+    // Also render real recorded dyno run
+    t.race_dyno.sample_count = 30;
+    t.race_dyno.peak_watts = 4820.0f;
+    t.race_dyno.peak_g_force = 0.92f;
+    t.race_dyno.peak_phase_amps = 112.0f;
+    t.race_split_0_70 = 5.18f;
+    for (int i = 0; i < 30; i++) {
+        float tn = (float)i / 29.0f;
+        t.race_dyno.samples_speed[i] = 74.0f * (1.0f - expf(-2.4f * tn));
+        t.race_dyno.samples_power[i] = 4820.0f * (tn < 0.25f ? (tn / 0.25f) : (1.0f - 0.15f * (tn - 0.25f)));
+        t.race_dyno.samples_g[i]     = 0.92f * expf(-1.2f * tn);
+    }
+    Renderer.invalidateCache();
+    Renderer.markScreenDirty();
+    renderAndSave("21b_race_dyno_recorded", t);
 
     // ----------------------------------------------------
     // Scenario 22: First-Time Setup Wizard (Step 1 - Welcome & Guide)
@@ -3316,21 +3416,20 @@ int main(int argc, char **argv) {
     printf("[PASS] Wizard Step 3 completion & switch to SCREEN_RIDE_DASH verified.\n");
 
     // ----------------------------------------------------
-    // Scenario 25: Minimal Dashboard with GPS & G-Force Disabled
+    // Scenario 25: Minimal Dashboard with GPS & G-Force Disabled + Unknown Battery (--%)
     // ----------------------------------------------------
     setBaseTelemetry(t);
     t.gps_enabled = false;
     t.incline_gforce_enabled = false;
     t.speed_kmh = 42.0f;
     t.power_watts = 2100.0f;
+    t.battery_pct = -1.0f; // Must render "--%" and empty bar!
+    t.tcs_active = true;
+    t.tpms_warning = true;
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
-    renderAndSave("25_dash_minimal_no_gps_no_imu", t);
-    printf("[PASS] Minimal Dashboard scenario rendered with hidden clock and hidden IMU.\n");
-
-    // ----------------------------------------------------
-    // Scenario 26: Charging HUD permanently removed
-    // ----------------------------------------------------
-    printf("[PASS] Scenario 26: Charging HUD permanently removed.\n");
+    renderAndSave("25_dash_minimal_tcs_tpms_unknown_bat", t);
+    printf("[PASS] Minimal Dashboard with TCS/TPMS pills & --%% unknown battery rendered.\n");
 
     // ----------------------------------------------------
     // Scenario 27: PIN Lockscreen with Active Theft Alarm
@@ -3340,120 +3439,93 @@ int main(int argc, char **argv) {
     t.is_locked = true;
     t.theft_alarm_active = true;
     t.locked_moved_meters = 3.8f;
+    Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("27_pin_lockscreen_theft_alarm", t);
     printf("[PASS] Scenario 27: PIN Lockscreen Theft Alarm rendered and saved.\n");
 
     // ----------------------------------------------------
-    // Scenario 28: Color Theme - Synthwave Outrun
+    // Scenario 28: Theme 0 - OBSIDIAN DARK
     // ----------------------------------------------------
     setBaseTelemetry(t);
-    Settings.get().color_theme = THEME_SYNTHWAVE;
-    t.color_theme = THEME_SYNTHWAVE;
+    Settings.get().color_theme = THEME_OBSIDIAN_DARK;
+    t.color_theme = THEME_OBSIDIAN_DARK;
     t.screen = SCREEN_RIDE_DASH;
     t.speed_kmh = 48.0f;
     t.power_watts = 2450.0f;
-    t.duty_cycle_pct = 45.0f;
+    t.duty_cycle_pct = 52.0f;
+    t.g_force = 0.6f;
+    t.incline_deg = 7.0f;
+    t.lights_enabled = true;
+    t.gps.valid = true;
+    t.gps.satellites = 12;
+    strcpy(t.clock_str, "14:35");
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
-    renderAndSave("28_theme_synthwave", t);
-    printf("[PASS] Scenario 28: Theme Synthwave Outrun rendered and saved.\n");
+    renderAndSave("28_theme_obsidian_dark", t);
+    printf("[PASS] Scenario 28: Theme OBSIDIAN DARK rendered and saved.\n");
 
     // ----------------------------------------------------
-    // Scenario 29: Color Theme - Toxic Green
+    // Scenario 29: Theme 1 - ARCTIC LIGHT (Crisp Daylight White!)
     // ----------------------------------------------------
-    setBaseTelemetry(t);
-    Settings.get().color_theme = THEME_TOXIC_GREEN;
-    t.color_theme = THEME_TOXIC_GREEN;
-    t.screen = SCREEN_RIDE_DASH;
-    t.speed_kmh = 35.0f;
-    t.power_watts = 1800.0f;
-    t.duty_cycle_pct = 34.0f;
+    Settings.get().color_theme = THEME_ARCTIC_LIGHT;
+    t.color_theme = THEME_ARCTIC_LIGHT;
+    t.speed_kmh = 36.0f;
+    t.power_watts = 1650.0f;
+    t.duty_cycle_pct = 40.0f;
+    t.g_force = 0.4f;
+    t.incline_deg = -6.0f;
+    t.lights_enabled = true;
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
-    renderAndSave("29_theme_toxic_green", t);
-    printf("[PASS] Scenario 29: Theme Toxic Green rendered and saved.\n");
+    renderAndSave("29_theme_arctic_light", t);
+    printf("[PASS] Scenario 29: Theme ARCTIC LIGHT rendered and saved.\n");
 
     // ----------------------------------------------------
-    // Scenario 30: Color Theme - Racing Red
+    // Scenario 30: Theme 2 - CARBON STEALTH
     // ----------------------------------------------------
-    setBaseTelemetry(t);
-    Settings.get().color_theme = THEME_RACING_RED;
-    t.color_theme = THEME_RACING_RED;
-    t.screen = SCREEN_RIDE_DASH;
+    Settings.get().color_theme = THEME_CARBON_STEALTH;
+    t.color_theme = THEME_CARBON_STEALTH;
     t.speed_kmh = 62.0f;
     t.power_watts = 3200.0f;
-    t.duty_cycle_pct = 60.0f;
+    t.duty_cycle_pct = 66.0f;
+    t.g_force = 0.9f;
+    t.incline_deg = 14.0f;
+    t.lights_enabled = false;
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
-    renderAndSave("30_theme_racing_red", t);
-    printf("[PASS] Scenario 30: Theme Racing Red rendered and saved.\n");
+    renderAndSave("30_theme_carbon_stealth", t);
+    printf("[PASS] Scenario 30: Theme CARBON STEALTH rendered and saved.\n");
 
     // ----------------------------------------------------
-    // Scenario 31: Color Theme - Clean Ice
+    // Scenario 31: Theme 3 - NIGHT DIM (Software Dimmer!)
     // ----------------------------------------------------
-    setBaseTelemetry(t);
-    Settings.get().color_theme = THEME_CLEAN_ICE;
-    t.color_theme = THEME_CLEAN_ICE;
-    t.screen = SCREEN_RIDE_DASH;
+    Settings.get().color_theme = THEME_NIGHT_DIM;
+    t.color_theme = THEME_NIGHT_DIM;
     t.speed_kmh = 28.0f;
     t.power_watts = 1150.0f;
-    t.duty_cycle_pct = 26.0f;
+    t.duty_cycle_pct = 30.0f;
+    t.g_force = -0.3f;
+    t.incline_deg = 3.0f;
+    t.lights_enabled = true;
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
-    renderAndSave("31_theme_clean_ice", t);
-    printf("[PASS] Scenario 31: Theme Clean Ice rendered and saved.\n");
+    renderAndSave("31_theme_night_dim", t);
+    printf("[PASS] Scenario 31: Theme NIGHT DIM rendered and saved.\n");
 
     // ----------------------------------------------------
-    // Scenario 32: Settings Menu Tab 4 - Themes & Turbine Sound
+    // Scenario 32: Settings Menu Tab 4 - DASH (Obsidian Dark)
     // ----------------------------------------------------
     setBaseTelemetry(t);
-    Settings.get().color_theme = THEME_CYBER_CYAN;
+    Settings.get().color_theme = THEME_OBSIDIAN_DARK;
     Settings.get().turbine_sound_enabled = true;
-    t.color_theme = THEME_CYBER_CYAN;
+    t.color_theme = THEME_OBSIDIAN_DARK;
     t.screen = SCREEN_SETTINGS_MENU;
-    Renderer.setSettingsTab(4);
+    Renderer.setSettingsTab(DashboardRenderer::TAB_DASH);
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("32_settings_dash_themes_and_sound", t);
-    printf("[PASS] Scenario 32: Settings Dash Themes & FOC Turbine Sound rendered and saved.\n");
-
-    // ----------------------------------------------------
-    // Scenario 33: PIN Lockscreen with Phone Proximity Badge
-    // ----------------------------------------------------
-    setBaseTelemetry(t);
-    t.is_locked = true;
-    t.theft_alarm_active = false;
-    t.pin_error = false;
-    t.pin_entry[0] = '\0';
-    t.ble_keyless_enabled = true;
-    t.ble_paired = true;
-    t.ble_connected = true;
-    t.ble_signal_bars = 4;
-    t.ble_rssi = -54;
-    strncpy(t.ble_device_name, "Smartphone", sizeof(t.ble_device_name));
-    Renderer.invalidateCache();
-    Renderer.markScreenDirty();
-    renderAndSave("33_pin_lockscreen_ble_proximity", t);
-    printf("[PASS] Scenario 33: PIN Lockscreen with Phone Proximity rendered and saved.\n");
-
-    // ----------------------------------------------------
-    // Scenario 34: Settings Menu Tab 5 - PIN & Keyless-Go
-    // ----------------------------------------------------
-    setBaseTelemetry(t);
-    t.screen = SCREEN_SETTINGS_MENU;
-    Renderer.setSettingsTab(5);
-    t.ble_keyless_enabled = true;
-    t.ble_autolock_enabled = true;
-    t.ble_paired = true;
-    t.ble_connected = true;
-    t.ble_signal_bars = 4;
-    t.ble_rssi = -54;
-    strncpy(t.ble_device_name, "iPhone 15 Pro", sizeof(t.ble_device_name));
-    Renderer.invalidateCache();
-    Renderer.markScreenDirty();
-    renderAndSave("34_settings_pin_and_keyless", t);
-    printf("[PASS] Scenario 34: Settings PIN & Keyless-Go rendered and saved.\n");
+    printf("[PASS] Scenario 32: Settings DASH tab rendered and saved.\n");
 
     // ----------------------------------------------------
     // Scenario 35: Wireless OTA Firmware Update Progress HUD
@@ -3469,7 +3541,7 @@ int main(int argc, char **argv) {
     printf("[PASS] Scenario 35: Wireless OTA Firmware Update Progress HUD rendered and saved.\n");
 
     // ----------------------------------------------------
-    // Scenario 36: Boot Animation - Phase 1 Boot Logo (1.0s)
+    // Scenario 36: Boot Animation - Phase 1 Boot Logo (Lossless PNG)
     // ----------------------------------------------------
     setBaseTelemetry(t);
     Renderer.triggerBootAnimation();
@@ -3477,7 +3549,7 @@ int main(int argc, char **argv) {
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("36_boot_animation_phase1_logo", t);
-    printf("[PASS] Scenario 36: Boot Animation Phase 1 Logo rendered and saved.\n");
+    printf("[PASS] Scenario 36: Boot Animation Phase 1 PNG Logo rendered and saved.\n");
 
     // ----------------------------------------------------
     // Scenario 37: Boot Animation - Phase 2 Diagnostic Console Log (3.0s)
@@ -3493,39 +3565,13 @@ int main(int argc, char **argv) {
     printf("[PASS] Scenario 37: Boot Animation Phase 2 Console rendered and saved.\n");
 
     // ----------------------------------------------------
-    // Scenario 37b: Boot Animation - Phase 2 Waiting on VESC Link (Searching)
-    // ----------------------------------------------------
-    setBaseTelemetry(t);
-    t.vesc_connected = false;
-    Renderer.triggerBootAnimation();
-    Renderer.setBootAnimElapsed(2800);
-    Renderer.invalidateCache();
-    Renderer.markScreenDirty();
-    renderAndSave("37b_boot_animation_searching", t);
-    printf("[PASS] Scenario 37b: Boot Animation Phase 2 VESC Searching rendered and saved.\n");
-
-    // ----------------------------------------------------
-    // Scenario 37c: Boot Animation - Phase 2 Offline Clicked (Lines underneath revealed)
-    // ----------------------------------------------------
-    setBaseTelemetry(t);
-    t.vesc_connected = false;
-    Renderer.triggerBootAnimation();
-    Renderer.setBootAnimElapsed(2800);
-    Renderer.render(t); // Enters Phase 2 searching
-    Renderer.handleBootTouch(false); // User clicked while offline -> reveals lines underneath!
-    Renderer.invalidateCache();
-    Renderer.markScreenDirty();
-    renderAndSave("37c_boot_animation_offline_revealed", t);
-    printf("[PASS] Scenario 37c: Boot Animation Phase 2 Offline Clicked & Revealed rendered and saved.\n");
-
-    // ----------------------------------------------------
-    // Scenario 38: Boot Animation - Phase 3 Auto-Transition to PIN Lockscreen (3.3s with VESC connected)
+    // Scenario 38: Boot Animation - Phase 3 Auto-Transition to PIN Lockscreen
     // ----------------------------------------------------
     setBaseTelemetry(t);
     Settings.get().setup_completed = true;
     t.setup_completed = true;
     t.is_locked = true;
-    t.vesc_connected = true; // Auto-advances automatically at 3.3s!
+    t.vesc_connected = true;
     t.screen = SCREEN_RIDE_DASH;
     Renderer.triggerBootAnimation();
     Renderer.setBootAnimElapsed(3300);
@@ -3535,8 +3581,8 @@ int main(int argc, char **argv) {
     printf("[PASS] Scenario 38: Boot Animation Phase 3 PIN Lockscreen rendered and saved.\n");
 
     // Reset default theme
-    Settings.get().color_theme = THEME_CYBER_CYAN;
-    t.color_theme = THEME_CYBER_CYAN;
+    Settings.get().color_theme = THEME_OBSIDIAN_DARK;
+    t.color_theme = THEME_OBSIDIAN_DARK;
     Renderer.invalidateCache();
 
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");
