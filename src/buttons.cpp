@@ -30,10 +30,12 @@ ButtonHandler::ButtonHandler()
       _touch_curr_y(0),
       _touch_start_ms(0),
       _last_touch_release_ms(0),
+      _touch_screen_switch_ms(0),
       _touch_long_fired(false),
       _has_tap(false),
       _last_tap_x(0),
       _last_tap_y(0),
+      _is_locked(false),
       _tuning_mode(false),
       _speed_touch_started(false),
       _speed_touch_held(false),
@@ -141,6 +143,15 @@ bool ButtonHandler::isSpeedNumberTouch(int16_t x, int16_t y) const {
 }
 
 void ButtonHandler::processTouch(uint32_t now) {
+    // 0. Screen Transition Debounce: Discard any residual touches for 350ms right after a screen switch
+    // Prevents tap on buttons like [ FERTIG ] / [ < DASH ] from bleeding into whatever is under it on the new screen
+    if ((now - _touch_screen_switch_ms) < 350) {
+        _touch_active = false;
+        _has_tap = false;
+        _pending_action = NAV_NONE;
+        return;
+    }
+
     int16_t tx = 0, ty = 0;
     bool touching = Display.getTouch(&tx, &ty);
 
@@ -152,8 +163,8 @@ void ButtonHandler::processTouch(uint32_t now) {
         if (ty >= LCD_HEIGHT) ty = LCD_HEIGHT - 1;
 
         if (!_touch_active) {
-            // Check debounce cooldown from previous release (15ms when locked or in wizard for fast, zero-drop keypad typing)
-            uint32_t cooldown = (ModeManager::instance().isLocked() || _active_screen == SCREEN_SETUP_WIZARD) ? 15 : TOUCH_COOLDOWN_MS;
+            // Check debounce cooldown from previous release (10ms when locked or in wizard for fast, zero-drop keypad typing)
+            uint32_t cooldown = (_is_locked || ModeManager::instance().isLocked() || _active_screen == SCREEN_SETUP_WIZARD) ? 10 : TOUCH_COOLDOWN_MS;
             if ((now - _last_touch_release_ms) < cooldown) {
                 return;
             }
@@ -192,14 +203,14 @@ void ButtonHandler::processTouch(uint32_t now) {
             }
 
             // 2. Emergency PIN Reset: 5 seconds continuous hold while locked
-            if (ModeManager::instance().isLocked() && !_touch_long_fired && (now - _touch_start_ms >= 5000)) {
+            if ((_is_locked || ModeManager::instance().isLocked()) && !_touch_long_fired && (now - _touch_start_ms >= 5000)) {
                 _touch_long_fired = true;
                 _pending_action = NAV_PIN_EMERGENCY_RESET;
                 return;
             }
 
             // 3. Generic Long Press check (MUST NOT fire if touch started on speed number or while locked)
-            if (!ModeManager::instance().isLocked() && !_speed_touch_started && !_touch_long_fired && (now - _touch_start_ms >= TOUCH_LONG_MS)) {
+            if (!_is_locked && !ModeManager::instance().isLocked() && !_speed_touch_started && !_touch_long_fired && (now - _touch_start_ms >= TOUCH_LONG_MS)) {
                 int16_t dx = tx - _touch_start_x;
                 int16_t dy = ty - _touch_start_y;
                 if (abs(dx) < 35 && abs(dy) < 35) {
@@ -242,8 +253,8 @@ void ButtonHandler::processTouch(uint32_t now) {
             uint32_t touch_dur = now - _touch_start_ms;
 
             // If system is locked by PIN or in setup wizard, directly register tap from touch_start_x/y (100% reliable keypad taps)
-            if (ModeManager::instance().isLocked() || _active_screen == SCREEN_SETUP_WIZARD) {
-                if (!_touch_long_fired && touch_dur >= 8) {
+            if (_is_locked || ModeManager::instance().isLocked() || _active_screen == SCREEN_SETUP_WIZARD) {
+                if (!_touch_long_fired && touch_dur >= 5) {
                     _has_tap = true;
                     _last_tap_x = _touch_start_x;
                     _last_tap_y = _touch_start_y;
@@ -298,6 +309,8 @@ void ButtonHandler::processTouch(uint32_t now) {
                                 _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BOTH_PRESSED;
                             }
                         }
+                    } else if (_touch_start_y >= 350) {
+                        // Bottom action bar on Ride Dash (BOOST, MODE, LIGHT) - touches here must NEVER trigger screen swipes!
                     } else if (dx > 0) {
                         // Swipe Right -> Previous Screen / Value Up
                         _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BTN1_SHORT;
@@ -430,10 +443,8 @@ void ButtonHandler::processTouch(uint32_t now) {
                                 _pending_action = NAV_MODE_CYCLE;
                             }
                         }
-                        // 4. Top Right Badge -> Open Settings Menu
-                        else if (_last_tap_y < 65 && _last_tap_x > 620) {
-                            _pending_action = NAV_BTN1_LONG;
-                        }
+                        // Note: Opening Settings on Ride Dash requires a 500ms long-press on the top-right badge
+                        // (prevents [ FERTIG ] exit taps from bleeding back into Settings)
                     }
                 }
             }

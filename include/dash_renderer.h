@@ -338,6 +338,7 @@ private:
     bool     _last_theft_alarm;
     bool     _last_ble_conn;
     uint8_t  _last_ble_bars;
+    int8_t   _last_pin_active_key;
 
     // PIN Change Modal State (in Settings)
     bool     _pin_modal_open;

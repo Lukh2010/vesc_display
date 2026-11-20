@@ -407,15 +407,12 @@ void loop() {
                         Serial.println("[MODE] LEGALER POLIZEI-MODUS AKTIVIERT (20 km/h gedrosselt)!");
                     } else if (s_cmd_line.equalsIgnoreCase("mode eco")) {
                         ModeManager::instance().setRideMode(MODE_ECO);
-                        Renderer.markScreenDirty();
                         Serial.println("[MODE] Ride-Mode -> ECO");
                     } else if (s_cmd_line.equalsIgnoreCase("mode sport")) {
                         ModeManager::instance().setRideMode(MODE_SPORT);
-                        Renderer.markScreenDirty();
                         Serial.println("[MODE] Ride-Mode -> SPORT");
                     } else if (s_cmd_line.equalsIgnoreCase("mode race")) {
                         ModeManager::instance().setRideMode(MODE_RACE);
-                        Renderer.markScreenDirty();
                         Serial.println("[MODE] Ride-Mode -> RACE");
                     } else if (s_cmd_line.equalsIgnoreCase("vollgas") || s_cmd_line.equalsIgnoreCase("max")) {
                         if (telemetry.is_locked) {
@@ -626,6 +623,7 @@ void loop() {
     // BleKeylessManager::instance().update(telemetry, now);
 
     // 1. Process Touch & Button Navigation Inputs
+    Buttons.setLocked(telemetry.is_locked);
     Buttons.setActiveScreen(telemetry.screen);
     Buttons.setRacePopupOpen(telemetry.race_popup_open);
     Buttons.setRaceDynoOpen(telemetry.race_dyno_open);
@@ -666,18 +664,18 @@ void loop() {
 
         int16_t tx = -1, ty = -1;
         if (!telemetry.pin_error && Buttons.getLastTap(&tx, &ty)) {
-            // Continuous column mapping without dead zones between buttons
+            // Continuous column mapping without dead zones between buttons (x: 100..700)
             int c = -1;
-            if (tx >= 150 && tx < 330) c = 0;
+            if (tx >= 100 && tx < 330) c = 0;
             else if (tx >= 330 && tx < 470) c = 1;
-            else if (tx >= 470 && tx <= 650) c = 2;
+            else if (tx >= 470 && tx <= 700) c = 2;
 
-            // Continuous row mapping without dead zones between rows
+            // Continuous row mapping without dead zones between rows (y: 120..460)
             int r = -1;
-            if (ty >= 140 && ty < 227) r = 0;
+            if (ty >= 120 && ty < 227) r = 0;
             else if (ty >= 227 && ty < 297) r = 1;
             else if (ty >= 297 && ty < 367) r = 2;
-            else if (ty >= 367 && ty <= 445) r = 3;
+            else if (ty >= 367 && ty <= 460) r = 3;
 
             if (r >= 0 && c >= 0) {
                 static const char KEY_CHARS[4][3] = {
@@ -1184,13 +1182,11 @@ void loop() {
 
                 case NAV_HAZARD_TOGGLE:
                     telemetry.hazard_active = !telemetry.hazard_active;
-                    Renderer.markScreenDirty();
                     Serial.printf("[NAV] Toggled Hazard Flashers: %s\n", telemetry.hazard_active ? "ACTIVE" : "OFF");
                     break;
 
                 case NAV_LIGHT_TOGGLE:
                     telemetry.lights_enabled = !telemetry.lights_enabled;
-                    Renderer.markScreenDirty();
 #if defined(PIN_HEADLIGHT_MOSFET) && (PIN_HEADLIGHT_MOSFET >= 0)
                     digitalWrite(PIN_HEADLIGHT_MOSFET, telemetry.lights_enabled ? HIGH : LOW);
 #endif
