@@ -123,11 +123,11 @@ private:
     // Common UI Helpers
     void drawCard(int x, int y, int w, int h, uint16_t bg, uint16_t border);
     void drawValWithUnit(int x, int y, int numPadW, int unitPadW, const char *numStr, const char *unitStr, uint16_t numCol, uint16_t unitCol, uint16_t bgCol = 0x0821);
-    void drawThrottleBar(int x, int y, int w, int h, float pct);
 
     // Screen State
     DashboardScreen _active_screen;
     DashboardStyle  _active_style;
+    uint8_t         _active_theme;
     bool            _screen_dirty;
     bool            _mode_banner_active;
     int8_t          _mode_banner_drawn_mode;
@@ -243,12 +243,12 @@ private:
             tuning_mode = false;
             boost_active = false;
             hazard_active = false;
-            lights_enabled = false;
+            lights_enabled = -1;
             light_mode = 255;
             light_hue = 255;
             light_brightness = 255;
         }
-        bool lights_enabled;
+        int8_t lights_enabled;
     } _cache;
 
     // Analog Needle State

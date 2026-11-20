@@ -219,6 +219,9 @@ void ModeManager::resetDefaults() {
 void ModeManager::setTuningMode(bool enable) {
     if (_tuning_mode != enable) {
         _tuning_mode = enable;
+        if (!enable) {
+            _boost_active = false; // Invariant: Police mode strictly cancels Hyper Boost
+        }
         _limits_dirty = true;
         Serial.printf("[MODE_MGR] Tuning mode switched to: %s\n", enable ? "UNLOCKED" : "LOCKED_LEGAL");
         applyLimitsToVesc();
@@ -274,36 +277,23 @@ ModeLimits ModeManager::getActiveLimits() const {
 
     ModeLimits lim;
     if (!_tuning_mode) {
-        // Legal street limits (ECO 15, SPORT 20, RACE 22)
+        // Legal street limits (ECO 15, SPORT 20, RACE 22) - Hyper Boost strictly forbidden in legal mode
         lim = _config.legal_modes[idx];
     } else {
         // Tuning mode unlocked limits (ECO, SPORT, RACE)
         lim = _config.tuned_modes[idx];
-    }
 
-    if (_boost_active) {
-        // Boost requested by user: 70A battery current (statt 60A standard), 140A phase
-        lim.max_battery_amps = 70.0f;
-        if (lim.max_phase_amps < 140.0f) {
-            lim.max_phase_amps = 140.0f;
-        }
-        if (lim.max_power_watts < 4000.0f) {
-            lim.max_power_watts = 4000.0f;
-        }
-        if (_ride_mode == MODE_RACE) {
-            lim.max_speed_kmh = 100.0f; // Speed komplett offen (VESC ERPM 100.000)
-        }
-    } else if (_tuning_mode) {
-        // Normal tuned mode: 60A battery current
-        lim.max_battery_amps = 60.0f;
-        if (_ride_mode == MODE_RACE) {
-            lim.max_speed_kmh = 100.0f; // Speed komplett offen (VESC ERPM 100.000)
+        if (_boost_active) {
+            // Boost requested by user: 70A battery current (statt 60A standard), 140A phase
+            lim.max_battery_amps = 70.0f;
             if (lim.max_phase_amps < 140.0f) {
                 lim.max_phase_amps = 140.0f;
             }
-        } else {
-            if (lim.max_phase_amps < 120.0f) {
-                lim.max_phase_amps = 120.0f;
+            if (lim.max_power_watts < 4000.0f) {
+                lim.max_power_watts = 4000.0f;
+            }
+            if (_ride_mode == MODE_RACE) {
+                lim.max_speed_kmh = 100.0f; // Speed komplett offen (VESC ERPM 100.000)
             }
         }
     }

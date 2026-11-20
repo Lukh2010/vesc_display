@@ -241,8 +241,8 @@ void ButtonHandler::processTouch(uint32_t now) {
             _last_touch_release_ms = now;
             uint32_t touch_dur = now - _touch_start_ms;
 
-            // If system is locked by PIN, directly register tap from touch_start_x/y (100% reliable keypad taps)
-            if (ModeManager::instance().isLocked()) {
+            // If system is locked by PIN or in setup wizard, directly register tap from touch_start_x/y (100% reliable keypad taps)
+            if (ModeManager::instance().isLocked() || _active_screen == SCREEN_SETUP_WIZARD) {
                 if (!_touch_long_fired && touch_dur >= 8) {
                     _has_tap = true;
                     _last_tap_x = _touch_start_x;
@@ -287,12 +287,16 @@ void ButtonHandler::processTouch(uint32_t now) {
                     if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER || _active_screen == SCREEN_SETUP_WIZARD) {
                         // In STATS / RACE / WIZARD screen: do NOT switch screen on swipe! Only buttons exit.
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
-                        if (dx > 0) {
-                            // Swipe Right -> Back to Root Menu or Exit to Dash
-                            _pending_action = NAV_MENU_BACK;
-                        } else {
-                            // Swipe Left -> Select / Enter
-                            _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BOTH_PRESSED;
+                        // Sliders and settings elements occupy y >= 120. Ignore swipe if touch originated in content zone.
+                        bool in_content_area = (_touch_start_y >= 120);
+                        if (!in_content_area) {
+                            if (dx > 0) {
+                                // Swipe Right -> Back to Root Menu or Exit to Dash
+                                _pending_action = NAV_MENU_BACK;
+                            } else {
+                                // Swipe Left -> Select / Enter
+                                _pending_action = _in_edit_mode ? NAV_EDIT_INC : NAV_BOTH_PRESSED;
+                            }
                         }
                     } else if (dx > 0) {
                         // Swipe Right -> Previous Screen / Value Up

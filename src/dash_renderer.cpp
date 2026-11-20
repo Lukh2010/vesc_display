@@ -169,6 +169,7 @@ DashboardRenderer::DashboardRenderer()
       _canvas(nullptr),
       _active_screen(SCREEN_RIDE_DASH),
       _active_style(STYLE_HYPER_35KW),
+      _active_theme(255),
       _screen_dirty(true),
       _mode_banner_active(false),
       _mode_banner_drawn_mode(-1),
@@ -544,7 +545,11 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         renderPinLockScreen(telemetry);
         return;
     } else {
-        _pin_screen_drawn = false;
+        if (_pin_screen_drawn) {
+            _pin_screen_drawn = false;
+            invalidateCache();
+            markScreenDirty();
+        }
     }
 
     // 1. Startup Speedometer Sweep Animation (0 -> 100 km/h -> 0)
@@ -583,7 +588,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
     if (telemetry.screen != _active_screen) {
         _active_screen = telemetry.screen;
         _screen_dirty = true;
-        _cache.invalidate();
+        invalidateCache();
         _last_needle.valid = false;
         _wifi_bridge_inited = false;
         _wizard_inited = false;
@@ -597,9 +602,17 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         if (st != _active_style) {
             _active_style = st;
             _screen_dirty = true;
-            _cache.invalidate();
+            invalidateCache();
             _last_needle.valid = false;
         }
+    }
+
+    // 3b. Detect Theme Switch
+    uint8_t current_theme = Settings.get().color_theme;
+    if (current_theme != _active_theme) {
+        _active_theme = current_theme;
+        _screen_dirty = true;
+        invalidateCache();
     }
 
     // 4. Dispatch Screen Rendering
@@ -614,10 +627,12 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             break;
 
         case SCREEN_LIGHTS:
-            // Deprecated screen: redirect directly to main Ride Dash
-            _active_screen = SCREEN_RIDE_DASH;
-            _screen_dirty = true;
-            initRideDashboard(telemetry);
+            // Deprecated screen: fallback clean render of main Ride Dash without overwriting _active_screen
+            if (_screen_dirty || !_hyper_inited) {
+                _canvas->fillScreen(COLOR_BG);
+                initRideDashboard(telemetry);
+                _screen_dirty = false;
+            }
             renderRideDashboard(telemetry);
             break;
 
@@ -1788,11 +1803,11 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _canvas->fillRect(36, 86, 170, 56, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        char distBuf[16]; snprintf(distBuf, sizeof(distBuf), "%.1f km", telemetry.trip_km);
+        char distBuf[24]; snprintf(distBuf, sizeof(distBuf), "%.1f km", telemetry.trip_km);
         _canvas->drawString(distBuf, 36, 86);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        char odoBuf[16]; snprintf(odoBuf, sizeof(odoBuf), "ODO: %.1f km", telemetry.odo_km);
+        char odoBuf[24]; snprintf(odoBuf, sizeof(odoBuf), "ODO: %.1f km", telemetry.odo_km);
         _canvas->drawString(odoBuf, 36, 122);
     }
 
@@ -1805,7 +1820,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _canvas->fillRect(225, 86, 170, 56, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        char timeBuf[16];
+        char timeBuf[24];
         if (sec >= 3600) {
             snprintf(timeBuf, sizeof(timeBuf), "%u:%02u:%02u", (unsigned int)(sec / 3600), (unsigned int)((sec % 3600) / 60), (unsigned int)(sec % 60));
         } else {
@@ -1814,7 +1829,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _canvas->drawString(timeBuf, 225, 86);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        char avgSpd[16]; snprintf(avgSpd, sizeof(avgSpd), "Avg: %.1f km/h", disp_avg_spd);
+        char avgSpd[24]; snprintf(avgSpd, sizeof(avgSpd), "Avg: %.1f km/h", disp_avg_spd);
         _canvas->drawString(avgSpd, 225, 122);
     }
 
@@ -1827,11 +1842,11 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _canvas->fillRect(415, 86, 170, 56, COLOR_SURFACE);
         _canvas->setFont(&fonts::Font4);
         _canvas->setTextColor(COLOR_WHITE, COLOR_SURFACE);
-        char maxSpd[16]; snprintf(maxSpd, sizeof(maxSpd), "%.1f km/h", disp_max_spd);
+        char maxSpd[24]; snprintf(maxSpd, sizeof(maxSpd), "%.1f km/h", disp_max_spd);
         _canvas->drawString(maxSpd, 415, 86);
         _canvas->setFont(&fonts::Font2);
         _canvas->setTextColor(COLOR_MUTED_GRAY, COLOR_SURFACE);
-        char liveSpd[16]; snprintf(liveSpd, sizeof(liveSpd), "Live: %.1f km/h", disp_live_spd);
+        char liveSpd[24]; snprintf(liveSpd, sizeof(liveSpd), "Live: %.1f km/h", disp_live_spd);
         _canvas->drawString(liveSpd, 415, 122);
     }
 
@@ -2115,6 +2130,16 @@ void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
 }
 
 void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
+    if (_pin_modal_open && _pin_modal_success) {
+        if (millis() >= _pin_modal_success_ms) {
+            _pin_modal_open = false;
+            _pin_modal_success = false;
+            _pin_modal_buf[0] = '\0';
+            _last_rendered_tab = 255;
+            _menu_dirty = true;
+        }
+    }
+
     if (!_menu_dirty) return;
     _menu_dirty = false;
 
@@ -3451,7 +3476,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             telemetry.race_dyno.reset();
             telemetry.race_dyno.last_sample_ms = now;
             Buttons.setRaceState(2);
-            markScreenDirty();
+            // Differential rendering in renderRaceTimerScreen handles launch transition without full screen wipe
         }
     } else if (telemetry.race_state == 2) { // 2 = MEASURING
         telemetry.boost_active = true;
