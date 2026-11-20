@@ -436,8 +436,8 @@ void ButtonHandler::processTouch(uint32_t now) {
                         if (_last_tap_x <= 135 && _last_tap_y <= 65) {
                             _pending_action = NAV_SCREEN_STATS;
                         }
-                        // 1b. Hidden Top Right Settings Touch Button (short tap OR long hold) -> Open Settings Menu
-                        else if (_last_tap_x >= 680 && _last_tap_y <= 65) {
+                        // 1b. Hidden Top Right Settings Touch Zone (x >= 725 clears TCS pill at x=664..720)
+                        else if (_last_tap_x >= 725 && _last_tap_y <= 65) {
                             _pending_action = NAV_BTN1_LONG;
                         }
                         // 2. Interactive Headlight Badge Touch Toggle (Top Slot 50,354 or Bottom Slot 50,416)
@@ -460,8 +460,7 @@ void ButtonHandler::processTouch(uint32_t now) {
                                 _pending_action = NAV_MODE_CYCLE;
                             }
                         }
-                        // Note: Opening Settings on Ride Dash requires a 500ms long-press on the top-right badge
-                        // (prevents [ FERTIG ] exit taps from bleeding back into Settings)
+                        // Note: Hidden Top-Right Settings corner supports both tap (x>=725) and 500ms hold
                     }
                 }
             }

@@ -717,7 +717,6 @@ void sim_init() {
         g_telemetry.is_locked = false;
         ModeManager::instance().setLocked(false);
         Renderer.resetSetupWizard();
-        Renderer.resetSetupWizard();
     Renderer.initSetupWizard(g_telemetry);
         printf("[SIM_BACKEND] First-Time Onboarding Wizard ACTIVE.\n");
     } else if (Settings.get().pin_lock_enabled) {
@@ -999,10 +998,30 @@ void sim_step(uint32_t step_ms) {
         }
     }
 
-    NavAction nav = g_telemetry.is_locked ? NAV_NONE : Buttons.getNavAction();
+    NavAction nav = Buttons.getNavAction();
+    if ((g_telemetry.is_locked || Renderer.isBootAnimActive()) && nav != NAV_PIN_EMERGENCY_RESET) {
+        nav = NAV_NONE;
+    }
 
     if (nav != NAV_NONE) {
-        if (g_telemetry.screen == SCREEN_SETTINGS_MENU) {
+        if (nav == NAV_PIN_EMERGENCY_RESET) {
+            strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
+            Settings.save();
+            g_telemetry.is_locked = false;
+            g_telemetry.theft_alarm_active = false;
+            g_telemetry.locked_moved_meters = 0.0f;
+            g_telemetry.pin_error = false;
+            g_telemetry.pin_entry[0] = '\0';
+            g_manual_throttle = 0.0f;
+            g_manual_brake = 0.0f;
+            s_sim_speed_kmh = 0.0f;
+            ModeManager::instance().setLocked(false);
+            Buttons.setLocked(false);
+            Renderer.markScreenDirty();
+            Renderer.invalidateCache();
+            Renderer.triggerNeedleSweep();
+            printf("[SIM_PIN] Emergency reset triggered! PIN reset to 1234 & unlocked.\n");
+        } else if (g_telemetry.screen == SCREEN_SETTINGS_MENU) {
             Renderer.handleMenuNav(nav, g_telemetry);
         } else {
             switch (nav) {
@@ -1912,8 +1931,10 @@ void sim_set_dash_style(int style) {
 }
 
 void sim_reset_trip() {
+    s_sim_trip_km = 0.0f;
     g_telemetry.trip_km = 0.0f;
     g_telemetry.stats.reset();
+    Battery.resetTrip();
 }
 
 void sim_get_frame_rgb24(uint8_t *rgb_out) {

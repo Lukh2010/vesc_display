@@ -188,23 +188,32 @@ void ModeManager::loadFromNvs() {
     _config.battery_cutoff_end   = _prefs.getFloat("b_cut_e", _config.battery_cutoff_end);
 
     // Strictly guarantee and heal legal street limits (eKFV: max 20 km/h + 10% tol = 22 km/h)
-    // Ensures existing flashed devices with corrupted NVS recover legal limits immediately on boot!
-    if (_config.legal_modes[PROFILE_MODE_ECO].max_speed_kmh > 15.0f || _config.legal_modes[PROFILE_MODE_ECO].max_speed_kmh < 5.0f) {
+    // Ensures existing flashed devices with corrupted/NaN NVS recover legal limits immediately on boot!
+    bool healed = false;
+    if (!( _config.legal_modes[PROFILE_MODE_ECO].max_speed_kmh >= 5.0f && _config.legal_modes[PROFILE_MODE_ECO].max_speed_kmh <= 15.0f )) {
         _config.legal_modes[PROFILE_MODE_ECO].max_speed_kmh = 15.0f;
+        healed = true;
     }
-    if (_config.legal_modes[PROFILE_MODE_SPORT].max_speed_kmh > 20.0f || _config.legal_modes[PROFILE_MODE_SPORT].max_speed_kmh < 5.0f) {
+    if (!( _config.legal_modes[PROFILE_MODE_SPORT].max_speed_kmh >= 5.0f && _config.legal_modes[PROFILE_MODE_SPORT].max_speed_kmh <= 20.0f )) {
         _config.legal_modes[PROFILE_MODE_SPORT].max_speed_kmh = 20.0f;
+        healed = true;
     }
-    if (_config.legal_modes[PROFILE_MODE_RACE].max_speed_kmh > 22.0f || _config.legal_modes[PROFILE_MODE_RACE].max_speed_kmh < 5.0f) {
+    if (!( _config.legal_modes[PROFILE_MODE_RACE].max_speed_kmh >= 5.0f && _config.legal_modes[PROFILE_MODE_RACE].max_speed_kmh <= 22.0f )) {
         _config.legal_modes[PROFILE_MODE_RACE].max_speed_kmh = 22.0f;
+        healed = true;
     }
     for (int i = 0; i < PROFILE_MODE_COUNT; i++) {
-        if (_config.legal_modes[i].max_power_watts > 1000.0f) {
+        if (!( _config.legal_modes[i].max_power_watts > 0.0f && _config.legal_modes[i].max_power_watts <= 1000.0f )) {
             _config.legal_modes[i].max_power_watts = 500.0f;
+            healed = true;
         }
-        if (_config.legal_modes[i].max_battery_amps > 25.0f) {
+        if (!( _config.legal_modes[i].max_battery_amps > 0.0f && _config.legal_modes[i].max_battery_amps <= 25.0f )) {
             _config.legal_modes[i].max_battery_amps = 20.0f;
+            healed = true;
         }
+    }
+    if (healed) {
+        saveToNvs();
     }
 }
 
@@ -332,8 +341,10 @@ ModeLimits ModeManager::getActiveLimits() const {
         lim = _config.tuned_modes[idx];
 
         if (_boost_active) {
-            // Boost requested by user: 70A battery current (statt 60A standard), 140A phase
-            lim.max_battery_amps = 70.0f;
+            // Boost requested by user: raise to at least 70A battery, 140A phase, 4000W
+            if (lim.max_battery_amps < 70.0f) {
+                lim.max_battery_amps = 70.0f;
+            }
             if (lim.max_phase_amps < 140.0f) {
                 lim.max_phase_amps = 140.0f;
             }

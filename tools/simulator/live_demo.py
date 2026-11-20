@@ -323,7 +323,6 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><button onclick="fetch('/api/theme').catch(()=>{})" style="background:#0f172a; border:1px solid #ec4899; color:#f472b6; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🎨 Theme (T)</button></span>
   <span><button onclick="fetch('/api/turbine_sound').catch(()=>{})" style="background:#0f172a; border:1px solid #38bdf8; color:#38bdf8; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚀 Turbinensound (U)</button></span>
   <span><button onclick="fetch('/api/brake_mode').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#34d399; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🛑 Motorbremse / Freilauf (F)</button></span>
-  <span><kbd>C</kbd> <button onclick="fetch('/api/charging').catch(()=>{})" style="background:#0f172a; border:1px solid #10b981; color:#10b981; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Laden (HUD)</button></span>
   <span><kbd>A</kbd> <button id="btn-action" onmousedown="actionPress()" onmouseup="actionRelease()" onmouseleave="actionRelease()" ontouchstart="actionPress()" ontouchend="actionRelease()" style="background:#0f172a; border:1px solid #f59e0b; color:#fbbf24; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">📯 Action Button (Hold: Hupe / Tap: Police Mode)</button></span>
   <span><button onclick="fetch('/api/theft_alarm').catch(()=>{})" style="background:#0f172a; border:1px solid #ef4444; color:#ef4444; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🚨 Diebstahl-Alarm</button></span>
   <span><button onclick="fetch('/api/toggle_wizard').catch(()=>{})" style="background:#0f172a; border:1px solid #00e5ff; color:#00e5ff; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">⚡ Setup Wizard (W/S)</button></span>
@@ -376,6 +375,11 @@ HTML_PAGE = """<!DOCTYPE html>
   function releaseTouch(e) {
     if (!isDown) return;
     isDown = false;
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    pendingTouch = null;
     const rect = touchLayer.getBoundingClientRect();
     const x = (e.clientX - rect.left) * (800 / rect.width);
     const y = (e.clientY - rect.top) * (480 / rect.height);
@@ -420,6 +424,7 @@ HTML_PAGE = """<!DOCTYPE html>
   }, 500);
 
   window.addEventListener('keydown', (e) => {
+    if (e.key === ' ') e.preventDefault();
     if (e.repeat) return;
     if ((e.shiftKey || e.ctrlKey) && (e.key === 'w' || e.key === 'W' || e.key === 's' || e.key === 'S')) {
       fetch('/api/toggle_wizard');
@@ -428,6 +433,13 @@ HTML_PAGE = """<!DOCTYPE html>
     if ((e.key === 'w' || e.key === 'W' || e.key === 's' || e.key === 'S') && currentScreen === 7) {
       fetch('/api/bypass_wizard');
       return;
+    }
+    if (currentScreen === 3) {
+      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') { fetch('/api/nav?action=1'); return; }
+      if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') { fetch('/api/nav?action=3'); return; }
+      if (e.key === 'ArrowLeft' || e.key === 'Backspace') { fetch('/api/nav?action=15'); return; }
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') { fetch('/api/nav?action=7'); return; }
+      if (e.key === 'Escape') { fetch('/api/nav?action=14'); return; }
     }
     if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
       throttleHeld = true;
@@ -445,6 +457,8 @@ HTML_PAGE = """<!DOCTYPE html>
       fetch('/api/nav?action=9');
     } else if (e.key === 'h' || e.key === 'H') {
       fetch('/api/nav?action=10');
+    } else if (e.key === 'l' || e.key === 'L') {
+      fetch('/api/nav?action=22');
     } else if (e.key === 't' || e.key === 'T') {
       fetch('/api/theme');
     } else if (e.key === 'u' || e.key === 'U') {
@@ -455,13 +469,17 @@ HTML_PAGE = """<!DOCTYPE html>
       fetch('/api/nav?action=16');
     } else if (e.key === 'x' || e.key === 'X') {
       fetch('/api/tuning?toggle=1');
-    } else if (e.key === 'c' || e.key === 'C') {
-      fetch('/api/charging');
     } else if (e.key === 'v' || e.key === 'V') {
       fetch('/api/vesc_link?toggle=1');
     } else if (e.key === 'a' || e.key === 'A') {
       actionPress();
     }
+  });
+
+  window.addEventListener('blur', () => {
+    if (throttleHeld) { throttleHeld = false; fetch('/api/throttle?val=0'); }
+    if (brakeHeld) { brakeHeld = false; fetch('/api/brake?val=0'); }
+    if (actionHeld) actionRelease();
   });
 
   window.addEventListener('keyup', (e) => {
@@ -1047,8 +1065,7 @@ class DesktopDemoApp:
 
     def _do_up_release(self):
         self._up_release_timer = None
-        if current_telemetry.screen != SCREEN_SETTINGS_MENU and current_telemetry.screen != SCREEN_SETUP_WIZARD:
-            self.set_throttle(0.0)
+        self.set_throttle(0.0)
 
     def on_down_press(self):
         if self._down_release_timer:
@@ -1069,8 +1086,7 @@ class DesktopDemoApp:
 
     def _do_down_release(self):
         self._down_release_timer = None
-        if current_telemetry.screen != SCREEN_SETTINGS_MENU and current_telemetry.screen != SCREEN_SETUP_WIZARD:
-            self.set_brake(0.0)
+        self.set_brake(0.0)
 
     def on_digit_press(self, pct):
         # Ignore number keys when locked, entering PIN, or in Settings

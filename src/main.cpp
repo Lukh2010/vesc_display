@@ -71,8 +71,8 @@ void setup() {
     telemetry.screen              = SCREEN_RIDE_DASH;
     telemetry.vesc_connected      = false;
     telemetry.uptime_sec          = 0;
-    telemetry.ride_mode           = MODE_ECO;
-    telemetry.saved_ride_mode     = MODE_ECO;
+    telemetry.ride_mode           = ModeManager::instance().getRideMode();
+    telemetry.saved_ride_mode     = telemetry.ride_mode;
     telemetry.tuning_mode         = false; // Requirement 1: Boot state is ALWAYS stealth / gedrosselt!
     telemetry.is_locked           = Settings.get().pin_lock_enabled;
     telemetry.pin_entry[0]        = '\0';
@@ -290,9 +290,9 @@ void loop() {
                 }
             }
 
-            // 2. Single Key Shortcuts (when not typing a longer word)
+            // 2. Immediate Emergency Stop / Gas Shortcuts (only non-letter keys when line buffer is empty)
             if (s_cmd_line.length() == 0) {
-                if (c == 'w' || c == 'W' || c == '+') {
+                if (c == '+') {
                     if (telemetry.is_locked) {
                         Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben (z. B. '1234') vor Gas geben.");
                     } else {
@@ -321,57 +321,73 @@ void loop() {
                     Vesc.setSimThrottle(0.0f);
                     Renderer.markScreenDirty();
                     Serial.println("[TEST STOP] Motor sofort gestoppt (0.0A Freilauf).");
-                } else if (c == 'p' || c == 'P') {
-                    if (!telemetry.is_locked && (telemetry.speed_kmh > 0.8f || telemetry.vesc_motor_speed > 0.8f)) {
-                        Serial.println("[SAFETY] Locking rejected: vehicle is moving!");
-                    } else {
-                        telemetry.is_locked = !telemetry.is_locked;
-                        ModeManager::instance().setLocked(telemetry.is_locked);
-                        telemetry.theft_alarm_active = false;
-                        Renderer.markScreenDirty();
-                        Renderer.invalidateCache();
-                        if (!telemetry.is_locked) {
-                            Vesc.sendFocPlayStop();
-                            Vesc.sendCurrentBrake(0.0f);
-                            Renderer.triggerNeedleSweep();
-                        }
-                        Serial.printf("[SERIAL] PIN-Lockscreen: %s\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
-                    }
-                } else if (c == 'r' || c == 'R') {
-                    strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
-                    Settings.save();
-                    telemetry.is_locked = false;
-                    telemetry.pin_error = false;
-                    telemetry.pin_entry[0] = '\0';
-                    ModeManager::instance().setLocked(false);
-                    Vesc.sendFocPlayStop();
-                    Vesc.sendCurrentBrake(0.0f);
-                    Renderer.markScreenDirty();
-                    Renderer.invalidateCache();
-                    Renderer.triggerNeedleSweep();
-                    Serial.println("[SERIAL] PIN auf '1234' resetet & System entsperrt!");
-                } else if (c == 'h' || c == 'H' || c == '?') {
-                    Serial.println("=== DISPLAY SERIAL COMMANDS ===");
-                    Serial.println("  0-9       : PIN Ziffer eintippen (1234 zum Entsperren)");
-                    Serial.println("  < / bksp  : PIN Ziffer loeschen");
-                    Serial.println("  w / +     : Test-Gas geben (3.0A, 1.5s Auto-Cutoff)");
-                    Serial.println("  gas <A>   : Test-Gas mit Amps geben (z.B. 'gas 3.5')");
-                    Serial.println("  duty <% > : Test-Duty cycle geben (z.B. 'duty 5' = 5%)");
-                    Serial.println("  s / space : Motor stoppen (0.0A / 0% Duty)");
-                    Serial.println("  p / lock  : Sperren / Entsperren toggeln");
-                    Serial.println("  r         : PIN auf 1234 resetten & entsperren");
-                    Serial.println("  status    : System Telemetrie anzeigen");
-                    Serial.println("  theme     : Farb-Theme umschalten");
-                    Serial.println("  unlock    : Direkt per Textbefehl entsperren");
-                    Serial.println("===============================");
                 }
             }
 
-            // 3. Line accumulator for text commands (like 'unlock', 'gas 2.5', 'duty 5', 'lock', 'status')
+            // 3. Line accumulator for text & single-letter commands (e.g. 'unlock', 'reset', 'help', 'w', 'p', 'r', 'h')
             if (c == '\r' || c == '\n') {
                 s_cmd_line.trim();
                 if (s_cmd_line.length() > 0) {
-                    if (s_cmd_line.equalsIgnoreCase("unlock") || s_cmd_line == Settings.get().pin_code) {
+                    if (s_cmd_line.equalsIgnoreCase("w")) {
+                        if (telemetry.is_locked) {
+                            Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben (z. B. '1234') vor Gas geben.");
+                        } else {
+                            float test_amps = 5.0f;
+                            s_test_gas_current = test_amps;
+                            s_test_gas_duty = 0.0f;
+                            s_test_gas_is_duty = false;
+                            s_test_gas_active = true;
+                            s_test_gas_start_ms = millis();
+                            s_test_gas_duration_ms = 1500;
+                            Vesc.sendCurrent(test_amps);
+                            Vesc.setSimThrottle(25.0f);
+                            Renderer.markScreenDirty();
+                            Serial.printf("[TEST GAS] Motor-Strom %.1fA gesendet (Auto-Cutoff in 1.5s)!\n", test_amps);
+                        }
+                    } else if (s_cmd_line.equalsIgnoreCase("p")) {
+                        if (!telemetry.is_locked && (telemetry.speed_kmh > 0.8f || telemetry.vesc_motor_speed > 0.8f)) {
+                            Serial.println("[SAFETY] Locking rejected: vehicle is moving!");
+                        } else {
+                            telemetry.is_locked = !telemetry.is_locked;
+                            ModeManager::instance().setLocked(telemetry.is_locked);
+                            telemetry.theft_alarm_active = false;
+                            Renderer.markScreenDirty();
+                            Renderer.invalidateCache();
+                            if (!telemetry.is_locked) {
+                                Vesc.sendFocPlayStop();
+                                Vesc.sendCurrentBrake(0.0f);
+                                Renderer.triggerNeedleSweep();
+                            }
+                            Serial.printf("[SERIAL] PIN-Lockscreen: %s\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
+                        }
+                    } else if (s_cmd_line.equalsIgnoreCase("r")) {
+                        strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
+                        Settings.save();
+                        telemetry.is_locked = false;
+                        telemetry.pin_error = false;
+                        telemetry.pin_entry[0] = '\0';
+                        ModeManager::instance().setLocked(false);
+                        Vesc.sendFocPlayStop();
+                        Vesc.sendCurrentBrake(0.0f);
+                        Renderer.markScreenDirty();
+                        Renderer.invalidateCache();
+                        Renderer.triggerNeedleSweep();
+                        Serial.println("[SERIAL] PIN auf '1234' resetet & System entsperrt!");
+                    } else if (s_cmd_line.equalsIgnoreCase("h") || s_cmd_line == "?" || s_cmd_line.equalsIgnoreCase("help")) {
+                        Serial.println("=== DISPLAY SERIAL COMMANDS ===");
+                        Serial.println("  0-9       : PIN Ziffer eintippen (1234 zum Entsperren)");
+                        Serial.println("  < / bksp  : PIN Ziffer loeschen");
+                        Serial.println("  w / +     : Test-Gas geben (5.0A, 1.5s Auto-Cutoff)");
+                        Serial.println("  gas <A>   : Test-Gas mit Amps geben (z.B. 'gas 3.5')");
+                        Serial.println("  duty <% > : Test-Duty cycle geben (z.B. 'duty 5' = 5%)");
+                        Serial.println("  s / space : Motor stoppen (0.0A / 0% Duty)");
+                        Serial.println("  p / lock  : Sperren / Entsperren toggeln");
+                        Serial.println("  r         : PIN auf 1234 resetten & entsperren");
+                        Serial.println("  status    : System Telemetrie anzeigen");
+                        Serial.println("  theme     : Farb-Theme umschalten");
+                        Serial.println("  unlock    : Direkt per Textbefehl entsperren");
+                        Serial.println("===============================");
+                    } else if (s_cmd_line.equalsIgnoreCase("unlock") || s_cmd_line == Settings.get().pin_code) {
                         telemetry.is_locked = false;
                         telemetry.theft_alarm_active = false;
                         telemetry.locked_moved_meters = 0.0f;
@@ -919,6 +935,7 @@ void loop() {
                         telemetry.ride_mode = telemetry.saved_ride_mode;
                         ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                         telemetry.boost_active = false;
+                        ModeManager::instance().setBoostActive(false);
                         telemetry.race_popup_open = false;
                         telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
@@ -938,6 +955,7 @@ void loop() {
                                 telemetry.ride_mode = telemetry.saved_ride_mode;
                                 ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                                 telemetry.boost_active = false;
+                                ModeManager::instance().setBoostActive(false);
                                 telemetry.race_popup_open = false;
                                 telemetry.race_dyno_open = false;
                                 Buttons.setRaceState(0);
@@ -965,6 +983,7 @@ void loop() {
                             telemetry.ride_mode = telemetry.saved_ride_mode;
                             ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                             telemetry.boost_active = false;
+                            ModeManager::instance().setBoostActive(false);
                             telemetry.race_popup_open = false;
                             telemetry.race_dyno_open = false;
                             Buttons.setRaceState(0);
@@ -992,6 +1011,7 @@ void loop() {
                         telemetry.ride_mode = telemetry.saved_ride_mode;
                         ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                         telemetry.boost_active = false;
+                        ModeManager::instance().setBoostActive(false);
                         telemetry.race_popup_open = false;
                         telemetry.race_dyno_open = false;
                         Buttons.setRaceState(0);
@@ -1140,6 +1160,7 @@ void loop() {
                     Buttons.setTuningMode(true);
                     ModeManager::instance().setTuningMode(true);
                     telemetry.mode_badge_until = now + 2500;
+                    Renderer.markScreenDirty();
                     Serial.println("[NAV] Tuning Mode ACTIVATED via 4s hold on speed number!");
                     break;
 
@@ -1161,8 +1182,8 @@ void loop() {
                         Buttons.setRacePopupOpen(false);
                         Buttons.setRaceDynoOpen(false);
                         Renderer.invalidateCache();
-                        Renderer.markScreenDirty();
                     }
+                    Renderer.markScreenDirty();
                     Serial.println("[NAV] Tuning Mode DEACTIVATED via single tap on speed number!");
                     break;
 
@@ -1176,6 +1197,7 @@ void loop() {
                         telemetry.current_amps = 0.0f;
                         telemetry.phase_amps = 0.0f;
                     }
+                    Renderer.markScreenDirty();
                     Serial.printf("[NAV] Cycled Ride Mode: %d (%s, Tuning: %s)\n",
                                   (int)telemetry.ride_mode,
                                   ModeManager::instance().getActiveModeName(),
@@ -1184,6 +1206,7 @@ void loop() {
 
                 case NAV_HAZARD_TOGGLE:
                     telemetry.hazard_active = !telemetry.hazard_active;
+                    Renderer.markScreenDirty();
                     Serial.printf("[NAV] Toggled Hazard Flashers: %s\n", telemetry.hazard_active ? "ACTIVE" : "OFF");
                     break;
 
@@ -1192,6 +1215,7 @@ void loop() {
 #if defined(PIN_HEADLIGHT_MOSFET) && (PIN_HEADLIGHT_MOSFET >= 0)
                     digitalWrite(PIN_HEADLIGHT_MOSFET, telemetry.lights_enabled ? HIGH : LOW);
 #endif
+                    Renderer.markScreenDirty();
                     Serial.printf("[NAV] Toggled Light Switch (Hauptschalter): %s (GPIO %d: %s)\n",
                                   telemetry.lights_enabled ? "ON" : "OFF",
                                   PIN_HEADLIGHT_MOSFET,
@@ -1219,6 +1243,7 @@ void loop() {
     if (telemetry.screen != SCREEN_RACE_TIMER && telemetry.boost_active && (uint32_t)(now - telemetry.boost_start_ms) >= 10000) {
         telemetry.boost_active = false;
         ModeManager::instance().setBoostActive(false);
+        Renderer.markScreenDirty();
         Serial.println("[TIMER] Hyper Boost timed out (10s limit reached, restored 60A battery limit)");
     }
 
@@ -1255,6 +1280,15 @@ void loop() {
     TcsTpmsManager::instance().update(telemetry, tcs_dt);
 
     static float s_last_applied_tcs_scale = 1.0f;
+    static RideMode s_tcs_last_mode = MODE_ECO;
+    static bool s_tcs_last_boost = false;
+    static bool s_tcs_last_tuning = false;
+    if (telemetry.ride_mode != s_tcs_last_mode || telemetry.boost_active != s_tcs_last_boost || telemetry.tuning_mode != s_tcs_last_tuning) {
+        s_tcs_last_mode = telemetry.ride_mode;
+        s_tcs_last_boost = telemetry.boost_active;
+        s_tcs_last_tuning = telemetry.tuning_mode;
+        s_last_applied_tcs_scale = 1.0f; // Force re-apply if TCS is actively limiting phase amps
+    }
     if (!telemetry.is_locked && !ModeManager::instance().isLocked() && TcsTpmsManager::instance().isTcsEnabled()) {
         if (fabsf(telemetry.tcs_throttle_scale - s_last_applied_tcs_scale) > 0.04f ||
             (telemetry.tcs_active != (s_last_applied_tcs_scale < 0.98f))) {

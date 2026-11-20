@@ -548,10 +548,16 @@ static void sendVescCanBufferToDetected(const uint8_t *data, size_t len,
 
 // Reassemble VESC CAN buffer replies addressed to ESP_CAN_ID (cmd 5, 6, 7, 8)
 static bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **out_payload, size_t *out_len) {
+    static uint32_t s_last_rx_frame_ms = 0;
+    uint32_t now_ms = millis();
     uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
     if (cmd_id == 5 && msg.data_length_code >= 2) {
         // CAN_PACKET_FILL_RX_BUFFER
         size_t offset = msg.data[0];
+        if (offset == 0 && (now_ms - s_last_rx_frame_ms > 250)) {
+            memset(s_can_rx_buf, 0, sizeof(s_can_rx_buf));
+        }
+        s_last_rx_frame_ms = now_ms;
         size_t chunk_len = (size_t)msg.data_length_code - 1;
         if (offset + chunk_len <= CAN_RX_BUF_SIZE) {
             memcpy(s_can_rx_buf + offset, &msg.data[1], chunk_len);
@@ -946,6 +952,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
         telemetry.vesc_connected = false;
         telemetry.speed_kmh = 0.0f;
         telemetry.vesc_motor_speed = 0.0f;
+        telemetry.throttle_pct = 0.0f;
         telemetry.current_amps = 0.0f;
         telemetry.phase_amps = 0.0f;
         telemetry.power_watts = 0.0f;
@@ -983,8 +990,10 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
     if (dt < 0.001f) dt = 0.016f;
     if (dt > 0.5f) dt = 0.05f;
 
-    // 1. Dual ESC current / power combination
-    if (s_sec_last_rx_ms > 0 && (now - s_sec_last_rx_ms < 1000)) {
+    // 1. Dual ESC current / power combination (respect lock & idle 0W clamp)
+    if (!telemetry.is_locked && !ModeManager::instance().isLocked() &&
+        !(telemetry.speed_kmh < 0.5f && fabsf(telemetry.current_amps) < 0.15f && fabsf(telemetry.phase_amps) < 0.3f) &&
+        s_sec_last_rx_ms > 0 && (now - s_sec_last_rx_ms < 1000)) {
         telemetry.power_watts = (telemetry.voltage * telemetry.current_amps) + telemetry.vesc2_max_power;
     }
 
@@ -1964,6 +1973,7 @@ void VescHandler::sendTerminalCommand(const char *str) {
 }
 
 void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
+    UartLock lock;
     char lisp_cmd[64];
     snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-beep %.0f %.2f %.1f)", freq, duration_s, voltage);
 
@@ -1998,6 +2008,7 @@ void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
 }
 
 void VescHandler::playFocTone(uint8_t channel, float freq, float voltage) {
+    UartLock lock;
     if (!Settings.get().turbine_sound_enabled && freq > 0.0f) {
         // When turbine sound is turned OFF in Settings, absolutely NO sound or tone is played (completely silent normal operation)
         return;
@@ -2042,6 +2053,7 @@ void VescHandler::stopFocTone(uint8_t channel) {
 }
 
 void VescHandler::sendFocPlayStop() {
+    UartLock lock;
     _horn_active = false;
     char lisp_cmd[64];
     snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-play-stop)");

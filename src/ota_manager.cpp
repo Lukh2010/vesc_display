@@ -243,6 +243,7 @@ void OtaManager::setupRoutes() {
             if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
                 Update.printError(Serial);
                 snprintf(_status_text, sizeof(_status_text), "Update.begin Fehler");
+                _is_updating = false;
             }
         } else if (upload.status == UPLOAD_FILE_WRITE) {
             if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
