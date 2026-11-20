@@ -327,6 +327,7 @@ struct DashTelemetry {
     bool     is_locked;        // true = Lockscreen active, VESC 0A output blocked
     char     pin_entry[8];     // Currently entered digits buffer
     bool     pin_error;        // Flash red / error shake on invalid PIN
+    uint32_t pin_error_start_ms; // Error indicator display trigger timestamp
     uint32_t pin_error_end_ms; // Error indicator display expiry
     bool     theft_alarm_active;  // true = vehicle moved while locked, FOC loud siren active
     float    locked_moved_meters; // meters traveled since being locked
@@ -358,6 +359,7 @@ struct DashTelemetry {
     RideMode saved_ride_mode;  // Restored when exiting SCREEN_RACE_TIMER
     bool     tuning_mode;      // false = Stealth / Drossel Mode (Default, red dot on), true = Custom Tuning (red dot off)
     bool     boost_active;     // Temporary 120% power boost active
+    uint32_t boost_start_ms;   // Start timestamp of boost
     uint32_t boost_end_ms;     // Expiration timestamp of boost
     uint32_t mode_badge_until; // Temporary HUD mode banner display timer
 

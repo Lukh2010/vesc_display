@@ -194,7 +194,9 @@ void loop() {
 
     // Interactive Serial Command Console via USB (115200 Baud)
     // Active both in SIMULATION_MODE and on real hardware (when USB bridge is inactive)
-    static uint32_t s_test_gas_until = 0;
+    static uint32_t s_test_gas_start_ms = 0;
+    static uint32_t s_test_gas_duration_ms = 0;
+    static bool s_test_gas_active = false;
     static float s_test_gas_current = 0.0f;
     static float s_test_gas_duty = 0.0f;
     static bool s_test_gas_is_duty = false;
@@ -203,8 +205,8 @@ void loop() {
     static String s_cmd_line = "";
 
     // Continuous drive stream while test gas active (every 30ms = ~33Hz refresh for VESC watchdog)
-    if (s_test_gas_until > 0) {
-        if (now < s_test_gas_until) {
+    if (s_test_gas_active) {
+        if ((uint32_t)(now - s_test_gas_start_ms) < s_test_gas_duration_ms) {
             if (now - s_last_test_gas_stream_ms >= 30) {
                 s_last_test_gas_stream_ms = now;
                 if (s_test_gas_is_duty) {
@@ -220,7 +222,9 @@ void loop() {
             }
         } else {
             // Auto-stop safety timeout expired
-            s_test_gas_until = 0;
+            s_test_gas_active = false;
+            s_test_gas_start_ms = 0;
+            s_test_gas_duration_ms = 0;
             s_test_gas_current = 0.0f;
             s_test_gas_duty = 0.0f;
             s_test_gas_is_duty = false;
@@ -265,7 +269,8 @@ void loop() {
                             Serial.println("[PIN] System ERFOLGREICH ENTSPERRT via Serial PIN-Eingabe! Alarm deaktiviert.");
                         } else {
                             telemetry.pin_error = true;
-                            telemetry.pin_error_end_ms = millis() + 800;
+                            telemetry.pin_error_start_ms = millis();
+                            telemetry.pin_error_end_ms = telemetry.pin_error_start_ms + 800;
                             Renderer.markScreenDirty();
                             Serial.printf("[PIN] Falscher PIN-Code '%s' eingegeben! (Erwartet: '%s')\n",
                                           telemetry.pin_entry, Settings.get().pin_code);
@@ -292,14 +297,18 @@ void loop() {
                         s_test_gas_current = test_amps;
                         s_test_gas_duty = 0.0f;
                         s_test_gas_is_duty = false;
-                        s_test_gas_until = millis() + 1500; // Auto-cutoff 1.5s
+                        s_test_gas_active = true;
+                        s_test_gas_start_ms = millis();
+                        s_test_gas_duration_ms = 1500; // Auto-cutoff 1.5s
                         Vesc.sendCurrent(test_amps);
                         Vesc.setSimThrottle(25.0f);
                         Renderer.markScreenDirty();
                         Serial.printf("[TEST GAS] Motor-Strom %.1fA gesendet (Auto-Cutoff in 1.5s)!\n", test_amps);
                     }
                 } else if (c == ' ' || c == '-') {
-                    s_test_gas_until = 0;
+                    s_test_gas_active = false;
+                    s_test_gas_start_ms = 0;
+                    s_test_gas_duration_ms = 0;
                     s_test_gas_current = 0.0f;
                     s_test_gas_duty = 0.0f;
                     s_test_gas_is_duty = false;
@@ -310,17 +319,21 @@ void loop() {
                     Renderer.markScreenDirty();
                     Serial.println("[TEST STOP] Motor sofort gestoppt (0.0A Freilauf).");
                 } else if (c == 'p' || c == 'P') {
-                    telemetry.is_locked = !telemetry.is_locked;
-                    ModeManager::instance().setLocked(telemetry.is_locked);
-                    telemetry.theft_alarm_active = false;
-                    Renderer.markScreenDirty();
-                    Renderer.invalidateCache();
-                    if (!telemetry.is_locked) {
-                        Vesc.sendFocPlayStop();
-                        Vesc.sendCurrentBrake(0.0f);
-                        Renderer.triggerNeedleSweep();
+                    if (!telemetry.is_locked && (telemetry.speed_kmh > 0.8f || telemetry.vesc_motor_speed > 0.8f)) {
+                        Serial.println("[SAFETY] Locking rejected: vehicle is moving!");
+                    } else {
+                        telemetry.is_locked = !telemetry.is_locked;
+                        ModeManager::instance().setLocked(telemetry.is_locked);
+                        telemetry.theft_alarm_active = false;
+                        Renderer.markScreenDirty();
+                        Renderer.invalidateCache();
+                        if (!telemetry.is_locked) {
+                            Vesc.sendFocPlayStop();
+                            Vesc.sendCurrentBrake(0.0f);
+                            Renderer.triggerNeedleSweep();
+                        }
+                        Serial.printf("[SERIAL] PIN-Lockscreen: %s\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
                     }
-                    Serial.printf("[SERIAL] PIN-Lockscreen: %s\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
                 } else if (c == 'r' || c == 'R') {
                     strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
                     Settings.save();
@@ -369,11 +382,15 @@ void loop() {
                         Renderer.triggerNeedleSweep();
                         Serial.println("[PIN] System UNLOCKED via Serial Command! Alarm disarmed.");
                     } else if (s_cmd_line.equalsIgnoreCase("lock")) {
-                        telemetry.is_locked = true;
-                        ModeManager::instance().setLocked(true);
-                        Renderer.markScreenDirty();
-                        Renderer.invalidateCache();
-                        Serial.println("[PIN] System LOCKED via Serial Command.");
+                        if (telemetry.speed_kmh > 0.8f || telemetry.vesc_motor_speed > 0.8f) {
+                            Serial.println("[SAFETY] Locking rejected: vehicle is moving!");
+                        } else {
+                            telemetry.is_locked = true;
+                            ModeManager::instance().setLocked(true);
+                            Renderer.markScreenDirty();
+                            Renderer.invalidateCache();
+                            Serial.println("[PIN] System LOCKED via Serial Command.");
+                        }
                     } else if (s_cmd_line.equalsIgnoreCase("tuning on") || s_cmd_line.equalsIgnoreCase("tuning")) {
                         telemetry.tuning_mode = true;
                         ModeManager::instance().setTuningMode(true);
@@ -410,7 +427,9 @@ void loop() {
                             s_test_gas_current = mode_phase;
                             s_test_gas_duty = 0.0f;
                             s_test_gas_is_duty = false;
-                            s_test_gas_until = millis() + 3000; // 3.0s full throttle
+                            s_test_gas_active = true;
+                            s_test_gas_start_ms = millis();
+                            s_test_gas_duration_ms = 3000; // 3.0s full throttle
                             Vesc.sendCurrent(mode_phase);
                             Vesc.setSimThrottle(100.0f);
                             Renderer.markScreenDirty();
@@ -439,12 +458,16 @@ void loop() {
                                 s_test_gas_current = amps;
                                 s_test_gas_duty = 0.0f;
                                 s_test_gas_is_duty = false;
-                                s_test_gas_until = millis() + (uint32_t)(secs * 1000.0f);
+                                s_test_gas_active = true;
+                                s_test_gas_start_ms = millis();
+                                s_test_gas_duration_ms = (uint32_t)(secs * 1000.0f);
                                 Vesc.sendCurrent(amps);
                                 Vesc.setSimThrottle(amps * 2.0f);
                                 Serial.printf("[TEST GAS] Motor-Strom %.1fA fuer %.1fs gesendet!\n", amps, secs);
                             } else {
-                                s_test_gas_until = 0;
+                                s_test_gas_active = false;
+                                s_test_gas_start_ms = 0;
+                                s_test_gas_duration_ms = 0;
                                 s_test_gas_current = 0.0f;
                                 s_test_gas_duty = 0.0f;
                                 s_test_gas_is_duty = false;
@@ -477,12 +500,16 @@ void loop() {
                                 s_test_gas_duty = duty_frac;
                                 s_test_gas_current = 0.0f;
                                 s_test_gas_is_duty = true;
-                                s_test_gas_until = millis() + (uint32_t)(secs * 1000.0f);
+                                s_test_gas_active = true;
+                                s_test_gas_start_ms = millis();
+                                s_test_gas_duration_ms = (uint32_t)(secs * 1000.0f);
                                 Vesc.sendDuty(duty_frac);
                                 Vesc.setSimThrottle(duty_pct);
                                 Serial.printf("[TEST DUTY] Motor Duty %.1f%% (%.3f) fuer %.1fs gesendet!\n", duty_pct, duty_frac, secs);
                             } else {
-                                s_test_gas_until = 0;
+                                s_test_gas_active = false;
+                                s_test_gas_start_ms = 0;
+                                s_test_gas_duration_ms = 0;
                                 s_test_gas_current = 0.0f;
                                 s_test_gas_duty = 0.0f;
                                 s_test_gas_is_duty = false;
@@ -493,7 +520,9 @@ void loop() {
                             }
                         }
                     } else if (s_cmd_line.equalsIgnoreCase("stop") || s_cmd_line.equalsIgnoreCase("s")) {
-                        s_test_gas_until = 0;
+                        s_test_gas_active = false;
+                        s_test_gas_start_ms = 0;
+                        s_test_gas_duration_ms = 0;
                         s_test_gas_current = 0.0f;
                         s_test_gas_duty = 0.0f;
                         s_test_gas_is_duty = false;
@@ -624,7 +653,7 @@ void loop() {
     // PIN Lockscreen Input Processing (when locked and boot animation finished)
     if (telemetry.is_locked && !Renderer.isBootAnimActive()) {
         if (telemetry.pin_error) {
-            if (millis() >= telemetry.pin_error_end_ms) {
+            if ((uint32_t)(millis() - telemetry.pin_error_start_ms) >= 800) {
                 telemetry.pin_error = false;
                 telemetry.pin_entry[0] = '\0'; // Clear buffer AFTER red error display window ends!
                 Renderer.markScreenDirty();
@@ -687,7 +716,8 @@ void loop() {
                         Serial.println("[PIN] System UNLOCKED with valid PIN code! Alarm disarmed.");
                     } else {
                         telemetry.pin_error = true;
-                        telemetry.pin_error_end_ms = millis() + 800;
+                        telemetry.pin_error_start_ms = millis();
+                        telemetry.pin_error_end_ms = telemetry.pin_error_start_ms + 800;
                         // Keep pin_entry intact so all 4 dots are shown in bright red!
                         Renderer.markScreenDirty();
                         Serial.printf("[PIN] Invalid PIN code '%s' entered! (Expected: '%s')\n",
@@ -717,7 +747,8 @@ void loop() {
                                 Serial.println("[PIN] System UNLOCKED automatically upon 4 digits! Alarm disarmed.");
                             } else {
                                 telemetry.pin_error = true;
-                                telemetry.pin_error_end_ms = millis() + 800;
+                                telemetry.pin_error_start_ms = millis();
+                                telemetry.pin_error_end_ms = telemetry.pin_error_start_ms + 800;
                                 // Keep pin_entry intact so all 4 dots are shown in bright red!
                                 Renderer.markScreenDirty();
                                 Serial.printf("[PIN] Invalid PIN code '%s' entered! (Expected: '%s')\n",
@@ -735,7 +766,7 @@ void loop() {
     static uint32_t s_last_alarm_beep_ms = 0;
     static uint8_t s_alarm_beep_cadence = 0;
     static uint32_t s_last_movement_calc_ms = millis();
-    static uint32_t s_lock_arm_time_ms = 0;
+    static uint32_t s_lock_arm_start_ms = 0;
 
     if (telemetry.is_locked) {
         uint32_t dt_ms = now - s_last_movement_calc_ms;
@@ -747,12 +778,12 @@ void loop() {
             s_was_locked = true;
             telemetry.theft_alarm_active = false;
             telemetry.locked_moved_meters = 0.0f;
-            s_lock_arm_time_ms = now + 4000; // 4s boot/lock arming grace period
+            s_lock_arm_start_ms = now; // 4s boot/lock arming grace period
             Serial.println("[SECURITY] Theft protection ARMED (4s grace window).");
         }
 
         // Only evaluate movement AFTER the 4-second boot/lock arming grace period
-        if (now >= s_lock_arm_time_ms) {
+        if ((uint32_t)(now - s_lock_arm_start_ms) >= 4000) {
             // Measure actual physical vehicle movement:
             // 1. Motor wheel rotation speed (VESC telemetry):
             float raw_v = telemetry.vesc_motor_speed;
@@ -817,6 +848,8 @@ void loop() {
             telemetry.theft_alarm_active = false;
             telemetry.locked_moved_meters = 0.0f;
             Vesc.sendFocPlayStop(); // Instantly silence motor on unlock
+            Renderer.invalidateCache();
+            Renderer.markScreenDirty();
         }
         s_last_movement_calc_ms = now;
     }
@@ -905,8 +938,10 @@ void loop() {
                                 ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
                                 telemetry.boost_active = false;
                                 telemetry.race_popup_open = false;
+                                telemetry.race_dyno_open = false;
                                 Buttons.setRaceState(0);
                                 Buttons.setRacePopupOpen(false);
+                                Buttons.setRaceDynoOpen(false);
                             }
                             telemetry.screen = SCREEN_RIDE_DASH;
                             Renderer.markScreenDirty();
@@ -980,6 +1015,7 @@ void loop() {
                         telemetry.ride_mode = MODE_RACE;
                         ModeManager::instance().setRideMode(MODE_RACE);
                         telemetry.boost_active = true;
+                        telemetry.boost_start_ms = now;
                         ModeManager::instance().setBoostActive(true);
                     } else {
                         telemetry.boost_active = false;
@@ -1029,6 +1065,7 @@ void loop() {
                     telemetry.ride_mode = MODE_RACE;
                     ModeManager::instance().setRideMode(MODE_RACE);
                     telemetry.boost_active = true;
+                    telemetry.boost_start_ms = now;
                     ModeManager::instance().setBoostActive(true);
                     telemetry.boost_end_ms = now + 60000;
                     telemetry.race_state = 1; // COUNTDOWN (5s)
@@ -1077,8 +1114,13 @@ void loop() {
                     break;
 
                 case NAV_BOOST_TOGGLE:
+                    if (!telemetry.tuning_mode) {
+                        Serial.println("[NAV] Boost blocked: Tuning mode is OFF (Police Mode)");
+                        break;
+                    }
                     telemetry.boost_active = !telemetry.boost_active;
                     if (telemetry.boost_active) {
+                        telemetry.boost_start_ms = now;
                         telemetry.boost_end_ms = now + 10000;
                     }
                     ModeManager::instance().setBoostActive(telemetry.boost_active);
@@ -1176,7 +1218,7 @@ void loop() {
     }
 
     // Boost timer expiration check (10s max duration on ride dash)
-    if (telemetry.screen != SCREEN_RACE_TIMER && telemetry.boost_active && now > telemetry.boost_end_ms) {
+    if (telemetry.screen != SCREEN_RACE_TIMER && telemetry.boost_active && (uint32_t)(now - telemetry.boost_start_ms) >= 10000) {
         telemetry.boost_active = false;
         ModeManager::instance().setBoostActive(false);
         Serial.println("[TIMER] Hyper Boost timed out (10s limit reached, restored 60A battery limit)");

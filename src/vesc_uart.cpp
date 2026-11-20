@@ -14,8 +14,8 @@
 #endif
 static SemaphoreHandle_t s_uartMutex = NULL;
 struct UartLock {
-    UartLock() { if (s_uartMutex) xSemaphoreTake(s_uartMutex, portMAX_DELAY); }
-    ~UartLock() { if (s_uartMutex) xSemaphoreGive(s_uartMutex); }
+    UartLock() { if (s_uartMutex) xSemaphoreTakeRecursive(s_uartMutex, portMAX_DELAY); }
+    ~UartLock() { if (s_uartMutex) xSemaphoreGiveRecursive(s_uartMutex); }
 };
 #else
 struct UartLock { UartLock() {} ~UartLock() {} };
@@ -126,7 +126,7 @@ VescHandler::VescHandler()
 void VescHandler::begin() {
 #if !defined(NATIVE_SIMULATOR)
     if (s_uartMutex == NULL) {
-        s_uartMutex = xSemaphoreCreateMutex();
+        s_uartMutex = xSemaphoreCreateRecursiveMutex();
     }
 #if !SIMULATION_MODE
 #if VESC_USE_CAN_BUS
@@ -396,8 +396,8 @@ void VescHandler::initCanBus() {
     if (s_can_initialized) return;
 
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_NORMAL);
-    g_config.rx_queue_len = 32;
-    g_config.tx_queue_len = 16;
+    g_config.rx_queue_len = 64;
+    g_config.tx_queue_len = 64;
     twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
@@ -496,8 +496,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 s_last_can_rx_ms = now;
             } else if (is_secondary) {
                 telemetry.vesc2_max_phase = mot_i;
-                telemetry.vesc_connected = true;
-                s_last_can_rx_ms = now;
+                s_sec_last_rx_ms = now;
             }
         }
         else if (cmd_id == 16 && msg.data_length_code >= 8) { // CAN_PACKET_STATUS_4
@@ -544,8 +543,10 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 }
 
                 static bool s_can_tacho_init = false;
+                static int32_t s_last_can_tacho = 0;
                 if (!s_can_tacho_init) {
                     _tacho_trip_offset = tacho;
+                    s_last_can_tacho = tacho;
                     s_can_tacho_init = true;
                 }
 
@@ -554,6 +555,15 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
                 int32_t rel_tacho = tacho - _tacho_trip_offset;
                 telemetry.trip_km = fabsf(((float)rel_tacho / ((float)pole_pairs * 6.0f)) * wheel_circ_m) / (gear_ratio * 1000.0f);
+
+                int32_t delta_tacho = tacho - s_last_can_tacho;
+                if (delta_tacho != 0) {
+                    float delta_km = fabsf(((float)delta_tacho / ((float)pole_pairs * 6.0f)) * wheel_circ_m) / (gear_ratio * 1000.0f);
+                    if (delta_km < 1.0f) { // sanity clamp against sudden jumps
+                        telemetry.odo_km += delta_km;
+                    }
+                    s_last_can_tacho = tacho;
+                }
                 telemetry.vesc_connected = true;
                 s_last_can_rx_ms = now;
             }
@@ -590,7 +600,7 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 telemetry.stats.trip_wh = (float)rel_wh / 10000.0f;
             }
         }
-        else if (cmd_id == 60 && msg.data_length_code >= 4) { // CAN_PACKET_STATUS_6 (IMU Incline & Accel)
+        else if (cmd_id == 65 && msg.data_length_code >= 4) { // Custom VESC IMU telemetry (Incline & Accel, distinct from GNSS_LAT=60)
             int16_t roll_raw  = (int16_t)(((uint16_t)msg.data[0] << 8) | msg.data[1]);
             int16_t pitch_raw = (int16_t)(((uint16_t)msg.data[2] << 8) | msg.data[3]);
             (void)roll_raw;
@@ -1558,8 +1568,8 @@ void VescHandler::sendTerminalCommand(const char *str) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, t_payload, slen + 1);
-        if (VESC_CAN_ID_DEFAULT != 0) {
+        sendVescCanBuffer(s_primary_vesc_id, t_payload, slen + 1);
+        if (s_primary_vesc_id != 0) {
             sendVescCanBuffer(0, t_payload, slen + 1);
         }
     }
@@ -1592,8 +1602,8 @@ void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
-        if (VESC_CAN_ID_DEFAULT != 0) {
+        sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
+        if (s_primary_vesc_id != 0) {
             sendVescCanBuffer(0, payload, slen + 1);
         }
     }
@@ -1637,8 +1647,8 @@ void VescHandler::playFocTone(uint8_t channel, float freq, float voltage) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
-        if (VESC_CAN_ID_DEFAULT != 0) {
+        sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
+        if (s_primary_vesc_id != 0) {
             sendVescCanBuffer(0, payload, slen + 1);
         }
     }
@@ -1677,8 +1687,8 @@ void VescHandler::sendFocPlayStop() {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
-        if (VESC_CAN_ID_DEFAULT != 0) {
+        sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
+        if (s_primary_vesc_id != 0) {
             sendVescCanBuffer(0, payload, slen + 1);
         }
     }
@@ -1729,8 +1739,8 @@ void VescHandler::triggerFocHorn(bool active) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
         if (s_can_initialized) {
-            sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
-            if (VESC_CAN_ID_DEFAULT != 0) {
+            sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
+            if (s_primary_vesc_id != 0) {
                 sendVescCanBuffer(0, payload, slen + 1);
             }
         }
@@ -1881,16 +1891,16 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        // 1. Transmit official COMM_SET_MCCONF_TEMP (48) via CAN multi-frame buffer to primary VESC (76) & 0
-        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, p_idx);
-        if (VESC_CAN_ID_DEFAULT != 0) {
+        // 1. Transmit official COMM_SET_MCCONF_TEMP (48) via CAN multi-frame buffer to primary VESC & 0
+        sendVescCanBuffer(s_primary_vesc_id, payload, p_idx);
+        if (s_primary_vesc_id != 0) {
             sendVescCanBuffer(0, payload, p_idx);
         }
 
         // 2. Hardware Native CAN Limits: Motor Phase Amps (CAN_PACKET_CONF_CURRENT_LIMITS ID 21)
         twai_message_t can_lim;
         can_lim.extd = 1;
-        can_lim.identifier = (21 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC (76)
+        can_lim.identifier = (21 << 8) | s_primary_vesc_id; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC
         can_lim.data_length_code = 8;
         int32_t min_mot = (Settings.get().brake_mode == 0) ? 0 : 
                           ((Settings.get().brake_mode == 1) ? (int32_t)(-12.0f * 1000.0f) : (int32_t)(-max_phase_amps * 1000.0f));
@@ -1912,7 +1922,7 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         // 3. Hardware Native CAN Limits: Battery Amps (CAN_PACKET_CONF_CURRENT_LIMITS_IN ID 23)
         twai_message_t can_lim_in;
         can_lim_in.extd = 1;
-        can_lim_in.identifier = (23 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS_IN -> Target VESC (76)
+        can_lim_in.identifier = (23 << 8) | s_primary_vesc_id; // CAN_PACKET_CONF_CURRENT_LIMITS_IN -> Target VESC
         can_lim_in.data_length_code = 8;
         int32_t min_bat = (Settings.get().brake_mode == 0) ? 0 : 
                           ((Settings.get().brake_mode == 1) ? (int32_t)(-8.0f * 1000.0f) : (int32_t)(-max_battery_amps * 1000.0f));
@@ -1935,7 +1945,7 @@ void VescHandler::sendModeLimits(float max_speed_kmh, float max_power_watts, flo
         if (cutoff_start > 20.0f && cutoff_end > 20.0f) {
             twai_message_t can_cut;
             can_cut.extd = 1;
-            can_cut.identifier = (29 << 8) | VESC_CAN_ID_DEFAULT;
+            can_cut.identifier = (29 << 8) | s_primary_vesc_id;
             can_cut.data_length_code = 8;
             int32_t cut_s = (int32_t)(cutoff_start * 1000.0f);
             int32_t cut_e = (int32_t)(cutoff_end * 1000.0f);
@@ -1995,10 +2005,12 @@ void VescHandler::sendTcsPhaseLimit(float max_phase_amps) {
     if (s_can_initialized) {
         twai_message_t can_lim;
         can_lim.extd = 1;
-        can_lim.identifier = (21 << 8) | VESC_CAN_ID_DEFAULT; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC
+        can_lim.identifier = (21 << 8) | s_primary_vesc_id; // CAN_PACKET_CONF_CURRENT_LIMITS -> Target VESC
         can_lim.data_length_code = 8;
+        float full_phase = ModeManager::instance().getActiveLimits().max_phase_amps;
+        if (full_phase < 20.0f) full_phase = 20.0f;
         int32_t min_mot = (Settings.get().brake_mode == 0) ? 0 : 
-                          ((Settings.get().brake_mode == 1) ? (int32_t)(-12.0f * 1000.0f) : (int32_t)(-max_phase_amps * 1000.0f));
+                          ((Settings.get().brake_mode == 1) ? (int32_t)(-12.0f * 1000.0f) : (int32_t)(-full_phase * 1000.0f));
         int32_t max_mot = (int32_t)(max_phase_amps * 1000.0f);
         can_lim.data[0] = (min_mot >> 24) & 0xFF;
         can_lim.data[1] = (min_mot >> 16) & 0xFF;
@@ -2058,8 +2070,8 @@ void VescHandler::syncWheelDiameterToVesc(float wheel_diam_in) {
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBuffer(VESC_CAN_ID_DEFAULT, payload, slen + 1);
-        if (VESC_CAN_ID_DEFAULT != 0) {
+        sendVescCanBuffer(s_primary_vesc_id, payload, slen + 1);
+        if (s_primary_vesc_id != 0) {
             sendVescCanBuffer(0, payload, slen + 1);
         }
     }

@@ -78,7 +78,7 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
 
     uint32_t now = millis();
     bool gps_valid = telemetry.gps.valid && (telemetry.gps.satellites >= 4) &&
-                     ((now >= telemetry.gps.last_fix_ms) && (now - telemetry.gps.last_fix_ms < 2500));
+                     ((uint32_t)(now - telemetry.gps.last_fix_ms) < 2500);
 
     float v_ref = 0.0f;
     if (gps_valid) {
@@ -203,9 +203,11 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
                     const float EMA_ALPHA = 0.04f;
                     _calibrated_diam_in = EMA_ALPHA * d_eff_in + (1.0f - EMA_ALPHA) * _calibrated_diam_in;
 
-                    // Periodic persistence in Settings (rounded to 0.1 inch)
+                    // Periodic persistence in Settings (rounded to 0.1 inch, with 60s cooldown against NVS wear)
                     float rounded = roundf(_calibrated_diam_in * 10.0f) / 10.0f;
-                    if (fabsf(Settings.get().wheel_diameter_in - rounded) >= 0.1f || !Settings.get().wheel_gps_calibrated) {
+                    if ((fabsf(Settings.get().wheel_diameter_in - rounded) >= 0.1f || !Settings.get().wheel_gps_calibrated) &&
+                        (uint32_t)(now - _last_calib_eval_ms) >= 60000) {
+                        _last_calib_eval_ms = now;
                         Settings.get().wheel_diameter_in = rounded;
                         Settings.get().wheel_gps_calibrated = true;
                         Settings.save();

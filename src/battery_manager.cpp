@@ -161,7 +161,8 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
 
     // Check if battery voltage is within a plausible pack window (30.0V - 105.0V for 10S to 24S)
     // When powered by very low-voltage Lab PSU or disconnected, suppress battery stats
-    if (telemetry.voltage < 30.0f || telemetry.voltage > 105.0f) {
+    if (isnan(telemetry.voltage) || isnan(telemetry.current_amps) ||
+        telemetry.voltage < 30.0f || telemetry.voltage > 105.0f) {
         telemetry.battery_pct = -1.0f;
         telemetry.remaining_wh = -1.0f;
         telemetry.est_range_km = -1.0f;
@@ -294,7 +295,12 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
     }
 
     // 6. Self-Learning Battery Degradation / Full-Cycle Detection
-    if (telemetry.voltage > 57.5f) {
+    uint8_t cells = ModeManager::instance().getConfig().battery_cells;
+    if (cells < 10 || cells > 24) cells = 13;
+    float full_charge_thresh_v = cells * 4.15f;   // e.g. 53.95V for 13S
+    float low_discharge_thresh_v = cells * 3.45f; // e.g. 44.85V for 13S
+
+    if (telemetry.voltage >= full_charge_thresh_v) {
         _tracking_full_cycle = true;
         _cycle_start_v = telemetry.voltage;
         _cycle_wh_accum = 0.0f;
@@ -302,15 +308,21 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
 
     if (_tracking_full_cycle) {
         if (delta_wh > 0.0f) _cycle_wh_accum += delta_wh;
-        // When discharged down past 45.0V (~10% SoC), evaluate learned capacity
-        if (telemetry.voltage < 45.0f && _cycle_wh_accum > (prof.learned_wh * 0.65f)) {
+        // When discharged down past low threshold (~10% SoC), evaluate learned capacity
+        if (telemetry.voltage < low_discharge_thresh_v && _cycle_wh_accum > (prof.learned_wh * 0.65f)) {
             _tracking_full_cycle = false;
             // Extrapolate full 100% capacity from the 100%->10% test
             float measured_full_wh = _cycle_wh_accum / 0.90f;
             // Exponential moving average: 85% previous, 15% new measurement
             prof.learned_wh = (prof.learned_wh * 0.85f) + (measured_full_wh * 0.15f);
             prof.charge_cycles++;
-            prof.health_soh_pct = (prof.learned_wh / prof.nominal_wh) * 100.0f;
+            if (prof.nominal_wh > 10.0f) {
+                prof.health_soh_pct = (prof.learned_wh / prof.nominal_wh) * 100.0f;
+            } else {
+                prof.health_soh_pct = 100.0f;
+            }
+            if (prof.health_soh_pct > 120.0f) prof.health_soh_pct = 120.0f;
+            if (prof.health_soh_pct < 10.0f)  prof.health_soh_pct = 10.0f;
             saveProfiles();
             Serial.printf("[BATTERY] Updated health! Learned Wh: %.0f, Health: %.1f%%\n",
                           prof.learned_wh, prof.health_soh_pct);

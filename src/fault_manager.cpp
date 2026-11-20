@@ -87,8 +87,8 @@ void FaultManager::recordFault(uint8_t code, float v, float i, float phase_i, fl
     _active_fault = code;
     uint32_t now = millis();
 
-    // Prevent spamming the blackbox if same fault occurs repeatedly within 5 seconds
-    if (_last_logged_code == code && (now - _last_logged_time_ms < 5000)) {
+    // Prevent spamming the blackbox: enforce a global cooldown of at least 3.0s between flash writes
+    if ((uint32_t)(now - _last_logged_time_ms) < 3000) {
         return;
     }
 
