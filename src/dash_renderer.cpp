@@ -336,10 +336,6 @@ void DashboardRenderer::drawPillToggle(int x, int y, bool on, const ColorThemePa
     _canvas->fillCircle(knobX, knobY, 11, knobCol);
 }
 
-void DashboardRenderer::drawSettingsGearIcon(int cx, int cy, uint16_t col, uint16_t bg) {
-    // Hidden / clean top-right corner (no visible gear wheel)
-}
-
 void DashboardRenderer::drawLockIcon(int cx, int cy, uint16_t col, uint16_t bg) {
     // Clean geometric padlock: curved shackle + rounded body + keyhole
     _canvas->drawArc(cx, cy - 5, 5, 7, 180.0f, 360.0f, col);
@@ -1147,14 +1143,15 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     }
 
     // 1b. Top Status Header: Clock in Center (only shown when GPS has valid fix)
-    bool gps_en_changed = (_cache.gps_enabled != telemetry.gps_enabled);
-    bool gps_clock_valid = telemetry.gps_enabled && telemetry.gps.valid && (telemetry.gps.satellites > 0);
+    int8_t cur_gps_en = telemetry.gps_enabled ? 1 : 0;
+    bool gps_en_changed = (_cache.gps_enabled != cur_gps_en);
+    int8_t gps_clock_valid = (telemetry.gps_enabled && telemetry.gps.valid && (telemetry.gps.satellites > 0)) ? 1 : 0;
     bool clock_vis_changed = (_cache.clock_visible != gps_clock_valid);
     bool clock_changed = strcmp(_cache.clock_str, telemetry.clock_str) != 0;
 
     if (!_hyper_inited || clock_vis_changed || gps_en_changed || (gps_clock_valid && clock_changed)) {
         _cache.clock_visible = gps_clock_valid;
-        _cache.gps_enabled = telemetry.gps_enabled;
+        _cache.gps_enabled = cur_gps_en;
         snprintf(_cache.clock_str, sizeof(_cache.clock_str), "%s", telemetry.clock_str);
 
         if (telemetry.fault_code == 0) {
@@ -1194,7 +1191,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
     // 3. Hero Digital Speed Readout (Roboto Bold 72px smooth tabular digits)
     int cur_spd_int = (int)(spd + 0.5f);
-    bool gps_connected = telemetry.gps_enabled && (telemetry.gps.valid && telemetry.gps.satellites >= 4);
+    int8_t gps_connected = (telemetry.gps_enabled && (telemetry.gps.valid && telemetry.gps.satellites >= 4)) ? 1 : 0;
     if (!_hyper_inited || cur_spd_int != _cache.speed) {
         _cache.speed = cur_spd_int;
         char spdBuf[16];
@@ -1397,9 +1394,10 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         }
     }
 
-    if (btn_layout_changed || (int)telemetry.ride_mode != _cache.ride_mode || banner_now != _cache.banner_active) {
+    int8_t cur_banner = banner_now ? 1 : 0;
+    if (btn_layout_changed || (int)telemetry.ride_mode != _cache.ride_mode || cur_banner != _cache.banner_active) {
         _cache.ride_mode = (int)telemetry.ride_mode;
-        _cache.banner_active = banner_now;
+        _cache.banner_active = cur_banner;
         if (banner_now) {
             _canvas->fillRoundRect(613, 380, 152, 72, 16, mCol);
             _canvas->drawRoundRect(613, 380, 152, 72, 16, mCol);
@@ -1420,7 +1418,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     bool badge_cfg_changed = (_cache.show_gforce != (gf_on ? 1 : 0)) ||
                              (_cache.show_incline != (inc_on ? 1 : 0)) ||
                              (_cache.show_light_btn != (lb_on ? 1 : 0)) ||
-                             (_cache.incline_gforce_enabled != telemetry.incline_gforce_enabled);
+                             (_cache.incline_gforce_enabled != (telemetry.incline_gforce_enabled ? 1 : 0));
 
     int gf_x = -1, gf_y = 416;
     int inc_x = -1, inc_y = 416;
@@ -1802,13 +1800,13 @@ void DashboardRenderer::drawFaultBanner(uint8_t fault_code) {
     uint32_t now = millis();
     bool flash = ((now / 350) % 2) == 0;
     uint16_t bg_col = flash ? pal.accent_danger : blendRgb565(pal.surface, pal.accent_danger, 140);
-    uint16_t border_col = flash ? COLOR_WHITE : pal.accent_danger;
-    uint16_t fg_col = COLOR_WHITE;
+    uint16_t border_col = flash ? onPrimaryFg(pal) : pal.accent_danger;
+    uint16_t fg_col = onPrimaryFg(pal);
 
     drawCard(20, 8, 760, 56, bg_col, border_col, 12);
 
     _canvas->fillRoundRect(28, 14, 44, 44, 8, pal.accent_danger);
-    _canvas->drawRoundRect(28, 14, 44, 44, 8, COLOR_WHITE);
+    _canvas->drawRoundRect(28, 14, 44, 44, 8, onPrimaryFg(pal));
     drawSmoothText(UIF_HEADING, "!", 50, 36, textdatum_t::middle_center, fg_col, pal.accent_danger);
 
     char titleBuf[64];
@@ -1893,7 +1891,7 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
             }
             drawCard(150, 14, 500, 48, pal.accent_danger, pal.accent_danger, 14);
             drawSmoothText(UIF_HEADING, "DIEBSTAHL-ALARM AKTIV!", 400, 38,
-                           textdatum_t::middle_center, COLOR_WHITE, pal.accent_danger);
+                           textdatum_t::middle_center, onPrimaryFg(pal), pal.accent_danger);
 
             char moveBuf[80];
             snprintf(moveBuf, sizeof(moveBuf), "BEWEGUNG ERKANNT (%.1f m) — FOC MOTOR-SIRENE AKTIV", telemetry.locked_moved_meters);
@@ -2432,13 +2430,6 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
             drawPinChangeModal();
         }
         return;
-    }
-
-    // ------------------------------------------------------------------
-    // TABS 0/1/2: ECO / SPORT / RACE LIMITS (Tuning Mode Only)
-    // ------------------------------------------------------------------
-    if (_pin_modal_open) {
-        drawPinChangeModal();
     }
 }
 
@@ -3831,7 +3822,7 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
 
             drawCard(20, 82, 760, 128, pal.surface, pal.border, 12);
             drawSmoothText(UIF_HEADING, "WIE ÖFFNE ICH DIE EINSTELLUNGEN?", 38, 96, textdatum_t::top_left, pal.primary, pal.surface);
-            drawSmoothText(UIF_BODY, "Im Fahr-Dashboard oben rechts das Zahnrad-Symbol kurz gedrückt halten (500ms).", 38, 130, textdatum_t::top_left, pal.text, pal.surface);
+            drawSmoothText(UIF_BODY, "Im Fahr-Dashboard oben rechts kurz tippen oder halten, um Einstellungen zu öffnen.", 38, 130, textdatum_t::top_left, pal.text, pal.surface);
             drawSmoothText(UIF_BODY, "Dort kannst du Theme, TCS, Akku-Zellen, Bremse & Sicherheit anpassen.", 38, 158, textdatum_t::top_left, pal.muted, pal.surface);
             drawSmoothText(UIF_SMALL, "Zurück zum Cockpit jederzeit über [< DASH] oder [FERTIG].", 38, 186, textdatum_t::top_left, pal.muted, pal.surface);
 

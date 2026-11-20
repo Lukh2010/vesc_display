@@ -66,6 +66,7 @@ public:
         _last_race_split_0_70 = -999.0f;
         _last_race_g_force_x10 = -999;
         _mode_banner_drawn_mode = -1;
+        _mode_banner_active = false;
         _pin_screen_drawn = false;
         _last_pin_bat_pct = -999;
         _last_pin_volt_x10 = -999;
@@ -159,7 +160,6 @@ private:
     // Common UI Helpers
     void drawCard(int x, int y, int w, int h, uint16_t bg, uint16_t border, int r = 10);
     void drawPillToggle(int x, int y, bool on, const ColorThemePalette &pal);
-    void drawSettingsGearIcon(int cx, int cy, uint16_t col, uint16_t bg);
     void drawLockIcon(int cx, int cy, uint16_t col, uint16_t bg);
 
     // Screen State
@@ -171,7 +171,7 @@ private:
     int8_t          _mode_banner_drawn_mode;
 
     // Menu / Settings Configurator State
-    uint8_t  _settings_tab_idx; // SettingsTab (0..6)
+    uint8_t  _settings_tab_idx; // SettingsTab (0..4)
     uint8_t  _last_rendered_tab;
     bool     _settings_inited;
     bool     _menu_dirty;
@@ -214,26 +214,18 @@ private:
 
         // Hyper 35kW & Status Caches
         int ride_mode;
-        bool tuning_mode;
-        bool banner_active;
-        int8_t boost_btn_tuning;
+        int8_t banner_active;
         int8_t boost_active;
-        bool hazard_active;
-        uint8_t light_mode;
-        uint8_t light_hue;
-        uint8_t light_brightness;
         int8_t lights_enabled;
         int8_t tcs_active;
         int8_t tpms_warning;
 
         // Clock & GPS Satellite Caches
         char clock_str[12];
-        uint8_t gps_sats;
-        bool gps_valid;
-        bool use_gps_speed;
-        bool gps_enabled;
-        bool incline_gforce_enabled;
-        bool clock_visible;
+        int8_t gps_valid;
+        int8_t gps_enabled;
+        int8_t incline_gforce_enabled;
+        int8_t clock_visible;
         uint8_t show_gforce;
         uint8_t show_incline;
         uint8_t show_light_btn;
@@ -241,12 +233,10 @@ private:
 
         void invalidate() {
             clock_str[0] = '\0';
-            gps_sats = 255;
-            gps_valid = false;
-            use_gps_speed = false;
-            gps_enabled = true;
-            incline_gforce_enabled = true;
-            clock_visible = false;
+            gps_valid = -1;
+            gps_enabled = -1;
+            incline_gforce_enabled = -1;
+            clock_visible = -1;
             show_gforce = 255;
             show_incline = 255;
             show_light_btn = 255;
@@ -284,15 +274,9 @@ private:
             ride_sec = 0xFFFFFFFF;
 
             ride_mode = -1;
-            tuning_mode = false;
-            banner_active = false;
-            boost_btn_tuning = -1;
+            banner_active = -1;
             boost_active = -1;
-            hazard_active = false;
             lights_enabled = -1;
-            light_mode = 255;
-            light_hue = 255;
-            light_brightness = 255;
             tcs_active = -1;
             tpms_warning = -1;
         }
