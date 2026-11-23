@@ -218,9 +218,14 @@ DashboardRenderer::DashboardRenderer()
       _pin_modal_success_ms(0),
       _wizard_step(0),
       _wizard_inited(false),
+      _wizard_pin_warn(false),
       _last_wizard_step(-1),
       _last_wizard_pin_len(-1),
       _wifi_bridge_inited(false),
+      _last_fault_code(0),
+      _last_fault_flash(-1),
+      _ota_inited(false),
+      _last_ota_pct(-1),
       _race_records_drawn(false),
       _race_dyno_drawn(false),
       _last_race_arc_angle(130.0f),
@@ -244,6 +249,7 @@ DashboardRenderer::DashboardRenderer()
     }
     _wizard_pin_buf[0] = '\0';
     _pin_modal_buf[0] = '\0';
+    _last_ota_status[0] = '\0';
     _last_needle.valid = false;
     _cache.invalidate();
     _stats_cache.invalidate();
@@ -542,7 +548,21 @@ void DashboardRenderer::triggerNeedleSweep() {
 // ==============================================================================
 // Top-Level Screen Dispatcher
 // ==============================================================================
+namespace {
+struct CanvasWriteGuard {
+    LovyanGFX *c;
+    explicit CanvasWriteGuard(LovyanGFX *canvas) : c(canvas) {
+        if (c) c->startWrite();
+    }
+    ~CanvasWriteGuard() {
+        if (c) c->endWrite();
+    }
+};
+} // namespace
+
 void DashboardRenderer::render(const DashTelemetry &telemetry) {
+    CanvasWriteGuard write_guard(_canvas);
+
     // 0. Boot Animation Sequence
     if (_boot_anim_active) {
         uint32_t now = millis();
@@ -580,11 +600,16 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         _settings_inited = false;
         _wifi_bridge_inited = false;
         _wizard_inited = false;
+        _ota_inited = false;
+        _last_fault_flash = -1;
         _last_rendered_tab = 255;
         _menu_dirty = true;
     }
 
     // 0b. First-Time Setup Wizard / OTA / PIN Lockscreen priority
+    if (!OtaManager::instance().isUpdating()) {
+        _ota_inited = false;
+    }
     if (!telemetry.setup_completed && telemetry.screen == SCREEN_SETUP_WIZARD) {
         // Fall through to screen dispatch
     } else if (OtaManager::instance().isUpdating()) {
@@ -662,6 +687,14 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             invalidateCache();
             _last_needle.valid = false;
         }
+    }
+
+    // If fault just cleared, invalidate caches BEFORE rendering so the top area redraws immediately
+    if (telemetry.screen != SCREEN_SETUP_WIZARD && telemetry.fault_code == 0 && _last_fault_code != 0) {
+        _last_fault_code = 0;
+        _last_fault_flash = -1;
+        invalidateCache();
+        _screen_dirty = true;
     }
 
     const ColorThemePalette &pal = currentTheme();
@@ -757,6 +790,16 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             break;
     }
 
+    // Global VESC Fault Alarm Banner (cached against fault_code & 350ms flash state, visible on all active screens)
+    if (telemetry.screen != SCREEN_SETUP_WIZARD && telemetry.fault_code != 0) {
+        int8_t flash = (int8_t)(((millis() / 350) % 2) == 0 ? 1 : 0);
+        if (telemetry.fault_code != _last_fault_code || flash != _last_fault_flash) {
+            _last_fault_code = telemetry.fault_code;
+            _last_fault_flash = flash;
+            drawFaultBanner(telemetry.fault_code);
+        }
+    }
+
     // Subtle Stealth Indicator Dot in Top-Right Corner (790, 10)
     // Legal mode (!tuning_mode): lit subtle red dot; Tuning mode: completely hidden
     if (telemetry.screen != SCREEN_SETUP_WIZARD) {
@@ -784,9 +827,6 @@ void DashboardRenderer::renderRideDashboard(const DashTelemetry &telemetry) {
         initHyper35kwStyle(telemetry);
     }
     renderHyper35kwStyle(telemetry);
-    if (telemetry.fault_code != 0) {
-        drawFaultBanner(telemetry.fault_code);
-    }
 }
 
 // Design Upgrade 4: Crisp Vector Badges for Bottom-Left Circular Instruments
@@ -1382,11 +1422,12 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     // 9. Right Column: Bottom Touch Action Buttons
     // ALWAYS render BOTH buttons in bottom-right in all modes: [ BOOST ] (x: 445..597) and [ MODE ] (x: 613..765)
     bool btn_layout_changed = !_hyper_inited;
-    int8_t cur_boost = telemetry.boost_active ? 1 : 0;
+    bool boost_vis = telemetry.tuning_mode && telemetry.boost_active;
+    int8_t cur_boost = boost_vis ? 1 : 0;
 
     if (btn_layout_changed || cur_boost != _cache.boost_active) {
         _cache.boost_active = cur_boost;
-        if (telemetry.boost_active) {
+        if (boost_vis) {
             _canvas->fillRoundRect(445, 380, 152, 72, 16, pal.primary);
             _canvas->drawRoundRect(445, 380, 152, 72, 16, pal.primary);
             drawSmoothText(UIF_HEADING, "BOOST", 521, 416, textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
@@ -2053,6 +2094,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     if (!telemetry.tuning_mode && _settings_tab_idx < TAB_DASH) {
         _settings_tab_idx = TAB_DASH;
         _last_rendered_tab = 255;
+        _cache.invalidate();
         _menu_dirty = true;
     }
 
@@ -2097,6 +2139,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
     if (tabChanged) {
         _last_rendered_tab = _settings_tab_idx;
         _cache.invalidate();
+        _last_fault_flash = -1;
 
         _canvas->fillRect(0, 54, 800, 58, pal.bg);
 
@@ -2438,7 +2481,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
 
 void DashboardRenderer::drawPinChangeModal() {
     const ColorThemePalette &pal = currentTheme();
-    int mx = 160, my = 32, mw = 480, mh = 416;
+    int mx = 160, my = 26, mw = 480, mh = 426;
     drawCard(mx, my, mw, mh, pal.surface, pal.primary, 16);
     _canvas->drawRoundRect(mx + 1, my + 1, mw - 2, mh - 2, 15, pal.primary);
 
@@ -2482,9 +2525,9 @@ void DashboardRenderer::drawPinChangeModal() {
         { "7", "8", "9" },
         { "DEL", "0", "OK" }
     };
-    int kw = 100, kh = 48;
+    int kw = 104, kh = 50;
     int kx0 = mx + (mw - (3 * kw + 2 * 14)) / 2;
-    int ky0 = my + 126;
+    int ky0 = my + 124;
 
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 3; c++) {
@@ -2569,10 +2612,10 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
 
     // 0. PIN Change Modal Touch Handling
     if (_pin_modal_open) {
-        int mx = 160, my = 32, mw = 480, mh = 416;
+        int mx = 160, my = 26, mw = 480;
         if ((tx >= mx + mw - 55 && tx <= mx + mw && ty >= my && ty <= my + 52) ||
             _pin_modal_success ||
-            (tx < mx || tx > mx + mw || ty < my || ty > my + mh)) {
+            (tx < mx || tx > mx + mw || ty < my || ty > 475)) {
             _pin_modal_open = false;
             _settings_inited = false;
             _last_rendered_tab = 255;
@@ -2581,20 +2624,21 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             return true;
         }
 
-        int kw = 100, kh = 48;
+        int kw = 104, kh = 50;
         int kx0 = mx + (mw - (3 * kw + 2 * 14)) / 2;
-        int ky0 = my + 126;
+        int ky0 = my + 124;
 
+        // Continuous keypad hitbox mapping without dead zones (bottom row tolerant up to Y=475)
         int c = -1;
-        for (int col = 0; col < 3; col++) {
-            int bx = kx0 + col * (kw + 14);
-            if (tx >= bx && tx <= bx + kw) { c = col; break; }
-        }
+        if (tx >= kx0 - 10 && tx < kx0 + kw + 7) c = 0;
+        else if (tx >= kx0 + kw + 7 && tx < kx0 + 2 * kw + 21) c = 1;
+        else if (tx >= kx0 + 2 * kw + 21 && tx <= kx0 + 3 * kw + 38) c = 2;
+
         int r = -1;
-        for (int row = 0; row < 4; row++) {
-            int by = ky0 + row * (kh + 10);
-            if (ty >= by && ty <= by + kh) { r = row; break; }
-        }
+        if (ty >= ky0 - 6 && ty < ky0 + kh + 5) r = 0;
+        else if (ty >= ky0 + kh + 5 && ty < ky0 + 2 * kh + 15) r = 1;
+        else if (ty >= ky0 + 2 * kh + 15 && ty < ky0 + 3 * kh + 25) r = 2;
+        else if (ty >= ky0 + 3 * kh + 25 && ty <= 475) r = 3;
 
         if (r >= 0 && c >= 0) {
             static const char KEY_MAP[4][3] = {
@@ -2680,6 +2724,7 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
     if (!telemetry.tuning_mode && _settings_tab_idx < TAB_DASH) {
         _settings_tab_idx = TAB_DASH;
         _last_rendered_tab = 255;
+        _cache.invalidate();
         _menu_dirty = true;
         return true;
     }
@@ -3207,14 +3252,15 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
         }
     }
 
-    if (telemetry.race_state == 1) { // 1 = COUNTDOWN (5s)
+    if (telemetry.race_state == 1) { // 1 = ARMED / COUNTDOWN (Auto-Rollout at >= 1.0 km/h)
         telemetry.boost_active = true;
         ModeManager::instance().setBoostActive(true);
         telemetry.boost_end_ms = now + 10000;
         uint32_t elapsed_cd = now - telemetry.race_countdown_start_ms;
+        if (elapsed_cd > 5000) elapsed_cd = 5000;
         telemetry.race_elapsed_sec = (float)elapsed_cd / 1000.0f;
-        if (elapsed_cd >= 5000) {
-            telemetry.race_state = 2; // 2 = MEASURING
+        if (telemetry.speed_kmh >= 1.0f) {
+            telemetry.race_state = 2; // 2 = MEASURING (Auto-Rollout triggered!)
             telemetry.race_launch_start_ms = now;
             telemetry.race_elapsed_sec = 0.0f;
             telemetry.race_split_0_22 = 0.0f;
@@ -3396,8 +3442,10 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     float deg2rad = 3.14159265f / 180.0f;
 
     int cur_cd = (telemetry.race_state == 1) ? (5 - (int)telemetry.race_elapsed_sec) : -1;
-    if (cur_cd < 1) cur_cd = 1;
-    if (cur_cd > 5) cur_cd = 5;
+    if (telemetry.race_state == 1) {
+        if (cur_cd < 0) cur_cd = 0;
+        if (cur_cd > 5) cur_cd = 5;
+    }
 
     // Evaluate state changes ONCE BEFORE overwriting caches
     bool state_changed = (telemetry.race_state != _last_race_state);
@@ -3416,10 +3464,15 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
             drawSmoothText(UIF_MED_NUM, timeBuf, 304, 30, textdatum_t::middle_center,
                            (telemetry.race_state == 3) ? pal.accent_ok : pal.text, pal.bg);
         } else if (telemetry.race_state == 1) {
-            char cdTitle[24];
-            snprintf(cdTitle, sizeof(cdTitle), "LAUNCH IN %d s", cur_cd);
+            char cdTitle[28];
+            if (cur_cd == 0) {
+                snprintf(cdTitle, sizeof(cdTitle), "BEREIT — LOSFAHREN!");
+            } else {
+                snprintf(cdTitle, sizeof(cdTitle), "LAUNCH IN %d s", cur_cd);
+            }
             drawSmoothText(UIF_HEADING, cdTitle, 304, 30,
-                           textdatum_t::middle_center, pal.accent_warn, pal.bg);
+                           textdatum_t::middle_center,
+                           (cur_cd == 0) ? pal.accent_ok : pal.accent_warn, pal.bg);
         } else {
             drawSmoothText(UIF_HEADING, "LAUNCH CONTROL", 304, 30,
                            textdatum_t::middle_center, pal.muted, pal.bg);
@@ -3481,17 +3534,20 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
                 _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, pal.primary);
                 drawSmoothText(UIF_BODY, "START LAUNCH", cx, btnY + btnH / 2, textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
             }
-        } else if (telemetry.race_state == 1) { // COUNTDOWN (5s)
-            char cdBuf[16];
-            if (cur_cd == 1) {
+        } else if (telemetry.race_state == 1) { // ARMED / COUNTDOWN (Auto-Rollout)
+            char cdBuf[24];
+            if (cur_cd == 0) {
+                snprintf(cdBuf, sizeof(cdBuf), "ROLLOUT >= 1 km/h");
+            } else if (cur_cd == 1) {
                 snprintf(cdBuf, sizeof(cdBuf), "1 ... GO!");
             } else {
                 snprintf(cdBuf, sizeof(cdBuf), "%d ...", cur_cd);
             }
-            uint16_t armBg = blendRgb565(pal.surface, pal.accent_warn, pal.is_light ? 26 : 48);
+            uint16_t armCol = (cur_cd == 0) ? pal.accent_ok : pal.accent_warn;
+            uint16_t armBg = blendRgb565(pal.surface, armCol, pal.is_light ? 26 : 48);
             _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, armBg);
-            _canvas->drawRoundRect(cx - 106, btnY, 212, btnH, 24, pal.accent_warn);
-            drawSmoothText(UIF_BODY, cdBuf, cx, btnY + btnH / 2, textdatum_t::middle_center, pal.accent_warn, armBg);
+            _canvas->drawRoundRect(cx - 106, btnY, 212, btnH, 24, armCol);
+            drawSmoothText(UIF_BODY, cdBuf, cx, btnY + btnH / 2, textdatum_t::middle_center, armCol, armBg);
         } else if (telemetry.race_state == 2) { // MEASURING
             uint16_t runBg = blendRgb565(pal.surface, pal.accent_danger, pal.is_light ? 26 : 48);
             _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, runBg);
@@ -3899,18 +3955,24 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
             uint16_t okBd = (pinLen == 4) ? pal.accent_ok : pal.border;
             uint16_t okFg = (pinLen == 4) ? onPrimaryFg(pal) : pal.muted;
             drawCard(bx, by, kw, kh, okBg, okBd, 10);
-            drawSmoothText(UIF_BODY, (pinLen == 4) ? "OK" : "SKIP", bx + kw / 2, by + kh / 2,
+            drawSmoothText(UIF_BODY, "OK", bx + kw / 2, by + kh / 2,
                            textdatum_t::middle_center, okFg, okBg);
 
             if (pinLen == 4) {
                 _canvas->fillRoundRect(mx + 20, 396, mw - 40, 52, 12, pal.accent_ok);
                 drawSmoothText(UIF_HEADING, "PIN ÜBERNEHMEN & WEITER ->", 400, 422,
                                textdatum_t::middle_center, onPrimaryFg(pal), pal.accent_ok);
+            } else if (_wizard_pin_warn) {
+                uint16_t warnBg = blendRgb565(pal.surface_alt, pal.accent_danger, 32);
+                _canvas->fillRoundRect(mx + 20, 396, mw - 40, 52, 12, warnBg);
+                _canvas->drawRoundRect(mx + 20, 396, mw - 40, 52, 12, pal.accent_danger);
+                drawSmoothText(UIF_BODY, "BITTE GENAU 4 ZIFFERN EINGEBEN!", 400, 422,
+                               textdatum_t::middle_center, pal.accent_danger, warnBg);
             } else {
                 _canvas->fillRoundRect(mx + 20, 396, mw - 40, 52, 12, pal.surface_alt);
                 _canvas->drawRoundRect(mx + 20, 396, mw - 40, 52, 12, pal.border);
-                drawSmoothText(UIF_BODY, "ÜBERSPRINGEN (OHNE PIN) ->", 400, 422,
-                               textdatum_t::middle_center, pal.primary, pal.surface_alt);
+                drawSmoothText(UIF_BODY, "4 ZIFFERN EINGEBEN (ODER OBEN SKIP)", 400, 422,
+                               textdatum_t::middle_center, pal.muted, pal.surface_alt);
             }
         }
     } else if (_wizard_step == 2) {
@@ -3984,6 +4046,7 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
             char key = KEY_LBL[r][c];
             int len = (int)strlen(_wizard_pin_buf);
             if (key == '<') {
+                _wizard_pin_warn = false;
                 if (len > 0) {
                     _wizard_pin_buf[len - 1] = '\0';
                     strncpy(telemetry.wizard_pin_buf, _wizard_pin_buf, sizeof(telemetry.wizard_pin_buf) - 1);
@@ -3992,6 +4055,7 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
                 }
             } else if (key == '#') {
                 if (len == 4) {
+                    _wizard_pin_warn = false;
                     strncpy(Settings.get().pin_code, _wizard_pin_buf, sizeof(Settings.get().pin_code) - 1);
                     Settings.get().pin_code[sizeof(Settings.get().pin_code) - 1] = '\0';
                     Settings.get().pin_lock_enabled = true;
@@ -3999,14 +4063,13 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
                     _wizard_step = 2;
                     telemetry.wizard_step = 2;
                     _screen_dirty = true;
-                } else if (len == 0) {
-                    Settings.get().pin_lock_enabled = false;
-                    Settings.save();
-                    _wizard_step = 2;
-                    telemetry.wizard_step = 2;
+                } else {
+                    _wizard_pin_warn = true;
+                    _last_wizard_pin_len = -1;
                     _screen_dirty = true;
                 }
             } else if (key >= '0' && key <= '9') {
+                _wizard_pin_warn = false;
                 if (len < 4) {
                     _wizard_pin_buf[len] = key;
                     _wizard_pin_buf[len + 1] = '\0';
@@ -4020,16 +4083,19 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
 
         if (tx >= mx + 10 && tx <= mx + mw - 10 && ty >= 390 && ty <= 455) {
             if (strlen(_wizard_pin_buf) == 4) {
+                _wizard_pin_warn = false;
                 strncpy(Settings.get().pin_code, _wizard_pin_buf, sizeof(Settings.get().pin_code) - 1);
                 Settings.get().pin_code[sizeof(Settings.get().pin_code) - 1] = '\0';
                 Settings.get().pin_lock_enabled = true;
+                Settings.save();
+                _wizard_step = 2;
+                telemetry.wizard_step = 2;
+                _screen_dirty = true;
             } else {
-                Settings.get().pin_lock_enabled = false;
+                _wizard_pin_warn = true;
+                _last_wizard_pin_len = -1;
+                _screen_dirty = true;
             }
-            Settings.save();
-            _wizard_step = 2;
-            telemetry.wizard_step = 2;
-            _screen_dirty = true;
             return true;
         }
     } else if (_wizard_step == 2) {
@@ -4072,9 +4138,9 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
 }
 
 // ==============================================================================
-// SCREEN 9: WIRELESS OTA FIRMWARE UPDATE PROGRESS HUD (Theme-aware)
+// SCREEN 9: WIRELESS OTA FIRMWARE UPDATE PROGRESS HUD (Theme-aware, Differential)
 // ==============================================================================
-void DashboardRenderer::renderOtaScreen(int pct, const char *status) {
+void DashboardRenderer::initOtaScreen() {
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillScreen(pal.bg);
 
@@ -4089,22 +4155,47 @@ void DashboardRenderer::renderOtaScreen(int pct, const char *status) {
     drawSmoothText(UIF_BODY, "BITTE FAHRZEUG NICHT AUSSCHALTEN!", 400, 136,
                    textdatum_t::middle_center, pal.accent_danger, warnBg);
 
-    char pctStr[16];
-    snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
-    drawSmoothText(UIF_HERO_NUM, pctStr, 400, 214, textdatum_t::middle_center,
-                   (pct >= 100) ? pal.accent_ok : pal.primary, pal.surface);
-
-    int barX = 100, barY = 272, barW = 600, barH = 24;
-    _canvas->fillRoundRect(barX, barY, barW, barH, 12, pal.track);
-    int fillW = (pct * barW) / 100;
-    if (fillW > 8) {
-        _canvas->fillRoundRect(barX, barY, fillW, barH, 12, (pct >= 100) ? pal.accent_ok : pal.primary);
-    }
-
-    drawSmoothText(UIF_HEADING, status ? status : "Übertrage Firmware...", 400, 336,
-                   textdatum_t::middle_center, pal.text, pal.surface);
+    _canvas->fillRoundRect(100, 272, 600, 24, 12, pal.track);
     drawSmoothText(UIF_BODY, "Dual-Bank Safe Flash: Altes System bleibt bei Abbruch erhalten", 400, 392,
                    textdatum_t::middle_center, pal.muted, pal.surface);
 
-    Display.pushCanvas();
+    _ota_inited = true;
+    _last_ota_pct = -1;
+    _last_ota_status[0] = '\0';
+}
+
+void DashboardRenderer::renderOtaScreen(int pct, const char *status) {
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    const char *safe_status = status ? status : "Übertrage Firmware...";
+
+    if (!_ota_inited) {
+        initOtaScreen();
+    }
+
+    const ColorThemePalette &pal = currentTheme();
+
+    if (pct != _last_ota_pct) {
+        _last_ota_pct = pct;
+        _canvas->fillRect(260, 174, 280, 80, pal.surface);
+        char pctStr[16];
+        snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
+        drawSmoothText(UIF_HERO_NUM, pctStr, 400, 214, textdatum_t::middle_center,
+                       (pct >= 100) ? pal.accent_ok : pal.primary, pal.surface);
+
+        int barX = 100, barY = 272, barW = 600, barH = 24;
+        _canvas->fillRoundRect(barX, barY, barW, barH, 12, pal.track);
+        int fillW = (pct * barW) / 100;
+        if (fillW > 8) {
+            _canvas->fillRoundRect(barX, barY, fillW, barH, 12, (pct >= 100) ? pal.accent_ok : pal.primary);
+        }
+    }
+
+    if (strncmp(_last_ota_status, safe_status, sizeof(_last_ota_status) - 1) != 0) {
+        strncpy(_last_ota_status, safe_status, sizeof(_last_ota_status) - 1);
+        _last_ota_status[sizeof(_last_ota_status) - 1] = '\0';
+        _canvas->fillRect(60, 314, 680, 44, pal.surface);
+        drawSmoothText(UIF_HEADING, _last_ota_status, 400, 336,
+                       textdatum_t::middle_center, pal.text, pal.surface);
+    }
 }

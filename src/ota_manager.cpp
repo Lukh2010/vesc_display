@@ -246,6 +246,7 @@ void OtaManager::setupRoutes() {
                 _is_updating = false;
             }
         } else if (upload.status == UPLOAD_FILE_WRITE) {
+            if (!_is_updating || Update.hasError()) return;
             if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
                 Update.printError(Serial);
                 snprintf(_status_text, sizeof(_status_text), "Schreibfehler");

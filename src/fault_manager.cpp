@@ -52,6 +52,7 @@ void FaultManager::loadFromNvs() {
 }
 
 void FaultManager::saveToNvs() {
+    _prefs.begin("vesc_faults", false);
     _prefs.putUChar("f_count", _fault_count);
     for (uint8_t i = 0; i < _fault_count; i++) {
         char k[16];
@@ -87,8 +88,8 @@ void FaultManager::recordFault(uint8_t code, float v, float i, float phase_i, fl
     _active_fault = code;
     uint32_t now = millis();
 
-    // Prevent spamming the blackbox: enforce a global cooldown of at least 3.0s between flash writes
-    if ((uint32_t)(now - _last_logged_time_ms) < 3000) {
+    // Prevent spamming the blackbox: enforce cooldown only for identical consecutive faults
+    if (code == _last_logged_code && (uint32_t)(now - _last_logged_time_ms) < 3000) {
         return;
     }
 
@@ -130,6 +131,7 @@ void FaultManager::clearFaults() {
     _active_fault = 0;
     _last_logged_code = 0;
     memset(_history, 0, sizeof(_history));
+    _prefs.begin("vesc_faults", false);
     _prefs.clear();
     saveToNvs();
     Serial.println("[FAULT BLACKBOX] Cleared all stored fault history in NVS.");

@@ -2,6 +2,25 @@
 #include "vesc_uart.h"
 #include "settings_manager.h"
 #include <math.h>
+#include <stdlib.h>
+
+static bool verifyNmeaChecksum(const char* line) {
+    if (!line || line[0] != '$') return false;
+    const char* p = line + 1;
+    uint8_t csum = 0;
+    while (*p && *p != '*') {
+        csum ^= (uint8_t)*p;
+        p++;
+    }
+    if (*p != '*') return false;
+    p++; // Skip '*'
+    if (!p[0] || !p[1]) return false;
+    char hex[3] = { p[0], p[1], '\0' };
+    char *endptr = nullptr;
+    long expected = strtol(hex, &endptr, 16);
+    if (endptr != hex + 2) return false;
+    return (csum == (uint8_t)expected);
+}
 
 GpsTracker::GpsTracker()
     : _timezone_offset(1), // Default: UTC+1 (CET)
@@ -59,22 +78,24 @@ void GpsTracker::parseRmc(const char* line, DashTelemetry &telemetry) {
             token[t_len++] = *p++;
         }
         token[t_len] = '\0';
+        // Discard any remaining characters in oversized field to prevent tokenizer desync
+        while (*p && *p != ',' && *p != '*') p++;
         if (*p == ',' || *p == '*') p++;
 
         if (token_idx == 1 && t_len >= 6) {
-            raw_time = atof(token);
+            raw_time = strtof(token, nullptr);
         } else if (token_idx == 2 && t_len > 0) {
             status = token[0];
         } else if (token_idx == 3 && t_len > 0) {
-            raw_lat = atof(token);
+            raw_lat = strtod(token, nullptr);
         } else if (token_idx == 4 && t_len > 0) {
             lat_ns = token[0];
         } else if (token_idx == 5 && t_len > 0) {
-            raw_lon = atof(token);
+            raw_lon = strtod(token, nullptr);
         } else if (token_idx == 6 && t_len > 0) {
             lon_ew = token[0];
         } else if (token_idx == 7 && t_len > 0) {
-            speed_knots = atof(token);
+            speed_knots = strtof(token, nullptr);
         } else if (token_idx == 9 && t_len >= 6) {
             raw_date = atol(token);
         }
@@ -142,6 +163,8 @@ void GpsTracker::parseGga(const char* line, DashTelemetry &telemetry) {
             token[t_len++] = *p++;
         }
         token[t_len] = '\0';
+        // Discard any remaining characters in oversized field to prevent tokenizer desync
+        while (*p && *p != ',' && *p != '*') p++;
         if (*p == ',' || *p == '*') p++;
 
         if (token_idx == 6 && t_len > 0) {
@@ -149,9 +172,9 @@ void GpsTracker::parseGga(const char* line, DashTelemetry &telemetry) {
         } else if (token_idx == 7 && t_len > 0) {
             sats = (uint8_t)atoi(token);
         } else if (token_idx == 8 && t_len > 0) {
-            hdop = atof(token);
+            hdop = strtof(token, nullptr);
         } else if (token_idx == 9 && t_len > 0) {
-            alt = atof(token);
+            alt = strtof(token, nullptr);
         }
 
         token_idx++;
@@ -162,9 +185,15 @@ void GpsTracker::parseGga(const char* line, DashTelemetry &telemetry) {
     telemetry.gps.hdop = hdop;
     telemetry.gps.altitude_m = alt;
     telemetry.gps.valid = (fix_quality > 0 && sats >= 4);
+    if (fix_quality > 0) {
+        telemetry.gps.last_fix_ms = millis();
+    }
 }
 
 void GpsTracker::parseNmeaLine(const char* line, DashTelemetry &telemetry) {
+    if (!verifyNmeaChecksum(line)) {
+        return;
+    }
     if (strncmp(line, "$GNRMC", 6) == 0 || strncmp(line, "$GPRMC", 6) == 0) {
         parseRmc(line, telemetry);
     } else if (strncmp(line, "$GNGGA", 6) == 0 || strncmp(line, "$GPGGA", 6) == 0) {
@@ -222,16 +251,25 @@ void GpsTracker::update(DashTelemetry &telemetry) {
     }
 #endif
 
-    // Format top status bar clock string ("HH:MM")
+    // Format top status bar clock string ("HH:MM") only when hour or minute changes
+    static int8_t s_last_clock_h = -1;
+    static int8_t s_last_clock_m = -1;
+    int cur_h = -1;
+    int cur_m = -1;
+
     if (telemetry.gps.valid || telemetry.gps.last_fix_ms > 0) {
-        snprintf(telemetry.clock_str, sizeof(telemetry.clock_str), "%02d:%02d",
-                 telemetry.gps.hour, telemetry.gps.minute);
+        cur_h = telemetry.gps.hour;
+        cur_m = telemetry.gps.minute;
     } else {
         // Fallback clock when searching for satellites (based on uptime)
-        uint32_t up_m = (now / 60000) % 60;
-        uint32_t up_h = (12 + (now / 3600000)) % 24;
-        snprintf(telemetry.clock_str, sizeof(telemetry.clock_str), "%02d:%02d",
-                 (int)up_h, (int)up_m);
+        cur_m = (int)((now / 60000) % 60);
+        cur_h = (int)((12 + (now / 3600000)) % 24);
+    }
+
+    if (cur_h != s_last_clock_h || cur_m != s_last_clock_m) {
+        s_last_clock_h = (int8_t)cur_h;
+        s_last_clock_m = (int8_t)cur_m;
+        snprintf(telemetry.clock_str, sizeof(telemetry.clock_str), "%02d:%02d", cur_h, cur_m);
     }
 
     // --------------------------------------------------------------------------

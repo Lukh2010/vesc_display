@@ -147,12 +147,17 @@ void SettingsManager::begin() {
         _race_records.best_0_50_sec = _prefs.getFloat("rc_best50", 0.0f);
         _race_records.best_0_70_sec = _prefs.getFloat("rc_best70", 0.0f);
 
-        // One-time automatic migration: fix boards that had adc_ch set to 1 by previous buggy default
+        // One-time automatic migration: fix boards that had invalid adc_ch or keep existing valid channel
         if (!_prefs.getBool("adc_v2_fixed", false)) {
-            _settings.throttle_adc_channel = 0; // Force default to ADC1
-            _prefs.putUChar("adc_ch", 0);
+            if (_settings.throttle_adc_channel > 7) {
+                _settings.throttle_adc_channel = 0; // Force default to ADC1
+                _prefs.putUChar("adc_ch", 0);
+                Serial.println("[SETTINGS] Fixed out-of-range throttle ADC channel to 0 (standard).");
+            } else {
+                Serial.printf("[SETTINGS] Preserved existing throttle ADC channel %u during migration.\n",
+                              _settings.throttle_adc_channel);
+            }
             _prefs.putBool("adc_v2_fixed", true);
-            Serial.println("[SETTINGS] Migrated throttle ADC channel to ADC1 (standard).");
         }
 
         _last_saved = _settings;

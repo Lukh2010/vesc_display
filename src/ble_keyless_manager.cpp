@@ -284,6 +284,18 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
         Settings.save();
         Serial.printf("[BLE KEYLESS] Paired successfully with %s! Saved to NVS.\n", addrStr);
     } else {
+        if (strcasecmp(addrStr, Settings.get().ble_paired_addr) != 0) {
+            Serial.printf("[BLE KEYLESS] Rejected unauthorized device: %s (expected %s)\n",
+                          addrStr, Settings.get().ble_paired_addr);
+            _connected = false;
+#if !defined(NATIVE_SIMULATOR) && ENABLE_BLE_KEYLESS
+            if (s_bleServer) {
+                s_bleServer->disconnect(connId);
+                BLEDevice::startAdvertising();
+            }
+#endif
+            return false;
+        }
         Serial.printf("[BLE KEYLESS] Paired smartphone reconnected! Address: %s\n", addrStr);
     }
 

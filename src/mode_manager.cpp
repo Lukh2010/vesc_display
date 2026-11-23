@@ -9,11 +9,13 @@ ModeManager& ModeManager::instance() {
 }
 
 ModeManager::ModeManager()
-    : _tuning_mode(false),
+    : _has_saved_snapshot(false),
+      _tuning_mode(false),
       _boost_active(false),
       _is_locked(false),
       _ride_mode(MODE_ECO),
       _limits_dirty(false) {
+    memset(&_last_saved_config, 0, sizeof(_last_saved_config));
     setFactoryDefaults();
 }
 
@@ -212,12 +214,18 @@ void ModeManager::loadFromNvs() {
             healed = true;
         }
     }
+    _last_saved_config = _config;
+    _has_saved_snapshot = true;
     if (healed) {
         saveToNvs();
     }
 }
 
 void ModeManager::saveToNvs() {
+    if (_has_saved_snapshot && memcmp(&_config, &_last_saved_config, sizeof(VehicleModeConfig)) == 0) {
+        return;
+    }
+
     const char *leg_prefixes[PROFILE_MODE_COUNT] = { "l0", "l1", "l2" };
     const char *tun_prefixes[PROFILE_MODE_COUNT] = { "t0", "t1", "t2" };
     char key[16];
@@ -264,6 +272,8 @@ void ModeManager::saveToNvs() {
     _prefs.putUChar("b_cells", _config.battery_cells);
     _prefs.putFloat("b_cut_s", _config.battery_cutoff_start);
     _prefs.putFloat("b_cut_e", _config.battery_cutoff_end);
+    _last_saved_config = _config;
+    _has_saved_snapshot = true;
     Serial.println("[MODE_MGR] Saved vehicle & mode configurations (v2) to NVS flash.");
 }
 

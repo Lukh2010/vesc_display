@@ -73,6 +73,11 @@ public:
         _last_pin_vesc_conn = -1;
         _last_ble_conn = false;
         _last_ble_bars = 255;
+        _last_fault_flash = -1;
+        _ota_inited = false;
+        _last_ota_pct = -1;
+        _last_ota_status[0] = '\0';
+        _wizard_pin_warn = false;
     }
 
     // Color Theme & Palettes
@@ -151,6 +156,7 @@ private:
     void renderSetupWizard(const DashTelemetry &telemetry);
 
     // Screen 9: Wireless OTA Firmware Update Progress HUD
+    void initOtaScreen();
     void renderOtaScreen(int pct, const char *status);
 
     // PIN-Lockscreen & VESC Alarm Banner
@@ -386,9 +392,17 @@ private:
     uint8_t  _wizard_step;       // 0=Welcome, 1=PIN, 2=Hardware
     char     _wizard_pin_buf[8]; // PIN input buffer
     bool     _wizard_inited;
+    bool     _wizard_pin_warn;
     int      _last_wizard_step;
     int      _last_wizard_pin_len;
     bool     _wifi_bridge_inited;
+
+    // Fault Banner & OTA Differential Cache
+    uint8_t  _last_fault_code;
+    int8_t   _last_fault_flash;
+    bool     _ota_inited;
+    int      _last_ota_pct;
+    char     _last_ota_status[64];
 
     // Race Screen Differential Cache (Zero Flicker & Modal Isolation)
     bool     _race_records_drawn;

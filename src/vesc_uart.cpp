@@ -451,16 +451,12 @@ static void updateDetectedCanIds(uint8_t controller_id, uint8_t cmd_id, uint32_t
         s_has_primary = true;
         Serial.printf("[VESC_CAN] Auto-detected primary VESC ID: %u\n", s_primary_vesc_id);
     } else if (controller_id != s_primary_vesc_id) {
-        if (controller_id == 77 ||
-            (s_primary_vesc_id == 76 && controller_id == 1) ||
-            (s_primary_vesc_id == 1 && controller_id == 2)) {
-            if (!s_has_secondary || s_secondary_vesc_id != controller_id) {
-                Serial.printf("[VESC_CAN] Auto-detected secondary VESC ID: %u\n", controller_id);
-            }
-            s_secondary_vesc_id = controller_id;
-            s_has_secondary = true;
-            s_sec_last_rx_ms = now;
+        if (!s_has_secondary || s_secondary_vesc_id != controller_id) {
+            Serial.printf("[VESC_CAN] Auto-detected secondary VESC ID: %u\n", controller_id);
         }
+        s_secondary_vesc_id = controller_id;
+        s_has_secondary = true;
+        s_sec_last_rx_ms = now;
     }
 }
 
@@ -874,14 +870,13 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                 int pole_pairs = Settings.get().motor_pole_pairs > 1 ? Settings.get().motor_pole_pairs : 15;
                 float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
                 float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
-                int32_t rel_tacho = tacho - _tacho_trip_offset;
-                telemetry.trip_km = fabsf(((float)rel_tacho / ((float)pole_pairs * 6.0f)) * wheel_circ_m) / (gear_ratio * 1000.0f);
 
                 int32_t delta_tacho = tacho - s_last_can_tacho;
                 if (delta_tacho != 0) {
                     float delta_km = fabsf(((float)delta_tacho / ((float)pole_pairs * 6.0f)) * wheel_circ_m) / (gear_ratio * 1000.0f);
                     if (delta_km < 1.0f) { // sanity clamp against sudden jumps
                         telemetry.odo_km += delta_km;
+                        telemetry.trip_km += delta_km;
                     }
                     s_last_can_tacho = tacho;
                 }
@@ -1335,7 +1330,11 @@ bool VescHandler::parseVescPayload(const uint8_t *payload, size_t payload_len, D
         idx += 4; // skip wh_used
         idx += 4; // skip wh_charge_tot
         int32_t dist_m = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]); idx += 4;
-        int32_t dist_tot = (payload_len >= 51) ? (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]) : 0; idx += 4;
+        int32_t dist_tot = 0;
+        if (payload_len >= 51) {
+            dist_tot = (int32_t)(((uint32_t)payload[idx] << 24) | ((uint32_t)payload[idx + 1] << 16) | ((uint32_t)payload[idx + 2] << 8) | (uint32_t)payload[idx + 3]);
+            idx += 4;
+        }
         _last_dist = dist_m;
 
         telemetry.temp_esc       = temp_mos / 10.0f;
@@ -1432,15 +1431,22 @@ bool VescHandler::parseVescPayload(const uint8_t *payload, size_t payload_len, D
         telemetry.speed_kmh = v_spd_std;
 
         // Odometer & Trip from tachometer step counts
+        static int32_t s_last_uart_tacho = 0;
         static bool s_uart_tacho_init = false;
         if (!s_uart_tacho_init) {
             _tacho_trip_offset = tachometer;
+            s_last_uart_tacho = tachometer;
             s_uart_tacho_init = true;
         }
 
-        int32_t rel_tacho = tachometer - _tacho_trip_offset;
-        float revs = (float)rel_tacho / ((float)pole_pairs * 6.0f);
-        telemetry.trip_km = fabsf((revs * wheel_circ_m) / (gear_ratio * 1000.0f));
+        int32_t delta_uart_tacho = tachometer - s_last_uart_tacho;
+        if (delta_uart_tacho != 0) {
+            float delta_km = fabsf(((float)delta_uart_tacho / ((float)pole_pairs * 6.0f)) * wheel_circ_m) / (gear_ratio * 1000.0f);
+            if (delta_km < 1.0f) { // sanity clamp against sudden jumps
+                telemetry.trip_km += delta_km;
+            }
+            s_last_uart_tacho = tachometer;
+        }
 
         // Fault code extraction (idx 53 in COMM_GET_VALUES)
         uint8_t fault_code = (payload_len > 53) ? payload[53] : 0;

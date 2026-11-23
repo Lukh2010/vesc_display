@@ -321,8 +321,10 @@ void BatteryManager::update(DashTelemetry &telemetry, float dt) {
 
     if (_tracking_full_cycle) {
         if (delta_wh > 0.0f) _cycle_wh_accum += delta_wh;
-        // When discharged down past low threshold (~10% SoC), evaluate learned capacity
-        if (telemetry.voltage < low_discharge_thresh_v && _cycle_wh_accum > (prof.learned_wh * 0.65f)) {
+        // When discharged down past low threshold (~10% SoC), evaluate learned capacity.
+        // Only evaluate at standstill and low current to avoid voltage sag distortion.
+        if (at_standstill && fabsf(telemetry.current_amps) < 1.0f &&
+            telemetry.voltage < low_discharge_thresh_v && _cycle_wh_accum > (prof.learned_wh * 0.65f)) {
             _tracking_full_cycle = false;
             // Extrapolate full 100% capacity from the 100%->10% test
             float measured_full_wh = _cycle_wh_accum / 0.90f;

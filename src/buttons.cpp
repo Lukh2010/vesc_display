@@ -132,17 +132,40 @@ bool ButtonHandler::isSpeedNumberTouch(int16_t x, int16_t y) const {
 }
 
 void ButtonHandler::processTouch(uint32_t now) {
+#if !defined(NATIVE_SIMULATOR)
+    static bool s_touch_polled_once = false;
+    static uint32_t s_last_touch_poll_ms = 0;
+    static bool s_cached_touching = false;
+    static int16_t s_cached_tx = 0;
+    static int16_t s_cached_ty = 0;
+#endif
+
     // 0. Screen Transition Debounce: Discard any residual touches for 350ms right after a screen switch
     // Prevents tap on buttons like [ FERTIG ] / [ < DASH ] from bleeding into whatever is under it on the new screen
     if ((now - _touch_screen_switch_ms) < 350) {
         _touch_active = false;
         _has_tap = false;
         _pending_action = NAV_NONE;
+#if !defined(NATIVE_SIMULATOR)
+        s_cached_touching = false;
+#endif
         return;
     }
 
     int16_t tx = 0, ty = 0;
+#if !defined(NATIVE_SIMULATOR)
+    // Throttle GT911 I2C polling to ~60 Hz (every 16ms) to offload I2C bus & CPU
+    if (!s_touch_polled_once || (uint32_t)(now - s_last_touch_poll_ms) >= 16) {
+        s_touch_polled_once = true;
+        s_last_touch_poll_ms = now;
+        s_cached_touching = Display.getTouch(&s_cached_tx, &s_cached_ty);
+    }
+    bool touching = s_cached_touching;
+    tx = s_cached_tx;
+    ty = s_cached_ty;
+#else
     bool touching = Display.getTouch(&tx, &ty);
+#endif
 
     if (touching) {
         // Safety bound check for touch coordinates

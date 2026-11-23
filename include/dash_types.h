@@ -346,13 +346,6 @@ struct DashTelemetry {
     float    locked_moved_meters; // meters traveled since being locked
     uint32_t last_alarm_beep_ms;  // timestamp of last FOC siren pulse
 
-    // Battery Charging Mode HUD & Drive Lockout
-    bool     is_charging;         // true = vehicle stationary and receiving charge
-    float    charge_power_watts;  // incoming charging power in Watts
-    float    charge_current_amps; // incoming charging current in Amps
-    uint32_t charge_start_ms;     // timestamp when charging started
-    float    charge_est_minutes;  // estimated minutes until full
-
     // Active Color Theme & FOC Turbine Sound Engine
     uint8_t  color_theme;          // DashTheme: 0=Obsidian Dark, 1=Arctic Light, 2=Carbon Stealth, 3=Night Dim
     bool     turbine_sound_active; // true when vehicle is driving and FOC acoustic engine is generating turbine sound

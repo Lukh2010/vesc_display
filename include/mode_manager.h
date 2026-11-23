@@ -72,6 +72,8 @@ public:
 private:
     ModeManager();
     VehicleModeConfig _config;
+    VehicleModeConfig _last_saved_config;
+    bool _has_saved_snapshot;
     volatile bool _tuning_mode;
     volatile bool _boost_active;
     volatile bool _is_locked;
