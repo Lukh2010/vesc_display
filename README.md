@@ -10,14 +10,14 @@ Professionelles, autarkes digitales Kombiinstrument und Touch-Dashboard für VES
 
 ## 🖥️ Kompatible Displays & Hardware
 
-Das Dashboard nutzt das extrem performante 16-Bit RGB565 Parallel-Interface und direkten Direct-Memory-Access (DMA) mit Octal PSRAM für ruckelfreie 60 FPS Grafik.
+Das Dashboard nutzt das extrem performante 16-Bit RGB565 Parallel-Interface mit **800×480 PSRAM Off-Screen-Backbuffer**, selektivem Dirty-Rect-Blitting (`pushRect`) und harmonisierten ST7262-Timings (`12 MHz` PCLK, exakter 240 MHz / 20 Integer-Teiler) für 100 % flackerfreie Grafik ohne schwarzes Aufblitzen.
 
 | Display / Board | Typ & Diagonale | Auflösung | Touch-Controller | Treiber / Bus | Status |
 |:---|:---|:---:|:---:|:---:|:---:|
 | **Waveshare ESP32-S3-Touch-LCD-4.3** | IPS RGB LCD (4.3") | 800 × 480 | Goodix GT911 (I2C) | ST7262 (16-Bit RGB) | ✅ **Referenz-Hardware** (Plug & Play) |
 | **Waveshare ESP32-S3-Touch-LCD-4.3B** | IPS RGB LCD (4.3") | 800 × 480 | Goodix GT911 (I2C) | ST7262 (16-Bit RGB) | ✅ **Voll kompatibel** (identische Pinbelegung) |
 | **Waveshare ESP32-S3-Touch-LCD-5** | IPS RGB LCD (5.0") | 800 × 480 | Goodix GT911 (I2C) | ST7262 (16-Bit RGB) | ✅ Kompatibel (Pin-Check in `board_config.h`) |
-| **Waveshare ESP32-S3-Touch-LCD-7** | IPS RGB LCD (7.0") | 800 × 480 / 1024 × 600 | Goodix GT911 (I2C) | EK9716 / ST7262 | ⚠️ Kompatibel (Auflösung / Timings anpassen) |
+| **Waveshare ESP32-S3-Touch-LCD-7** | IPS RGB LCD (7.0") | 800 × 480 | Goodix GT911 (I2C) | ST7262 (16-Bit RGB) | ✅ **Voll kompatibel** (harmonisierte 4.3"/7"-Timings) |
 | **Sunton ESP32-8048S043C / JC8048W543C** | TFT RGB LCD (4.3") | 800 × 480 | Goodix GT911 (I2C) | ST7262 / NV3047 | ✅ Kompatibel (RGB-Pins in Config zuweisen) |
 | **Guition / Elecrow ESP32-S3 4.3" RGB** | IPS RGB LCD (4.3") | 800 × 480 | Goodix GT911 (I2C) | ST7262 (16-Bit RGB) | ✅ Kompatibel (RGB-Pins in Config zuweisen) |
 
@@ -77,27 +77,34 @@ Das Dashboard nutzt das extrem performante 16-Bit RGB565 Parallel-Interface und 
 ## 🌟 Spannende Features & Highlights
 
 - 🔑 **Keyless-Go & Drahtloses Entsperren (BLE Proximity):**
-  - **Automatische Erkennung:** Erkennt das gekoppelte Smartphone oder eine Smartwatch automatisch per Bluetooth RSSI-Feldstärke bei Annäherung an das Fahrzeug.
-  - **Fahrtbereit ohne PIN:** Bei Annäherung wird die PIN-Sperre sofort freigegeben; beim Entfernen wird der Antrieb selbsttätig wieder gesperrt.
+  - **MAC-gesicherte Erkennung & Live-RSSI:** Verifiziert die gekoppelte Bluetooth-MAC-Adresse strikt gegen unbefugte Geräte und pollt die Live-RSSI-Signalstärke zyklisch (4-Balken-Anzeige).
+  - **Fahrtbereit ohne PIN:** Bei Annäherung wird die PIN-Sperre sofort freigegeben; beim Entfernen (>10 s im Stillstand) wird der Antrieb selbsttätig wieder gesperrt.
 
 - 🚨 **Diebstahlschutz mit VESC FOC Motor-Sirene:**
-  - **Bewegungserkennung im Lock-Zustand:** Wird das gesperrte Fahrzeug mehr als 2 Meter bewegt (gemessen über Motor-ERPM, GPS oder Gyro), schlägt das System Alarm.
+  - **Richtungsunabhängige Bewegungserkennung:** Wird das gesperrte Fahrzeug mehr als 2 Meter vorwärts **oder rückwärts** bewegt (`fabsf` auf Motor-ERPM/Speed), schlägt das System sofort Alarm.
   - **Motor als Sirene:** Nutzt Benjamin Vedders FOC-Audio-Modulation (`foc-beep`) direkt über die Motorwicklungen – extrem laut und durchdringend, ganz ohne externen Summer oder Lautsprecher!
-  - **Visueller Alarm-Screen:** Der Bildschirm blinkt rot mit Entfernungsanzeige und akustischer Warnung. Nur die Eingabe des korrekten PINs entschärft die Sirene und gibt den Antrieb wieder frei.
+  - **Auto-Lock Backlight-Sleep:** Nach 5 Minuten Inaktivität verriegelt sich das System automatisch und schaltet die Hintergrundbeleuchtung im Lockscreen energiesparend ab (Wecken per erstem Tipp ohne Fehleingabe).
 
 - 👮 **One-Touch Polizei- & Drossel-Modus (Stealth Lock):**
-  - **Sekundenschnelle Drosselung:** Ein einfacher Fingertipp auf die km/h-Anzeige riegelt das Fahrzeug sofort unumkehrbar auf 20 km/h (bzw. konfigurierte Werte) ab.
+  - **Sekundenschnelle Drosselung:** Ein einfacher Fingertipp auf die km/h-Anzeige riegelt das Fahrzeug sofort unumkehrbar auf 20 km/h (bzw. konfigurierte Werte) ab und sperrt Tuning-Tabs sowie `[ BOOST ]`.
   - **Diskreter Statuspunkt:** Ein winziger roter Subpixel-Punkt oben rechts im Eck signalisiert dem Fahrer unauffällig den Drosselstatus (im offenen Tuning-Modus unsichtbar).
   - **Geheimer Entsperr-Druck:** Das Umschalten in den offenen Tuning-Modus ist gegen versehentliches Auslösen gesichert und erfordert einen verdeckten 4-Sekunden-Druck auf die Geschwindigkeitszahl.
 
 - ⏱️ **Dragy Launch Control & Beschleunigungs-Dyno:**
-  - **Präzise 0–x km/h Messung:** Professionelle Beschleunigungsmessung mit optischer Ampel (5s Countdown) und automatischer Erfassung von Split-Zeiten (z. B. 0–22, 0–50, 0–70 km/h).
-  - **Persönliche Bestzeiten:** Neue Rekorde werden automatisch mit Sternchen (`*PB*`) markiert und im Flash-Speicher (NVS) dauerhaft gespeichert.
+  - **Auto-Rollout & Plateau-Finish:** Startet automatisch bei Anfahrt (`>= 1.0 km/h`), erfasst konfigurierbare Split-Zeiten (z. B. 0–22, 0–50, 0–70 km/h) und beendet den Lauf bei Geschwindigkeits-Plateau (`< 0.2 m/s²` über 2 s) automatisch.
+  - **Persönliche Bestzeiten:** Neue Rekorde werden automatisch mit Sternchen (`*PB*`) markiert, konsistent gegen die aktiven Split-Ziele verglichen und dauerhaft im NVS gespeichert.
   - **Live-Dyno Diagramm:** Integrierte Leistungs- und Drehmomentkurve visualisiert den Beschleunigungsverlauf direkt auf dem Touchscreen.
 
-- 📶 **Kabellose VESC Wi-Fi Bridge:**
-  - Startet per Knopfdruck einen lokalen WLAN-Hotspot (`VESC-DASH-AP`).
-  - Überträgt VESC-Telemetriedaten und Einstellungen transparent über TCP (Port 6510) – verbinde einfach das offizielle **VESC Tool** auf Smartphone oder PC, um Motorparameter drahtlos live abzustimmen.
+- 🛡️ **Traktionskontrolle (TCS), Auto-Reifenkalibrierung & Virtuelles TPMS:**
+  - **Echtzeit-TCS (`< 5 ms` auf Core 0):** Erkennt Radschlupf über VESC vs. GPS bzw. physikalische Grip-Grenze und regelt den Phasenstrom ruckfrei ab.
+  - **Virtuelles TPMS & GPS-Kalibrierung:** Kalibriert den exakten Abrollumfang bei Konstantfahrt und warnt bei schleichendem Reifendruckverlust.
+
+- 🔋 **Dual-Akku-Management, Sag-freier SoC & Meter-genaues Odometer:**
+  - **Dual-Profil & SOH-Schutz:** Verwaltet zwei Akku-Profile mit Coulomb/Wh-Integration, dynamischer 2-km-Restreichweite und lastfreiem SOH-Degradations-Learning (geschützt vor Beschleunigungs-Sag).
+  - **Exakter Kilometerzähler:** Akkumuliert die Gesamtstrecke intern als `uint32_t` in Metern (kein Float-Rundungsfehler auch jenseits von 10.000 km).
+
+- 📶 **Kabellose VESC Wi-Fi Bridge & Gzip-OTA Web-Flasher:**
+  - Startet per Knopfdruck einen lokalen WLAN-Hotspot (`VESC-DASH-AP`, Port `6510` für VESC Tool, Port `80` für das gzip-komprimierte HTML5-OTA-Interface mit exakter 0–100%-Fortschrittsanzeige, sowie ArduinoOTA auf Port `3232`).
 
 - 🧙 **Ersteinrichtungs-Assistent & PIN-Wegfahrsperre:**
   - Automatischer 3-Schritte-Setup-Wizard beim Erststart.
@@ -143,7 +150,7 @@ Das gesamte System ist für schnelle, intuitive Bedienung mit Handschuhen währe
 ### 🧭 Navigation & Untermenüs
 | Aktion | Touch-Geste / Bereich | Funktion |
 |:---|:---|:---|
-| **Zurück zum Dashboard** | Tipp auf `[ < DASH ]` (oben links) | Kehrt aus jedem Menü, Race-Timer oder Lade-HUD sofort zum Cockpit zurück |
+| **Zurück zum Dashboard** | Tipp auf `[ < DASH ]` (oben links) | Kehrt aus jedem Menü oder dem Race-Timer sofort zum Cockpit zurück |
 | **Helligkeit anpassen** | Hardware-Schaltung via CH422G (>20% an / <=20% aus) bzw. Software-Dimming | Display-Hintergrundbeleuchtung schaltet hardwareseitig binär an/aus |
 | **Dragy Race starten** | Tipp auf `[ RACE ]` (Stats-Screen, nur bei Tuning) | Öffnet den Beschleunigungs-Timer mit 5s Launch Control |
 | **Parameter anpassen** | Slider / `[-]` / `[+]` in den Einstellungen | Geschwindigkeits- (km/h) und Leistungslimits (Watt) direkt verstellen |
@@ -152,8 +159,8 @@ Das gesamte System ist für schnelle, intuitive Bedienung mit Handschuhen währe
 
 ## 🔌 Hardware-Verkabelung
 
-### 1. Display Pinbelegung (Waveshare ESP32-S3-Touch-LCD-4.3)
-- **Display-Treiber:** ST7262 RGB Parallel Interface (800 × 480 @ 14 MHz PCLK)
+### 1. Display Pinbelegung (Waveshare ESP32-S3-Touch-LCD-4.3 & 7.0)
+- **Display-Treiber:** ST7262 RGB Parallel Interface (800 × 480 @ **12 MHz PCLK**, `pclk_active_neg = 1`, PSRAM Backbuffer + Dirty-Rect-Blitting)
 - **Sync-Leitungen:** HSYNC = GPIO 46, VSYNC = GPIO 3, DE = GPIO 5, PCLK = GPIO 7
 - **16-Bit RGB565:**
   - Blau (B0–B4): GPIO 14, 38, 18, 17, 10
@@ -188,27 +195,41 @@ Nutzt den integrierten TJA1051 CAN-Transceiver des Displays:
 | **TX (GPIO 43)** | `RX` | Senden (115200 Baud) |
 | **RX (GPIO 44)** | `TX` | Empfangen (115200 Baud) |
 
-### 3. GPS / BDS GNSS Modul (z. B. ATGM336H / NEO-M8N)
-- **GPS TX** $\rightarrow$ **ESP32 RX** (GPIO 44 im CAN-Modus)
-- **GPS RX** $\rightarrow$ **ESP32 TX** (GPIO 43 im CAN-Modus)
-- **VCC (3.3V / 5V)** und **GND**
+### 3. GPS / BDS GNSS Modul & 12V-Scheinwerfer (im CAN-Modus)
+- **GPS TX** $\rightarrow$ **ESP32 RX** (GPIO 44, NMEA 9600 Baud mit `*hh` XOR-Checksummenprüfung)
+- **12V Scheinwerfer MOSFET (`TRIG`)** $\leftarrow$ **ESP32 TX** (GPIO 43, 3.3V Logik für D4184)
+- **VCC (5V)** und **GND**
 
 ---
 
-## 💻 Simulator & Live-Entwicklung
+## 🏗️ Software-Architektur
 
-Das Repository enthält einen nativen Desktop-Simulator mit integriertem VESC-Protokoll-Emulator:
+- **Dual-Core FreeRTOS-Entkopplung:**
+  - **Core 0 (200 Hz Echtzeittask):** `Vesc.update()` (Dual-VESC CAN/UART mit Multi-Node-Isolation), `TcsTpmsManager`, `GpsTracker` (128-B-Burst-Limit), Non-Blocking Wi-Fi/USB-Bridge und asynchroner Limit-Push; pausiert sauber während OTA-Flash-Writes.
+  - **Core 1 (UI & Input):** 800×480 PSRAM-Backbuffer, selektives Dirty-Rect-Blitting, 60-Hz GT911-Touch und Screen-Rendering über eine Double-Buffered Telemetrie-Mailbox.
+- **Modulare Struktur:**
+  - `src/dash_renderer.cpp`, `src/screen_race.cpp`, `src/screen_settings.cpp`, `src/screen_wizard_pin.cpp` + `include/ui_layout.h` (Single Source of Truth für alle Touch-Hitboxen)
+  - `src/serial_cli.cpp` (USB-Diagnosekonsole), `include/dash_log.h` (schaltbares Release-Logging)
+  - Flash-schonende NVS-Blob-Speicherung mit Dirty-Checks (`ModeManager`, `FaultManager`, `BatteryManager`, `SettingsManager`)
+
+---
+
+## 💻 Simulator, Regressionstests & OTA
+
+Das Repository enthält einen nativen Desktop-Simulator mit integriertem VESC-Protokoll-Emulator und **9 automatischen Regressionstests**:
 
 ```bash
 # Live-Demo mit grafischem Fenster & Web-Stream starten
 DISPLAY=:0 python3 tools/simulator/live_demo.py
-```
-- **Web-Interface:** [http://localhost:8080](http://localhost:8080) (60 FPS interaktiver Stream mit Touch-Unterstützung).
-- **VESC Tool TCP Server:** TCP-Port `6510` zum direkten Testen mit dem offiziellen VESC Tool.
-- **Automatische Unittests & Screenshot-Suite:**
-```bash
+
+# Simulator neu bauen + alle UI-Szenarien & 9 Regressionstests ausführen
 ./tools/simulator/build_and_run.sh
+
+# Drahtloses OTA-Update über WLAN (mit exakter 0–100% Fortschrittsanzeige)
+python3 tools/ota_flash.py
 ```
+- **Web-Interface:** [http://localhost:8080](http://localhost:8080) (interaktiver Stream mit Touch-Unterstützung).
+- **VESC Tool TCP Server:** TCP-Port `6510` zum direkten Testen mit dem offiziellen VESC Tool.
 
 ---
 
