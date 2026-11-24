@@ -242,6 +242,12 @@ DashboardRenderer::DashboardRenderer()
       _last_race_split_0_50(-999.0f),
       _last_race_split_0_70(-999.0f),
       _last_race_g_force_x10(-999),
+      _race_plateau_start_ms(0),
+      _race_last_eval_ms(0),
+      _race_last_eval_speed_kmh(0.0f),
+      _pb_split1_kmh(0),
+      _pb_split2_kmh(0),
+      _pb_split3_kmh(0),
       _boot_anim_active(false),
       _boot_anim_phase(0),
       _boot_anim_start_ms(0),
@@ -255,7 +261,6 @@ DashboardRenderer::DashboardRenderer()
     _wizard_pin_buf[0] = '\0';
     _pin_modal_buf[0] = '\0';
     _last_ota_status[0] = '\0';
-    _last_needle.valid = false;
     _cache.invalidate();
     _stats_cache.invalidate();
 }
@@ -284,13 +289,7 @@ const lgfx::IFont* DashboardRenderer::getUiFont(UiFont f) const {
     if ((uint8_t)f < UIF_COUNT && _vlwLoaded[f]) {
         return &_vlwFonts[f];
     }
-    switch (f) {
-        case UIF_HERO_NUM: return &fonts::Font4;
-        case UIF_MED_NUM:  return &fonts::Font4;
-        case UIF_HEADING:  return &fonts::Font4;
-        case UIF_BODY:     return &fonts::Font2;
-        default:           return &fonts::Font0;
-    }
+    return &fonts::Font0;
 }
 
 void DashboardRenderer::useFont(UiFont f) {
@@ -299,8 +298,7 @@ void DashboardRenderer::useFont(UiFont f) {
 }
 
 void DashboardRenderer::resetFont() {
-    _canvas->setFont(&fonts::Font2);
-    _canvas->setTextSize(1);
+    useFont(UIF_BODY);
     _canvas->setTextPadding(0);
 }
 
@@ -739,7 +737,6 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         _active_screen = telemetry.screen;
         _screen_dirty = true;
         invalidateCache();
-        _last_needle.valid = false;
         _wifi_bridge_inited = false;
         _wizard_inited = false;
         _last_wizard_step = -1;
@@ -753,7 +750,6 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             _active_style = st;
             _screen_dirty = true;
             invalidateCache();
-            _last_needle.valid = false;
         }
     }
 
@@ -1089,25 +1085,22 @@ void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     _last_arc_angle = 135.0f;
     _last_arc_col = 0;
 
-    int cx = 240, cy = 215;
-    int r_in = 135, r_out = 162;
-    float mid_r = 148.5f;
-    float deg2rad = 3.14159265f / 180.0f;
+    constexpr int cx = UiLayout::DASH_SPEED_CX, cy = 215;
+    constexpr int r_in = 135, r_out = 162;
+    // Compile-time arc end-cap centers for 135° / 405° at mid_r = 148.5
+    constexpr int s_cap_x = 135, s_cap_y = 320;
+    constexpr int e_cap_x = 345, e_cap_y = 320;
 
     // 0. Top-Left [ STATS ] Pill Button
     if (telemetry.fault_code == 0) {
-        int sX = 20, sY = 16, sW = 96, sH = 36;
-        _canvas->fillRoundRect(sX, sY, sW, sH, 18, pal.surface);
-        _canvas->drawRoundRect(sX, sY, sW, sH, 18, pal.border);
-        drawSmoothText(UIF_BODY, "STATS", sX + sW / 2, sY + sH / 2, textdatum_t::middle_center, pal.text, pal.surface);
+        const UiRect &sb = UiLayout::DASH_STATS_BTN;
+        _canvas->fillRoundRect(sb.x, sb.y, sb.w, sb.h, 18, pal.surface);
+        _canvas->drawRoundRect(sb.x, sb.y, sb.w, sb.h, 18, pal.border);
+        drawSmoothText(UIF_BODY, "STATS", sb.cx(), sb.cy(), textdatum_t::middle_center, pal.text, pal.surface);
     }
 
     // 1. Speedometer Gauge Background Arc (270 degree sweep: 135° to 405°)
     _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
-    int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
-    int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
-    int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
-    int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
     _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
     _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
 
@@ -1173,14 +1166,10 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     if (fabsf(_anim_power) < 8.0f && telemetry.speed_kmh < 0.5f) _anim_power = 0.0f;
     if (telemetry.duty_cycle_pct == 0.0f) _anim_duty = 0.0f;
 
-    int cx = 240, cy = 215;
-    int r_in = 135, r_out = 162;
-    float mid_r = 148.5f;
-    float deg2rad = 3.14159265f / 180.0f;
-    int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
-    int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
-    int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
-    int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
+    constexpr int cx = UiLayout::DASH_SPEED_CX, cy = 215;
+    constexpr int r_in = 135, r_out = 162;
+    constexpr int s_cap_x = 135, s_cap_y = 320;
+    constexpr int e_cap_x = 345, e_cap_y = 320;
 
     float spd = _is_sweeping ? _sweep_speed : telemetry.speed_kmh;
     if (spd < 0.8f) spd = 0.0f;
@@ -1524,35 +1513,37 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     bool boost_vis = telemetry.tuning_mode && telemetry.boost_active;
     int8_t cur_boost = boost_vis ? 1 : 0;
 
+    const UiRect &bb = UiLayout::DASH_BOOST_BTN;
     if (btn_layout_changed || cur_boost != _cache.boost_active) {
         _cache.boost_active = cur_boost;
         if (boost_vis) {
-            _canvas->fillRoundRect(445, 380, 152, 72, 16, pal.primary);
-            _canvas->drawRoundRect(445, 380, 152, 72, 16, pal.primary);
-            drawSmoothText(UIF_HEADING, "BOOST", 521, 416, textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
+            _canvas->fillRoundRect(bb.x, bb.y, bb.w, bb.h, 16, pal.primary);
+            _canvas->drawRoundRect(bb.x, bb.y, bb.w, bb.h, 16, pal.primary);
+            drawSmoothText(UIF_HEADING, "BOOST", bb.cx(), bb.cy(), textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
         } else {
-            _canvas->fillRoundRect(445, 380, 152, 72, 16, pal.surface);
-            _canvas->drawRoundRect(445, 380, 152, 72, 16, pal.border);
-            drawSmoothText(UIF_HEADING, "BOOST", 521, 416, textdatum_t::middle_center, pal.text, pal.surface);
+            _canvas->fillRoundRect(bb.x, bb.y, bb.w, bb.h, 16, pal.surface);
+            _canvas->drawRoundRect(bb.x, bb.y, bb.w, bb.h, 16, pal.border);
+            drawSmoothText(UIF_HEADING, "BOOST", bb.cx(), bb.cy(), textdatum_t::middle_center, pal.text, pal.surface);
         }
-        addDirtyRect(445, 380, 152, 72);
+        addDirtyRect(bb.x, bb.y, bb.w, bb.h);
     }
 
+    const UiRect &mb = UiLayout::DASH_MODE_BTN;
     int8_t cur_banner = banner_now ? 1 : 0;
     if (btn_layout_changed || (int)telemetry.ride_mode != _cache.ride_mode || cur_banner != _cache.banner_active) {
         _cache.ride_mode = (int)telemetry.ride_mode;
         _cache.banner_active = cur_banner;
         if (banner_now) {
-            _canvas->fillRoundRect(613, 380, 152, 72, 16, mCol);
-            _canvas->drawRoundRect(613, 380, 152, 72, 16, mCol);
-            drawSmoothText(UIF_HEADING, mNames[mIdx], 689, 416, textdatum_t::middle_center, onPrimaryFg(pal), mCol);
+            _canvas->fillRoundRect(mb.x, mb.y, mb.w, mb.h, 16, mCol);
+            _canvas->drawRoundRect(mb.x, mb.y, mb.w, mb.h, 16, mCol);
+            drawSmoothText(UIF_HEADING, mNames[mIdx], mb.cx(), mb.cy(), textdatum_t::middle_center, onPrimaryFg(pal), mCol);
         } else {
-            _canvas->fillRoundRect(613, 380, 152, 72, 16, pal.surface);
-            _canvas->drawRoundRect(613, 380, 152, 72, 16, mCol);
-            _canvas->drawRoundRect(614, 381, 150, 70, 15, mCol);
-            drawSmoothText(UIF_HEADING, mNames[mIdx], 689, 416, textdatum_t::middle_center, mCol, pal.surface);
+            _canvas->fillRoundRect(mb.x, mb.y, mb.w, mb.h, 16, pal.surface);
+            _canvas->drawRoundRect(mb.x, mb.y, mb.w, mb.h, 16, mCol);
+            _canvas->drawRoundRect(mb.x + 1, mb.y + 1, mb.w - 2, mb.h - 2, 15, mCol);
+            drawSmoothText(UIF_HEADING, mNames[mIdx], mb.cx(), mb.cy(), textdatum_t::middle_center, mCol, pal.surface);
         }
-        addDirtyRect(613, 380, 152, 72);
+        addDirtyRect(mb.x, mb.y, mb.w, mb.h);
     }
 
     // 10. Bottom Left: Dynamic Vector Badges & Centered Thermals Row
@@ -1572,26 +1563,26 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 
     if (lb_on) {
         if (gf_on && inc_on) {
-            gf_x = 50;    gf_y = 416;
-            inc_x = 110;  inc_y = 416;
-            light_x = 50; light_y = 354;
+            gf_x = UiLayout::DASH_LIGHT_CX;    gf_y = UiLayout::DASH_LIGHT_Y_BOT;
+            inc_x = 110;                       inc_y = UiLayout::DASH_LIGHT_Y_BOT;
+            light_x = UiLayout::DASH_LIGHT_CX; light_y = UiLayout::DASH_LIGHT_Y_TOP;
         } else if (gf_on && !inc_on) {
-            light_x = 50; light_y = 416;
-            gf_x = 110;   gf_y = 416;
+            light_x = UiLayout::DASH_LIGHT_CX; light_y = UiLayout::DASH_LIGHT_Y_BOT;
+            gf_x = 110;                        gf_y = UiLayout::DASH_LIGHT_Y_BOT;
         } else if (!gf_on && inc_on) {
-            light_x = 50; light_y = 416;
-            inc_x = 110;  inc_y = 416;
+            light_x = UiLayout::DASH_LIGHT_CX; light_y = UiLayout::DASH_LIGHT_Y_BOT;
+            inc_x = 110;                       inc_y = UiLayout::DASH_LIGHT_Y_BOT;
         } else {
-            light_x = 50; light_y = 416;
+            light_x = UiLayout::DASH_LIGHT_CX; light_y = UiLayout::DASH_LIGHT_Y_BOT;
         }
     } else {
         if (gf_on && inc_on) {
-            gf_x = 50;   gf_y = 416;
-            inc_x = 110; inc_y = 416;
+            gf_x = UiLayout::DASH_LIGHT_CX;   gf_y = UiLayout::DASH_LIGHT_Y_BOT;
+            inc_x = 110;                      inc_y = UiLayout::DASH_LIGHT_Y_BOT;
         } else if (gf_on && !inc_on) {
-            gf_x = 50;   gf_y = 416;
+            gf_x = UiLayout::DASH_LIGHT_CX;   gf_y = UiLayout::DASH_LIGHT_Y_BOT;
         } else if (!gf_on && inc_on) {
-            inc_x = 50;  inc_y = 416;
+            inc_x = UiLayout::DASH_LIGHT_CX;  inc_y = UiLayout::DASH_LIGHT_Y_BOT;
         }
     }
 
@@ -1707,24 +1698,24 @@ void DashboardRenderer::initRtGraphsScreen(const DashTelemetry &telemetry) {
     markFullDirty();
 
     // Top Bar: Back Button [< DASH], [ RACE ] Button, Center Title, Reset Trip Button
-    _canvas->fillRoundRect(20, 12, 110, 36, 18, pal.surface);
-    _canvas->drawRoundRect(20, 12, 110, 36, 18, pal.border);
-    drawSmoothText(UIF_BODY, "< DASH", 75, 30, textdatum_t::middle_center, pal.text, pal.surface);
+    _canvas->fillRoundRect(UiLayout::STATS_BACK_BTN.x, UiLayout::STATS_BACK_BTN.y, UiLayout::STATS_BACK_BTN.w, UiLayout::STATS_BACK_BTN.h, 18, pal.surface);
+    _canvas->drawRoundRect(UiLayout::STATS_BACK_BTN.x, UiLayout::STATS_BACK_BTN.y, UiLayout::STATS_BACK_BTN.w, UiLayout::STATS_BACK_BTN.h, 18, pal.border);
+    drawSmoothText(UIF_BODY, "< DASH", UiLayout::STATS_BACK_BTN.cx(), UiLayout::STATS_BACK_BTN.cy(), textdatum_t::middle_center, pal.text, pal.surface);
 
     // Styled [ RACE ] touch button (only visible when tuning mode is active)
     if (telemetry.tuning_mode) {
         uint16_t raceBg = blendRgb565(pal.surface, pal.accent_danger, pal.is_light ? 28 : 48);
-        _canvas->fillRoundRect(140, 12, 100, 36, 18, raceBg);
-        _canvas->drawRoundRect(140, 12, 100, 36, 18, pal.accent_danger);
-        drawSmoothText(UIF_BODY, "RACE", 190, 30, textdatum_t::middle_center, pal.accent_danger, raceBg);
+        _canvas->fillRoundRect(UiLayout::STATS_RACE_BTN.x, UiLayout::STATS_RACE_BTN.y, UiLayout::STATS_RACE_BTN.w, UiLayout::STATS_RACE_BTN.h, 18, raceBg);
+        _canvas->drawRoundRect(UiLayout::STATS_RACE_BTN.x, UiLayout::STATS_RACE_BTN.y, UiLayout::STATS_RACE_BTN.w, UiLayout::STATS_RACE_BTN.h, 18, pal.accent_danger);
+        drawSmoothText(UIF_BODY, "RACE", UiLayout::STATS_RACE_BTN.cx(), UiLayout::STATS_RACE_BTN.cy(), textdatum_t::middle_center, pal.accent_danger, raceBg);
     }
 
     int titleX = telemetry.tuning_mode ? 430 : 380;
     drawSmoothText(UIF_HEADING, "FAHRDATEN & STATISTIK", titleX, 30, textdatum_t::middle_center, pal.primary, pal.bg);
 
-    _canvas->fillRoundRect(640, 12, 140, 36, 18, pal.surface);
-    _canvas->drawRoundRect(640, 12, 140, 36, 18, pal.border);
-    drawSmoothText(UIF_BODY, "RESET TRIP", 710, 30, textdatum_t::middle_center, pal.text, pal.surface);
+    _canvas->fillRoundRect(UiLayout::STATS_RESET_BTN.x, UiLayout::STATS_RESET_BTN.y, UiLayout::STATS_RESET_BTN.w, UiLayout::STATS_RESET_BTN.h, 18, pal.surface);
+    _canvas->drawRoundRect(UiLayout::STATS_RESET_BTN.x, UiLayout::STATS_RESET_BTN.y, UiLayout::STATS_RESET_BTN.w, UiLayout::STATS_RESET_BTN.h, 18, pal.border);
+    drawSmoothText(UIF_BODY, "RESET TRIP", UiLayout::STATS_RESET_BTN.cx(), UiLayout::STATS_RESET_BTN.cy(), textdatum_t::middle_center, pal.text, pal.surface);
 
     // Top Summary Card: Trip & Movement Overview (4 KPI strips)
     drawCard(20, 56, 760, 92, pal.surface, pal.border, 12);
@@ -2003,14 +1994,13 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
         { "7", "8", "9" },
         { "DEL", "0", "OK" }
     };
-    static const int col_x[3] = { 200, 340, 480 };
-    static const int row_y[4] = { 164, 234, 304, 374 };
-    const int btn_w = 120;
-    const int btn_h = 56;
 
     auto drawKeypadButton = [&](int r, int c, bool pressed) {
-        int bx = col_x[c];
-        int by = row_y[r];
+        UiRect kr = UiLayout::pinKeyRect(r, c);
+        int bx = kr.x;
+        int by = kr.y;
+        int btn_w = kr.w;
+        int btn_h = kr.h;
         const char *label = KEYS[r][c];
         bool isDel = (r == 3 && c == 0);
         bool isOk  = (r == 3 && c == 2);
@@ -2119,26 +2109,22 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
     // Instant tactile pressed visual feedback
     int8_t active_key = -1;
     if (Buttons.isTouching() && !err) {
-        int16_t tx = Buttons.getTouchX();
-        int16_t ty = Buttons.getTouchY();
-        if (tx >= 100 && tx <= 700 && ty >= 120 && ty <= 460) {
-            int c = (tx < 330) ? 0 : ((tx < 470) ? 1 : 2);
-            int r = (ty < 227) ? 0 : ((ty < 297) ? 1 : ((ty < 367) ? 2 : 3));
-            active_key = (int8_t)(r * 3 + c);
-        }
+        active_key = UiLayout::pinKeypadHit(Buttons.getTouchX(), Buttons.getTouchY());
     }
     if (active_key != _last_pin_active_key) {
         if (_last_pin_active_key >= 0) {
             int r = _last_pin_active_key / 3;
             int c = _last_pin_active_key % 3;
             drawKeypadButton(r, c, false);
-            addDirtyRect(col_x[c], row_y[r], btn_w, btn_h);
+            UiRect kr = UiLayout::pinKeyRect(r, c);
+            addDirtyRect(kr.x, kr.y, kr.w, kr.h);
         }
         if (active_key >= 0) {
             int r = active_key / 3;
             int c = active_key % 3;
             drawKeypadButton(r, c, true);
-            addDirtyRect(col_x[c], row_y[r], btn_w, btn_h);
+            UiRect kr = UiLayout::pinKeyRect(r, c);
+            addDirtyRect(kr.x, kr.y, kr.w, kr.h);
         }
         _last_pin_active_key = active_key;
     }
@@ -2248,14 +2234,14 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         markFullDirty();
 
         // 1. Sleek Header Bar: [< DASH], Title, [FERTIG]
-        _canvas->fillRoundRect(20, 12, 108, 34, 17, pal.surface);
-        _canvas->drawRoundRect(20, 12, 108, 34, 17, pal.border);
-        drawSmoothText(UIF_BODY, "< DASH", 74, 29, textdatum_t::middle_center, pal.text, pal.surface);
+        _canvas->fillRoundRect(UiLayout::SETTINGS_BACK_BTN.x, UiLayout::SETTINGS_BACK_BTN.y, UiLayout::SETTINGS_BACK_BTN.w, UiLayout::SETTINGS_BACK_BTN.h, 17, pal.surface);
+        _canvas->drawRoundRect(UiLayout::SETTINGS_BACK_BTN.x, UiLayout::SETTINGS_BACK_BTN.y, UiLayout::SETTINGS_BACK_BTN.w, UiLayout::SETTINGS_BACK_BTN.h, 17, pal.border);
+        drawSmoothText(UIF_BODY, "< DASH", UiLayout::SETTINGS_BACK_BTN.cx(), UiLayout::SETTINGS_BACK_BTN.cy(), textdatum_t::middle_center, pal.text, pal.surface);
 
         drawSmoothText(UIF_HEADING, "EINSTELLUNGEN", 400, 29, textdatum_t::middle_center, pal.text, pal.bg);
 
-        _canvas->fillRoundRect(672, 12, 108, 34, 17, pal.primary);
-        drawSmoothText(UIF_BODY, "FERTIG", 726, 29, textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
+        _canvas->fillRoundRect(UiLayout::SETTINGS_DONE_BTN.x, UiLayout::SETTINGS_DONE_BTN.y, UiLayout::SETTINGS_DONE_BTN.w, UiLayout::SETTINGS_DONE_BTN.h, 17, pal.primary);
+        drawSmoothText(UIF_BODY, "FERTIG", UiLayout::SETTINGS_DONE_BTN.cx(), UiLayout::SETTINGS_DONE_BTN.cy(), textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
 
         _settings_inited = true;
     } else {
@@ -2899,46 +2885,49 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
     // ------------------------------------------------------------------
     if (_settings_tab_idx == TAB_DRAGY) {
         if (ty >= 350 && ty <= 435) {
+            bool s1_mod = false, s2_mod = false, s3_mod = false;
             // Split 1 (cx=20, cw=244): [-] 38..134, [+] 150..246
             if (tx >= 25 && tx <= 140) {
                 if (Settings.get().race_split1_kmh > 10) {
                     Settings.get().race_split1_kmh--;
-                    _menu_dirty = true;
+                    s1_mod = true;
                 }
-                return true;
             } else if (tx >= 142 && tx <= 260) {
                 if (Settings.get().race_split1_kmh < Settings.get().race_split2_kmh - 1) {
                     Settings.get().race_split1_kmh++;
-                    _menu_dirty = true;
+                    s1_mod = true;
                 }
-                return true;
             }
             // Split 2 (cx=278, cw=244): [-] 296..392, [+] 408..504
             else if (tx >= 282 && tx <= 398) {
                 if (Settings.get().race_split2_kmh > Settings.get().race_split1_kmh + 1) {
                     Settings.get().race_split2_kmh--;
-                    _menu_dirty = true;
+                    s2_mod = true;
                 }
-                return true;
             } else if (tx >= 400 && tx <= 518) {
                 if (Settings.get().race_split2_kmh < Settings.get().race_split3_kmh - 1) {
                     Settings.get().race_split2_kmh++;
-                    _menu_dirty = true;
+                    s2_mod = true;
                 }
-                return true;
             }
             // Split 3 (cx=536, cw=244): [-] 554..650, [+] 666..762
             else if (tx >= 540 && tx <= 656) {
                 if (Settings.get().race_split3_kmh > Settings.get().race_split2_kmh + 1) {
                     Settings.get().race_split3_kmh--;
-                    _menu_dirty = true;
+                    s3_mod = true;
                 }
-                return true;
             } else if (tx >= 658 && tx <= 776) {
                 if (Settings.get().race_split3_kmh < 130) {
                     Settings.get().race_split3_kmh++;
-                    _menu_dirty = true;
+                    s3_mod = true;
                 }
+            }
+            if (s1_mod || s2_mod || s3_mod) {
+                if (s1_mod) { telemetry.race_records.best_0_22_sec = 0.0f; _pb_split1_kmh = Settings.get().race_split1_kmh; }
+                if (s2_mod) { telemetry.race_records.best_0_50_sec = 0.0f; _pb_split2_kmh = Settings.get().race_split2_kmh; }
+                if (s3_mod) { telemetry.race_records.best_0_70_sec = 0.0f; _pb_split3_kmh = Settings.get().race_split3_kmh; }
+                Settings.saveRaceRecords(telemetry.race_records);
+                _menu_dirty = true;
                 return true;
             }
         }
@@ -3391,6 +3380,30 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
         }
     }
 
+    // Keep PB records consistent when split targets change
+    uint8_t cur_sp1 = Settings.get().race_split1_kmh;
+    uint8_t cur_sp2 = Settings.get().race_split2_kmh;
+    uint8_t cur_sp3 = Settings.get().race_split3_kmh;
+    if (_pb_split1_kmh == 0) _pb_split1_kmh = cur_sp1;
+    if (_pb_split2_kmh == 0) _pb_split2_kmh = cur_sp2;
+    if (_pb_split3_kmh == 0) _pb_split3_kmh = cur_sp3;
+    if (cur_sp1 != _pb_split1_kmh || cur_sp2 != _pb_split2_kmh || cur_sp3 != _pb_split3_kmh) {
+        if (cur_sp1 != _pb_split1_kmh) { telemetry.race_records.best_0_22_sec = 0.0f; _pb_split1_kmh = cur_sp1; }
+        if (cur_sp2 != _pb_split2_kmh) { telemetry.race_records.best_0_50_sec = 0.0f; _pb_split2_kmh = cur_sp2; }
+        if (cur_sp3 != _pb_split3_kmh) { telemetry.race_records.best_0_70_sec = 0.0f; _pb_split3_kmh = cur_sp3; }
+        Settings.saveRaceRecords(telemetry.race_records);
+    }
+
+    auto finishRaceRun = [&]() {
+        telemetry.race_state = 3; // FINISHED
+        telemetry.boost_active = false;
+        ModeManager::instance().setBoostActive(false);
+        telemetry.ride_mode = telemetry.saved_ride_mode;
+        ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
+        Buttons.setRaceState(3);
+        markScreenDirty();
+    };
+
     if (telemetry.race_state == 1) { // 1 = ARMED / COUNTDOWN (Auto-Rollout at >= 1.0 km/h)
         telemetry.boost_active = true;
         ModeManager::instance().setBoostActive(true);
@@ -3405,6 +3418,9 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             telemetry.race_split_0_22 = 0.0f;
             telemetry.race_split_0_50 = 0.0f;
             telemetry.race_split_0_70 = 0.0f;
+            _race_plateau_start_ms = 0;
+            _race_last_eval_ms = now;
+            _race_last_eval_speed_kmh = telemetry.speed_kmh;
             telemetry.race_dyno.reset();
             telemetry.race_dyno.last_sample_ms = now;
             Buttons.setRaceState(2);
@@ -3430,11 +3446,11 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
         if (telemetry.speed_kmh   > telemetry.race_dyno.peak_speed_kmh) telemetry.race_dyno.peak_speed_kmh = telemetry.speed_kmh;
         if (telemetry.phase_amps  > telemetry.race_dyno.peak_phase_amps)telemetry.race_dyno.peak_phase_amps = telemetry.phase_amps;
 
-        uint8_t sp1 = Settings.get().race_split1_kmh;
-        uint8_t sp2 = Settings.get().race_split2_kmh;
-        uint8_t sp3 = Settings.get().race_split3_kmh;
+        uint8_t sp1 = cur_sp1;
+        uint8_t sp2 = cur_sp2;
+        uint8_t sp3 = cur_sp3;
 
-        if (telemetry.race_split_0_22 <= 0.0f && telemetry.speed_kmh >= (float)sp1) {
+        if (sp1 > 0 && telemetry.race_split_0_22 <= 0.0f && telemetry.speed_kmh >= (float)sp1) {
             telemetry.race_split_0_22 = (telemetry.race_elapsed_sec > 0.01f) ? telemetry.race_elapsed_sec : 0.01f;
             if (telemetry.race_records.best_0_22_sec <= 0.01f || telemetry.race_split_0_22 < telemetry.race_records.best_0_22_sec) {
                 telemetry.race_records.best_0_22_sec = telemetry.race_split_0_22;
@@ -3442,7 +3458,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             }
         }
 
-        if (telemetry.race_split_0_50 <= 0.0f && telemetry.speed_kmh >= (float)sp2) {
+        if (sp2 > sp1 && telemetry.race_split_0_50 <= 0.0f && telemetry.speed_kmh >= (float)sp2) {
             telemetry.race_split_0_50 = (telemetry.race_elapsed_sec > 0.01f) ? telemetry.race_elapsed_sec : 0.01f;
             if (telemetry.race_records.best_0_50_sec <= 0.01f || telemetry.race_split_0_50 < telemetry.race_records.best_0_50_sec) {
                 telemetry.race_records.best_0_50_sec = telemetry.race_split_0_50;
@@ -3450,39 +3466,40 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             }
         }
 
-        if (telemetry.race_split_0_70 <= 0.0f && telemetry.speed_kmh >= (float)sp3) {
+        if (sp3 > sp2 && telemetry.race_split_0_70 <= 0.0f && telemetry.speed_kmh >= (float)sp3) {
             telemetry.race_split_0_70 = (telemetry.race_elapsed_sec > 0.01f) ? telemetry.race_elapsed_sec : 0.01f;
             if (telemetry.race_records.best_0_70_sec <= 0.01f || telemetry.race_split_0_70 < telemetry.race_records.best_0_70_sec) {
                 telemetry.race_records.best_0_70_sec = telemetry.race_split_0_70;
                 Settings.saveRaceRecords(telemetry.race_records);
             }
-            telemetry.race_state = 3; // FINISHED
-            telemetry.boost_active = false;
-            ModeManager::instance().setBoostActive(false);
-            telemetry.ride_mode = telemetry.saved_ride_mode;
-            ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
-            Buttons.setRaceState(3);
-            markScreenDirty();
+            finishRaceRun();
         }
 
-        if (telemetry.race_dyno.peak_speed_kmh >= 25.0f && telemetry.race_elapsed_sec > 2.0f && telemetry.speed_kmh < 2.0f) {
-            telemetry.race_state = 3;
-            telemetry.boost_active = false;
-            ModeManager::instance().setBoostActive(false);
-            telemetry.ride_mode = telemetry.saved_ride_mode;
-            ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
-            Buttons.setRaceState(3);
-            markScreenDirty();
+        // Auto-finish on speed plateau (accel < 0.2 m/s^2 over 2.0 s above Split 1)
+        if (telemetry.race_state == 2 && (uint32_t)(now - _race_last_eval_ms) >= 200) {
+            float dt_s = (float)(now - _race_last_eval_ms) / 1000.0f;
+            if (dt_s < 0.05f) dt_s = 0.05f;
+            float accel_ms2 = ((telemetry.speed_kmh - _race_last_eval_speed_kmh) / 3.6f) / dt_s;
+            _race_last_eval_ms = now;
+            _race_last_eval_speed_kmh = telemetry.speed_kmh;
+
+            if (telemetry.race_split_0_22 > 0.0f && accel_ms2 < 0.2f) {
+                if (_race_plateau_start_ms == 0) {
+                    _race_plateau_start_ms = now;
+                } else if ((uint32_t)(now - _race_plateau_start_ms) >= 2000) {
+                    finishRaceRun();
+                }
+            } else {
+                _race_plateau_start_ms = 0;
+            }
         }
 
-        if (telemetry.race_elapsed_sec >= 15.0f) {
-            telemetry.race_state = 3;
-            telemetry.boost_active = false;
-            ModeManager::instance().setBoostActive(false);
-            telemetry.ride_mode = telemetry.saved_ride_mode;
-            ModeManager::instance().setRideMode(telemetry.saved_ride_mode);
-            Buttons.setRaceState(3);
-            markScreenDirty();
+        if (telemetry.race_state == 2 && telemetry.race_dyno.peak_speed_kmh >= 25.0f && telemetry.race_elapsed_sec > 2.0f && telemetry.speed_kmh < 2.0f) {
+            finishRaceRun();
+        }
+
+        if (telemetry.race_state == 2 && telemetry.race_elapsed_sec >= 15.0f) {
+            finishRaceRun();
         }
     }
 }
@@ -3504,34 +3521,35 @@ void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
     _last_race_split_0_70 = -999.0f;
 
     // Top-Left [< DASH]
-    _canvas->fillRoundRect(20, 12, 108, 34, 17, pal.surface);
-    _canvas->drawRoundRect(20, 12, 108, 34, 17, pal.border);
-    drawSmoothText(UIF_BODY, "< DASH", 74, 29, textdatum_t::middle_center, pal.text, pal.surface);
+    _canvas->fillRoundRect(UiLayout::RACE_BACK_BTN.x, UiLayout::RACE_BACK_BTN.y, UiLayout::RACE_BACK_BTN.w, UiLayout::RACE_BACK_BTN.h, 17, pal.surface);
+    _canvas->drawRoundRect(UiLayout::RACE_BACK_BTN.x, UiLayout::RACE_BACK_BTN.y, UiLayout::RACE_BACK_BTN.w, UiLayout::RACE_BACK_BTN.h, 17, pal.border);
+    drawSmoothText(UIF_BODY, "< DASH", UiLayout::RACE_BACK_BTN.cx(), UiLayout::RACE_BACK_BTN.cy(), textdatum_t::middle_center, pal.text, pal.surface);
 
     // Top [ DIAGRAMM ]
-    _canvas->fillRoundRect(475, 12, 140, 34, 17, pal.surface);
-    _canvas->drawRoundRect(475, 12, 140, 34, 17, pal.primary);
-    drawSmoothText(UIF_BODY, "DIAGRAMM", 545, 29, textdatum_t::middle_center, pal.primary, pal.surface);
+    _canvas->fillRoundRect(UiLayout::RACE_DYNO_BTN.x, UiLayout::RACE_DYNO_BTN.y, UiLayout::RACE_DYNO_BTN.w, UiLayout::RACE_DYNO_BTN.h, 17, pal.surface);
+    _canvas->drawRoundRect(UiLayout::RACE_DYNO_BTN.x, UiLayout::RACE_DYNO_BTN.y, UiLayout::RACE_DYNO_BTN.w, UiLayout::RACE_DYNO_BTN.h, 17, pal.primary);
+    drawSmoothText(UIF_BODY, "DIAGRAMM", UiLayout::RACE_DYNO_BTN.cx(), UiLayout::RACE_DYNO_BTN.cy(), textdatum_t::middle_center, pal.primary, pal.surface);
 
     // Top-Right [ BESTZEITEN ]
-    _canvas->fillRoundRect(630, 12, 150, 34, 17, pal.surface);
-    _canvas->drawRoundRect(630, 12, 150, 34, 17, pal.border);
-    drawSmoothText(UIF_BODY, "BESTZEITEN", 705, 29, textdatum_t::middle_center, pal.text, pal.surface);
+    _canvas->fillRoundRect(UiLayout::RACE_RECORDS_BTN.x, UiLayout::RACE_RECORDS_BTN.y, UiLayout::RACE_RECORDS_BTN.w, UiLayout::RACE_RECORDS_BTN.h, 17, pal.surface);
+    _canvas->drawRoundRect(UiLayout::RACE_RECORDS_BTN.x, UiLayout::RACE_RECORDS_BTN.y, UiLayout::RACE_RECORDS_BTN.w, UiLayout::RACE_RECORDS_BTN.h, 17, pal.border);
+    drawSmoothText(UIF_BODY, "BESTZEITEN", UiLayout::RACE_RECORDS_BTN.cx(), UiLayout::RACE_RECORDS_BTN.cy(), textdatum_t::middle_center, pal.text, pal.surface);
 
     // Speedometer Center Arc Gauge (270° sweep: 135° to 405°, crisp clearance above Launch button)
-    int cx = 310, cy = 224;
-    int r_in = 130, r_out = 158;
-    float mid_r = 144.0f;
-    float deg2rad = 3.14159265f / 180.0f;
+    constexpr int cx = 310, cy = 224;
+    constexpr int r_in = 130, r_out = 158;
+    constexpr int s_cap_x = 208, s_cap_y = 326;
+    constexpr int e_cap_x = 412, e_cap_y = 326;
     _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, 405.0f, pal.track);
-    int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
-    int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
-    int e_cap_x = cx + (int)roundf(cosf(405.0f * deg2rad) * mid_r);
-    int e_cap_y = cy + (int)roundf(sinf(405.0f * deg2rad) * mid_r);
     _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
     _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
 
     drawSmoothText(UIF_HEADING, "km/h", cx, cy + 34, textdatum_t::top_center, pal.muted, pal.bg);
+
+    char activeSplitsHint[32];
+    snprintf(activeSplitsHint, sizeof(activeSplitsHint), "Ziele: %d / %d / %d km/h",
+             Settings.get().race_split1_kmh, Settings.get().race_split2_kmh, Settings.get().race_split3_kmh);
+    drawSmoothText(UIF_SMALL, activeSplitsHint, cx, 430, textdatum_t::top_center, pal.muted, pal.bg);
 
     // Right Splits Card
     drawCard(530, 68, 250, 392, pal.surface, pal.border, 14);
@@ -3576,10 +3594,9 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
         _race_dyno_drawn = false;
     }
 
-    int cx = 310, cy = 224;
-    int r_in = 130, r_out = 158;
-    float mid_r = 144.0f;
-    float deg2rad = 3.14159265f / 180.0f;
+    constexpr int cx = 310, cy = 224;
+    constexpr int r_in = 130, r_out = 158;
+    constexpr int s_cap_x = 208, s_cap_y = 326;
 
     int cur_cd = (telemetry.race_state == 1) ? (5 - (int)telemetry.race_elapsed_sec) : -1;
     if (telemetry.race_state == 1) {
@@ -3627,8 +3644,6 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     float target_angle = (frac <= 0.005f) ? 135.0f : (135.0f + frac * 270.0f);
 
     uint16_t arcCol = (telemetry.race_state == 1) ? pal.accent_warn : pal.primary;
-    int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
-    int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
 
     bool race_arc_dirty = false;
     if (target_angle <= 135.0f && _last_race_arc_angle > 135.0f) {
@@ -3669,18 +3684,19 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     // 3. Center Action Button cleanly below the horseshoe ring (ZERO arc overlap!)
     bool btn_needs_update = state_changed || (telemetry.race_state == 1 && cur_cd != _last_race_countdown);
     if (btn_needs_update) {
-        const int btnY = 368;
-        const int btnH = 48;
-        _canvas->fillRect(cx - 116, btnY - 4, 232, btnH + 8, pal.bg);
+        const UiRect &lb = UiLayout::RACE_LAUNCH_BTN;
+        const int btnY = lb.y;
+        const int btnH = lb.h;
+        _canvas->fillRect(lb.x - 10, btnY - 4, lb.w + 20, btnH + 8, pal.bg);
         if (telemetry.race_state == 0) {
             if (isRaceThermalBlocked(telemetry)) {
                 uint16_t warnBg = blendRgb565(pal.surface, pal.accent_warn, pal.is_light ? 25 : 45);
-                _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, warnBg);
-                _canvas->drawRoundRect(cx - 106, btnY, 212, btnH, 24, pal.accent_warn);
-                drawSmoothText(UIF_BODY, "TEMP > 65°C", cx, btnY + btnH / 2, textdatum_t::middle_center, pal.accent_warn, warnBg);
+                _canvas->fillRoundRect(lb.x, btnY, lb.w, btnH, 24, warnBg);
+                _canvas->drawRoundRect(lb.x, btnY, lb.w, btnH, 24, pal.accent_warn);
+                drawSmoothText(UIF_BODY, "TEMP > 65°C", lb.cx(), lb.cy(), textdatum_t::middle_center, pal.accent_warn, warnBg);
             } else {
-                _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, pal.primary);
-                drawSmoothText(UIF_BODY, "START LAUNCH", cx, btnY + btnH / 2, textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
+                _canvas->fillRoundRect(lb.x, btnY, lb.w, btnH, 24, pal.primary);
+                drawSmoothText(UIF_BODY, "START LAUNCH", lb.cx(), lb.cy(), textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
             }
         } else if (telemetry.race_state == 1) { // ARMED / COUNTDOWN (Auto-Rollout)
             char cdBuf[24];
@@ -3693,20 +3709,20 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
             }
             uint16_t armCol = (cur_cd == 0) ? pal.accent_ok : pal.accent_warn;
             uint16_t armBg = blendRgb565(pal.surface, armCol, pal.is_light ? 26 : 48);
-            _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, armBg);
-            _canvas->drawRoundRect(cx - 106, btnY, 212, btnH, 24, armCol);
-            drawSmoothText(UIF_BODY, cdBuf, cx, btnY + btnH / 2, textdatum_t::middle_center, armCol, armBg);
+            _canvas->fillRoundRect(lb.x, btnY, lb.w, btnH, 24, armBg);
+            _canvas->drawRoundRect(lb.x, btnY, lb.w, btnH, 24, armCol);
+            drawSmoothText(UIF_BODY, cdBuf, lb.cx(), lb.cy(), textdatum_t::middle_center, armCol, armBg);
         } else if (telemetry.race_state == 2) { // MEASURING
             uint16_t runBg = blendRgb565(pal.surface, pal.accent_danger, pal.is_light ? 26 : 48);
-            _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, runBg);
-            _canvas->drawRoundRect(cx - 106, btnY, 212, btnH, 24, pal.accent_danger);
-            drawSmoothText(UIF_BODY, "STOP / ABORT", cx, btnY + btnH / 2, textdatum_t::middle_center, pal.accent_danger, runBg);
+            _canvas->fillRoundRect(lb.x, btnY, lb.w, btnH, 24, runBg);
+            _canvas->drawRoundRect(lb.x, btnY, lb.w, btnH, 24, pal.accent_danger);
+            drawSmoothText(UIF_BODY, "STOP / ABORT", lb.cx(), lb.cy(), textdatum_t::middle_center, pal.accent_danger, runBg);
         } else { // FINISHED
-            _canvas->fillRoundRect(cx - 106, btnY, 212, btnH, 24, pal.surface);
-            _canvas->drawRoundRect(cx - 106, btnY, 212, btnH, 24, pal.primary);
-            drawSmoothText(UIF_BODY, "NEUER LAUNCH", cx, btnY + btnH / 2, textdatum_t::middle_center, pal.primary, pal.surface);
+            _canvas->fillRoundRect(lb.x, btnY, lb.w, btnH, 24, pal.surface);
+            _canvas->drawRoundRect(lb.x, btnY, lb.w, btnH, 24, pal.primary);
+            drawSmoothText(UIF_BODY, "NEUER LAUNCH", lb.cx(), lb.cy(), textdatum_t::middle_center, pal.primary, pal.surface);
         }
-        addDirtyRect(cx - 116, btnY - 4, 232, btnH + 8);
+        addDirtyRect(lb.x - 10, btnY - 4, lb.w + 20, btnH + 8);
     }
 
     // Commit state cache AFTER both header and button updated
@@ -3760,16 +3776,22 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
 
 void DashboardRenderer::drawRaceRecordsModal(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
-    int mx = 140, my = 70, mw = 520, mh = 340;
+    const UiRect &rm = UiLayout::RACE_REC_MODAL;
+    int mx = rm.x, my = rm.y, mw = rm.w, mh = rm.h;
     addDirtyRect(mx, my, mw, mh);
     drawCard(mx, my, mw, mh, pal.surface, pal.accent_warn, 16);
     _canvas->drawRoundRect(mx + 1, my + 1, mw - 2, mh - 2, 15, pal.accent_warn);
 
-    drawSmoothText(UIF_HEADING, "PERSÖNLICHE BESTZEITEN", mx + 24, my + 20, textdatum_t::top_left, pal.accent_warn, pal.surface);
+    drawSmoothText(UIF_HEADING, "PERSÖNLICHE BESTZEITEN", mx + 24, my + 16, textdatum_t::top_left, pal.accent_warn, pal.surface);
+    char goalBuf[40];
+    snprintf(goalBuf, sizeof(goalBuf), "Aktive Schwellen: %d / %d / %d km/h",
+             Settings.get().race_split1_kmh, Settings.get().race_split2_kmh, Settings.get().race_split3_kmh);
+    drawSmoothText(UIF_SMALL, goalBuf, mx + 24, my + 44, textdatum_t::top_left, pal.muted, pal.surface);
 
-    _canvas->fillRoundRect(mx + mw - 52, my + 14, 38, 34, 8, pal.surface_alt);
-    _canvas->drawRoundRect(mx + mw - 52, my + 14, 38, 34, 8, pal.border);
-    drawSmoothText(UIF_BODY, "X", mx + mw - 33, my + 31, textdatum_t::middle_center, pal.text, pal.surface_alt);
+    const UiRect &rc = UiLayout::RACE_REC_CLOSE_BTN;
+    _canvas->fillRoundRect(rc.x, rc.y, rc.w, rc.h, 8, pal.surface_alt);
+    _canvas->drawRoundRect(rc.x, rc.y, rc.w, rc.h, 8, pal.border);
+    drawSmoothText(UIF_BODY, "X", rc.cx(), rc.cy(), textdatum_t::middle_center, pal.text, pal.surface_alt);
 
     auto drawRecordRow = [&](int y, const char *label, float best_sec) {
         drawSmoothText(UIF_HEADING, label, mx + 28, y, textdatum_t::top_left, pal.text, pal.surface);
@@ -3792,20 +3814,22 @@ void DashboardRenderer::drawRaceRecordsModal(const DashTelemetry &telemetry) {
     drawRecordRow(my + 132, rec2, telemetry.race_records.best_0_50_sec);
     drawRecordRow(my + 192, rec3, telemetry.race_records.best_0_70_sec);
 
-    int btnY = my + 266;
+    const UiRect &rb = UiLayout::RACE_REC_RESET_BTN;
     uint16_t resetBg = blendRgb565(pal.surface, pal.accent_danger, pal.is_light ? 22 : 44);
-    _canvas->fillRoundRect(mx + 30, btnY, 150, 48, 12, resetBg);
-    _canvas->drawRoundRect(mx + 30, btnY, 150, 48, 12, pal.accent_danger);
-    drawSmoothText(UIF_BODY, "RESET", mx + 105, btnY + 24, textdatum_t::middle_center, pal.accent_danger, resetBg);
+    _canvas->fillRoundRect(rb.x, rb.y, rb.w, rb.h, 12, resetBg);
+    _canvas->drawRoundRect(rb.x, rb.y, rb.w, rb.h, 12, pal.accent_danger);
+    drawSmoothText(UIF_BODY, "RESET", rb.cx(), rb.cy(), textdatum_t::middle_center, pal.accent_danger, resetBg);
 
-    _canvas->fillRoundRect(mx + mw - 210, btnY, 180, 48, 12, pal.surface_alt);
-    _canvas->drawRoundRect(mx + mw - 210, btnY, 180, 48, 12, pal.border);
-    drawSmoothText(UIF_BODY, "SCHLIESSEN", mx + mw - 120, btnY + 24, textdatum_t::middle_center, pal.text, pal.surface_alt);
+    const UiRect &db = UiLayout::RACE_REC_DONE_BTN;
+    _canvas->fillRoundRect(db.x, db.y, db.w, db.h, 12, pal.surface_alt);
+    _canvas->drawRoundRect(db.x, db.y, db.w, db.h, 12, pal.border);
+    drawSmoothText(UIF_BODY, "SCHLIESSEN", db.cx(), db.cy(), textdatum_t::middle_center, pal.text, pal.surface_alt);
 }
 
 void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
-    int mx = 100, my = 45, mw = 600, mh = 390;
+    const UiRect &dm = UiLayout::RACE_DYNO_MODAL;
+    int mx = dm.x, my = dm.y, mw = dm.w, mh = dm.h;
     addDirtyRect(mx, my, mw, mh);
 
     // Dark modal surface card with primary border
@@ -3816,9 +3840,10 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
     drawSmoothText(UIF_HEADING, "LEISTUNGSDIAGRAMM & TELEMETRIE", mx + 22, my + 16, textdatum_t::top_left, pal.primary, pal.surface);
 
     // Top-Right Close Button [ X ]
-    _canvas->fillRoundRect(mx + mw - 50, my + 12, 36, 32, 8, pal.surface_alt);
-    _canvas->drawRoundRect(mx + mw - 50, my + 12, 36, 32, 8, pal.border);
-    drawSmoothText(UIF_BODY, "X", mx + mw - 32, my + 28, textdatum_t::middle_center, pal.text, pal.surface_alt);
+    const UiRect &dc = UiLayout::RACE_DYNO_CLOSE_BTN;
+    _canvas->fillRoundRect(dc.x, dc.y, dc.w, dc.h, 8, pal.surface_alt);
+    _canvas->drawRoundRect(dc.x, dc.y, dc.w, dc.h, 8, pal.border);
+    drawSmoothText(UIF_BODY, "X", dc.cx(), dc.cy(), textdatum_t::middle_center, pal.text, pal.surface_alt);
 
     // Determine Peak & Summary Statistics
     // Fall back to realistic scooter specs if no run has been recorded yet
@@ -3983,12 +4008,10 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
                    gx + gw, leg_y + 6, textdatum_t::middle_right, pal.muted, pal.surface);
 
     // Bottom Action Button: [ SCHLIESSEN ]
-    int btnW = 200, btnH = 40;
-    int btnX = mx + (mw - btnW) / 2;
-    int btnY = my + mh - 50;
-    _canvas->fillRoundRect(btnX, btnY, btnW, btnH, 12, pal.surface_alt);
-    _canvas->drawRoundRect(btnX, btnY, btnW, btnH, 12, pal.border);
-    drawSmoothText(UIF_BODY, "SCHLIESSEN", btnX + btnW / 2, btnY + btnH / 2,
+    const UiRect &dd = UiLayout::RACE_DYNO_DONE_BTN;
+    _canvas->fillRoundRect(dd.x, dd.y, dd.w, dd.h, 12, pal.surface_alt);
+    _canvas->drawRoundRect(dd.x, dd.y, dd.w, dd.h, 12, pal.border);
+    drawSmoothText(UIF_BODY, "SCHLIESSEN", dd.cx(), dd.cy(),
                    textdatum_t::middle_center, pal.text, pal.surface_alt);
 }
 

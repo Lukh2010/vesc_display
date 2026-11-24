@@ -3,6 +3,36 @@
 #include "settings_manager.h"
 #include <math.h>
 
+namespace {
+struct ModeLockGuard {
+#if !defined(NATIVE_SIMULATOR)
+    SemaphoreHandle_t m;
+    bool locked;
+    explicit ModeLockGuard(SemaphoreHandle_t mutex) : m(mutex), locked(false) {
+        if (m) {
+            locked = (xSemaphoreTakeRecursive(m, portMAX_DELAY) == pdTRUE);
+        }
+    }
+    ~ModeLockGuard() { unlock(); }
+    void unlock() {
+        if (m && locked) {
+            xSemaphoreGiveRecursive(m);
+            locked = false;
+        }
+    }
+#else
+    explicit ModeLockGuard(int = 0) {}
+    void unlock() {}
+#endif
+};
+} // namespace
+
+#if !defined(NATIVE_SIMULATOR)
+#define MODE_LOCK() ModeLockGuard mode_lock(_mutex)
+#else
+#define MODE_LOCK() ModeLockGuard mode_lock(0)
+#endif
+
 ModeManager& ModeManager::instance() {
     static ModeManager s_instance;
     return s_instance;
@@ -14,7 +44,12 @@ ModeManager::ModeManager()
       _boost_active(false),
       _is_locked(false),
       _ride_mode(MODE_ECO),
-      _limits_dirty(false) {
+      _limits_dirty(false),
+      _async_vesc_push(false)
+#if !defined(NATIVE_SIMULATOR)
+    , _mutex(xSemaphoreCreateRecursiveMutex())
+#endif
+{
     memset(&_last_saved_config, 0, sizeof(_last_saved_config));
     setFactoryDefaults();
 }
@@ -78,6 +113,7 @@ void ModeManager::setFactoryDefaults() {
 }
 
 void ModeManager::begin() {
+    MODE_LOCK();
     // Boot state is ALWAYS legal mode (ungetunt / gedrosselt, dot lit)
     _tuning_mode = false;
     _boost_active = false;
@@ -106,45 +142,97 @@ void ModeManager::begin() {
         Serial.println("[MODE_MGR] Loaded vehicle & mode configurations from NVS.");
     }
 
-    // Send initial legal limits immediately to VESC
+    // Release ModeManager mutex before acquiring VescHandler UartLock inside applyLimitsToVesc()
+    mode_lock.unlock();
     applyLimitsToVesc();
+}
+
+VehicleModeConfig ModeManager::getConfigSnapshot() const {
+    MODE_LOCK();
+    return _config;
+}
+
+uint8_t ModeManager::getBatteryCells() const {
+    MODE_LOCK();
+    return _config.battery_cells;
+}
+
+bool ModeManager::isTuningMode() const {
+    MODE_LOCK();
+    return _tuning_mode;
+}
+
+bool ModeManager::isBoostActive() const {
+    MODE_LOCK();
+    return _boost_active;
+}
+
+bool ModeManager::isLocked() const {
+    MODE_LOCK();
+    return _is_locked;
+}
+
+RideMode ModeManager::getRideMode() const {
+    MODE_LOCK();
+    return _ride_mode;
+}
+
+void ModeManager::setAsyncVescPush(bool enabled) {
+    MODE_LOCK();
+    _async_vesc_push = enabled;
 }
 
 void ModeManager::setBatteryCells(uint8_t cells) {
     if (cells < 10) cells = 10;
     if (cells > 24) cells = 24;
 
-    bool cells_changed = (_config.battery_cells != cells);
-    bool settings_diff = (Settings.get().battery_cells != cells);
+    bool cells_changed = false;
+    bool settings_diff = false;
+    float cut_s = 0.0f, cut_e = 0.0f;
+    bool do_sync_push = false;
+    {
+        MODE_LOCK();
+        cells_changed = (_config.battery_cells != cells);
+        settings_diff = (Settings.get().battery_cells != cells);
 
-    _config.battery_cells = cells;
-    Settings.get().battery_cells = cells;
+        _config.battery_cells = cells;
+        Settings.get().battery_cells = cells;
 
-    // Auto-recalculate sensible cutoff voltages when cell count changes (or if out of plausible range)
-    float min_valid = (float)cells * 2.5f;
-    float max_valid = (float)cells * 4.0f;
-    if (cells_changed ||
-        _config.battery_cutoff_start < min_valid || _config.battery_cutoff_start > max_valid ||
-        _config.battery_cutoff_end < min_valid   || _config.battery_cutoff_end > max_valid ||
-        _config.battery_cutoff_end >= _config.battery_cutoff_start) {
-        _config.battery_cutoff_start = roundf((float)cells * 3.3f * 10.0f) / 10.0f;
-        _config.battery_cutoff_end   = roundf((float)cells * 3.0f * 10.0f) / 10.0f;
-        cells_changed = true;
+        // Auto-recalculate sensible cutoff voltages when cell count changes (or if out of plausible range)
+        float min_valid = (float)cells * 2.5f;
+        float max_valid = (float)cells * 4.0f;
+        if (cells_changed ||
+            _config.battery_cutoff_start < min_valid || _config.battery_cutoff_start > max_valid ||
+            _config.battery_cutoff_end < min_valid   || _config.battery_cutoff_end > max_valid ||
+            _config.battery_cutoff_end >= _config.battery_cutoff_start) {
+            _config.battery_cutoff_start = roundf((float)cells * 3.3f * 10.0f) / 10.0f;
+            _config.battery_cutoff_end   = roundf((float)cells * 3.0f * 10.0f) / 10.0f;
+            cells_changed = true;
+        }
+
+        if (settings_diff) {
+            Settings.save();
+        }
+        if (cells_changed) {
+            saveToNvs();
+            _limits_dirty = true;
+            cut_s = _config.battery_cutoff_start;
+            cut_e = _config.battery_cutoff_end;
+            do_sync_push = !_async_vesc_push;
+        }
     }
 
-    if (settings_diff) {
-        Settings.save();
-    }
     if (cells_changed) {
-        saveToNvs();
-        _limits_dirty = true;
-        applyLimitsToVesc();
+        if (do_sync_push) {
+            applyLimitsToVesc();
+        }
         Serial.printf("[MODE_MGR] Battery cells set to %uS (Cutoffs: %.1fV .. %.1fV)\n",
-                      cells, _config.battery_cutoff_start, _config.battery_cutoff_end);
+                      cells, cut_s, cut_e);
     }
 }
 
 void ModeManager::loadFromNvs() {
+    MODE_LOCK();
     const char *leg_prefixes[PROFILE_MODE_COUNT] = { "l0", "l1", "l2" };
     const char *tun_prefixes[PROFILE_MODE_COUNT] = { "t0", "t1", "t2" };
     char key[16];
@@ -222,6 +310,7 @@ void ModeManager::loadFromNvs() {
 }
 
 void ModeManager::saveToNvs() {
+    MODE_LOCK();
     if (_has_saved_snapshot && memcmp(&_config, &_last_saved_config, sizeof(VehicleModeConfig)) == 0) {
         return;
     }
@@ -278,62 +367,124 @@ void ModeManager::saveToNvs() {
 }
 
 void ModeManager::resetDefaults() {
-    setFactoryDefaults();
-    saveToNvs();
-    applyLimitsToVesc();
-}
-
-void ModeManager::setTuningMode(bool enable) {
-    if (_tuning_mode != enable) {
-        _tuning_mode = enable;
-        if (!enable) {
-            _boost_active = false; // Invariant: Police mode strictly cancels Hyper Boost
-        }
+    bool do_sync_push = false;
+    {
+        MODE_LOCK();
+        setFactoryDefaults();
+        saveToNvs();
         _limits_dirty = true;
-        Serial.printf("[MODE_MGR] Tuning mode switched to: %s\n", enable ? "UNLOCKED" : "LOCKED_LEGAL");
+        do_sync_push = !_async_vesc_push;
+    }
+    if (do_sync_push) {
         applyLimitsToVesc();
     }
 }
 
+void ModeManager::setTuningMode(bool enable) {
+    bool changed = false;
+    bool do_sync_push = false;
+    {
+        MODE_LOCK();
+        if (_tuning_mode != enable) {
+            _tuning_mode = enable;
+            if (!enable) {
+                _boost_active = false; // Invariant: Police mode strictly cancels Hyper Boost
+            }
+            _limits_dirty = true;
+            changed = true;
+            do_sync_push = !_async_vesc_push;
+        }
+    }
+    if (changed) {
+        Serial.printf("[MODE_MGR] Tuning mode switched to: %s\n", enable ? "UNLOCKED" : "LOCKED_LEGAL");
+        if (do_sync_push) {
+            applyLimitsToVesc();
+        }
+    }
+}
+
 void ModeManager::setBoostActive(bool enable) {
-    if (_boost_active != enable) {
-        _boost_active = enable;
-        _limits_dirty = true;
-        ModeLimits lim = getActiveLimits();
+    bool changed = false;
+    bool do_sync_push = false;
+    ModeLimits lim = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    {
+        MODE_LOCK();
+        if (_boost_active != enable) {
+            _boost_active = enable;
+            _limits_dirty = true;
+            lim = getActiveLimits();
+            changed = true;
+            do_sync_push = !_async_vesc_push;
+        }
+    }
+    if (changed) {
         Serial.printf("[MODE_MGR] Hyper Boost switched to: %s -> Battery: %.1f A, Phase: %.1f A, Speed: %s\n",
                       enable ? "ON" : "OFF",
                       lim.max_battery_amps,
                       lim.max_phase_amps,
                       lim.max_speed_kmh >= 100.0f ? "UNLIMITED (KOMPLETT OFFEN)" : "LIMITED");
-        applyLimitsToVesc();
+        if (do_sync_push) {
+            applyLimitsToVesc();
+        }
     }
 }
 
 void ModeManager::setLocked(bool locked) {
-    if (_is_locked != locked) {
-        _is_locked = locked;
-        _limits_dirty = true;
+    bool changed = false;
+    bool do_sync_push = false;
+    {
+        MODE_LOCK();
+        if (_is_locked != locked) {
+            _is_locked = locked;
+            _limits_dirty = true;
+            changed = true;
+            do_sync_push = !_async_vesc_push;
+        }
+    }
+    if (changed) {
         Serial.printf("[MODE_MGR] System Lock state: %s\n", locked ? "LOCKED (0A Output)" : "UNLOCKED");
-        applyLimitsToVesc();
+        if (do_sync_push) {
+            applyLimitsToVesc();
+        }
     }
 }
 
 void ModeManager::setRideMode(RideMode mode) {
-    if (_ride_mode != mode) {
-        _ride_mode = mode;
-        _limits_dirty = true;
-        applyLimitsToVesc();
+    bool changed = false;
+    bool do_sync_push = false;
+    bool tuning_snap = false;
+    const char *mode_name = "SPORT";
+    {
+        MODE_LOCK();
+        if (_ride_mode != mode) {
+            _ride_mode = mode;
+            _limits_dirty = true;
+            tuning_snap = _tuning_mode;
+            mode_name = getActiveModeName();
+            changed = true;
+            do_sync_push = !_async_vesc_push;
+        }
+    }
+    if (changed) {
+        if (do_sync_push) {
+            applyLimitsToVesc();
+        }
         Serial.printf("[MODE_MGR] Active ride mode set to: %d (%s, Tuning: %s)\n",
-                      (int)mode, getActiveModeName(), _tuning_mode ? "ON" : "OFF");
+                      (int)mode, mode_name, tuning_snap ? "ON" : "OFF");
     }
 }
 
 void ModeManager::cycleMode() {
-    RideMode next = (RideMode)(((int)_ride_mode + 1) % PROFILE_MODE_COUNT);
+    RideMode next;
+    {
+        MODE_LOCK();
+        next = (RideMode)(((int)_ride_mode + 1) % PROFILE_MODE_COUNT);
+    }
     setRideMode(next);
 }
 
 ModeLimits ModeManager::getActiveLimits() const {
+    MODE_LOCK();
     if (_is_locked) {
         ModeLimits zero = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
         return zero;
@@ -371,6 +522,7 @@ ModeLimits ModeManager::getActiveLimits() const {
 }
 
 const char* ModeManager::getActiveModeName() const {
+    MODE_LOCK();
     switch (_ride_mode) {
         case MODE_ECO:   return "ECO";
         case MODE_SPORT: return "SPORT";
@@ -380,6 +532,7 @@ const char* ModeManager::getActiveModeName() const {
 }
 
 bool ModeManager::checkAndClearLimitsDirty() {
+    MODE_LOCK();
     if (_limits_dirty) {
         _limits_dirty = false;
         return true;
@@ -388,23 +541,38 @@ bool ModeManager::checkAndClearLimitsDirty() {
 }
 
 void ModeManager::markLimitsDirty() {
+    MODE_LOCK();
     _limits_dirty = true;
 }
 
 void ModeManager::applyLimitsToVesc() {
-    _limits_dirty = false;
-    if (_is_locked) {
+    bool locked = false;
+    bool tuning = false;
+    const char *mode_name = "SPORT";
+    ModeLimits lim = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    float cut_s = 0.0f, cut_e = 0.0f;
+    {
+        MODE_LOCK();
+        _limits_dirty = false;
+        locked = _is_locked;
+        tuning = _tuning_mode;
+        mode_name = getActiveModeName();
+        lim = getActiveLimits();
+        cut_s = _config.battery_cutoff_start;
+        cut_e = _config.battery_cutoff_end;
+    }
+
+    // Lock released before calling VescHandler (which acquires UartLock) to prevent AB-BA deadlock
+    if (locked) {
         Serial.println("[MODE_MGR] System LOCKED: Sending 0A cutoff limits to VESC.");
-        Vesc.sendModeLimits(0.0f, 0.0f, 0.0f, 0.0f,
-                            _config.battery_cutoff_start, _config.battery_cutoff_end);
+        Vesc.sendModeLimits(0.0f, 0.0f, 0.0f, 0.0f, cut_s, cut_e);
         return;
     }
-    ModeLimits lim = getActiveLimits();
     Serial.printf("[MODE_MGR] Sending active limits (%s, Tuning:%s) to VESC: Spd=%.1f km/h, Pwr=%.0f W (Pull: %.0f W), Bat=%.1f A, Pha=%.1f A, Cut=%.1fV..%.1fV\n",
-                  getActiveModeName(), _tuning_mode ? "ON" : "OFF",
+                  mode_name, tuning ? "ON" : "OFF",
                   lim.max_speed_kmh, lim.max_power_watts, lim.max_pull_watts, lim.max_battery_amps, lim.max_phase_amps,
-                  _config.battery_cutoff_start, _config.battery_cutoff_end);
+                  cut_s, cut_e);
     Vesc.sendModeLimits(lim.max_speed_kmh, lim.max_power_watts, lim.max_battery_amps, lim.max_phase_amps,
-                        _config.battery_cutoff_start, _config.battery_cutoff_end);
+                        cut_s, cut_e);
 }
 

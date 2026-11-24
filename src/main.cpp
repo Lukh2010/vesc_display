@@ -13,9 +13,209 @@
 #include "ble_keyless_manager.h"
 #include "ota_manager.h"
 #include "tcs_tpms_manager.h"
+#include "dash_log.h"
+#if !defined(NATIVE_SIMULATOR)
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+#endif
 
-// Active Telemetry State
+// Active Telemetry State (Core 1 UI / loop() working snapshot)
 static DashTelemetry telemetry;
+
+// Double-buffered Core 0 <-> Core 1 synchronization mailbox
+static DashTelemetry s_shared_telem;
+static volatile uint32_t s_trip_reset_req_gen = 0;
+static volatile int8_t   s_pending_bat_profile = -1;
+#if !defined(NATIVE_SIMULATOR)
+static SemaphoreHandle_t s_telem_mutex = nullptr;
+static TaskHandle_t      s_rt_task_handle = nullptr;
+#endif
+
+static void copyLiveTelemetry(DashTelemetry &dst, const DashTelemetry &src) {
+    dst.speed_kmh                  = src.speed_kmh;
+    dst.vesc_motor_speed           = src.vesc_motor_speed;
+    dst.use_gps_speed              = src.use_gps_speed;
+    memcpy(dst.clock_str, src.clock_str, sizeof(dst.clock_str));
+    dst.gps                        = src.gps;
+    dst.g_force                    = src.g_force;
+    dst.incline_deg                = src.incline_deg;
+    dst.duty_cycle_pct             = src.duty_cycle_pct;
+    dst.rpm                        = src.rpm;
+    dst.throttle_pct               = src.throttle_pct;
+
+    dst.voltage                    = src.voltage;
+    dst.current_amps               = src.current_amps;
+    dst.phase_amps                 = src.phase_amps;
+    dst.power_watts                = src.power_watts;
+    dst.amphours_used              = src.amphours_used;
+
+    dst.temp_fet_rear              = src.temp_fet_rear;
+    dst.temp_mot_rear              = src.temp_mot_rear;
+    dst.temp_fet_front             = src.temp_fet_front;
+    dst.temp_mot_front             = src.temp_mot_front;
+    dst.temp_motor                 = src.temp_motor;
+    dst.temp_esc                   = src.temp_esc;
+
+    dst.battery_profile_id         = src.battery_profile_id;
+    dst.battery_pct                = src.battery_pct;
+    dst.remaining_wh               = src.remaining_wh;
+    dst.battery_health_soh         = src.battery_health_soh;
+    dst.est_range_km               = src.est_range_km;
+    dst.dynamic_wh_km              = src.dynamic_wh_km;
+
+    dst.trip_km                    = src.trip_km;
+    dst.odo_km                     = src.odo_km;
+    dst.stats                      = src.stats;
+
+    dst.tcs_active                 = src.tcs_active;
+    dst.tcs_slip_kmh               = src.tcs_slip_kmh;
+    dst.tcs_throttle_scale         = src.tcs_throttle_scale;
+    dst.tpms_warning               = src.tpms_warning;
+    dst.tpms_drift_pct             = src.tpms_drift_pct;
+    dst.calibrated_wheel_diam_inch = src.calibrated_wheel_diam_inch;
+
+    dst.vesc1_max_power            = src.vesc1_max_power;
+    dst.vesc1_max_phase            = src.vesc1_max_phase;
+    dst.vesc1_max_speed            = src.vesc1_max_speed;
+    dst.vesc2_max_power            = src.vesc2_max_power;
+    dst.vesc2_max_phase            = src.vesc2_max_phase;
+    dst.vesc2_max_speed            = src.vesc2_max_speed;
+
+    dst.vesc_connected             = src.vesc_connected;
+#if SIMULATION_MODE
+    dst.fault_code                 = src.fault_code;
+#endif
+}
+
+static void copyUiControlState(DashTelemetry &dst, const DashTelemetry &src) {
+    dst.is_locked              = src.is_locked;
+    dst.ride_mode              = src.ride_mode;
+    dst.saved_ride_mode        = src.saved_ride_mode;
+    dst.tuning_mode            = src.tuning_mode;
+    dst.boost_active           = src.boost_active;
+    dst.gps_enabled            = src.gps_enabled;
+    dst.incline_gforce_enabled = src.incline_gforce_enabled;
+    dst.wifi_bridge_enabled    = src.wifi_bridge_enabled;
+    dst.lights_enabled         = src.lights_enabled;
+    dst.screen                 = src.screen;
+    dst.uptime_sec             = src.uptime_sec;
+}
+
+// Runs the ~200 Hz real-time VESC/GPS/TCS/Limit control step (on Core 0 under FreeRTOS)
+static void stepRealtimeSubsystem(DashTelemetry &rt_tel, uint32_t now) {
+    if (Vesc.isBridgeActive()) {
+        Vesc.updateBridge();
+    } else {
+        Vesc.update(rt_tel);
+    }
+
+    GpsTracker::instance().update(rt_tel);
+
+    static uint32_t s_last_tcs_update_ms = millis();
+    float tcs_dt = (now - s_last_tcs_update_ms) / 1000.0f;
+    if (tcs_dt < 0.001f) tcs_dt = 0.001f;
+    if (tcs_dt > 0.1f) tcs_dt = 0.1f;
+    s_last_tcs_update_ms = now;
+
+    TcsTpmsManager::instance().update(rt_tel, tcs_dt);
+
+    // Push pending mode/lock/tuning limits BEFORE TCS phase scaling so TCS is never overwritten
+    if (ModeManager::instance().checkAndClearLimitsDirty()) {
+        ModeManager::instance().applyLimitsToVesc();
+    }
+
+    static float s_last_applied_tcs_scale = 1.0f;
+    static RideMode s_tcs_last_mode = MODE_ECO;
+    static bool s_tcs_last_boost = false;
+    static bool s_tcs_last_tuning = false;
+    if (rt_tel.ride_mode != s_tcs_last_mode || rt_tel.boost_active != s_tcs_last_boost || rt_tel.tuning_mode != s_tcs_last_tuning) {
+        s_tcs_last_mode = rt_tel.ride_mode;
+        s_tcs_last_boost = rt_tel.boost_active;
+        s_tcs_last_tuning = rt_tel.tuning_mode;
+        s_last_applied_tcs_scale = 1.0f;
+    }
+    if (!rt_tel.is_locked && !ModeManager::instance().isLocked() && TcsTpmsManager::instance().isTcsEnabled()) {
+        if (fabsf(rt_tel.tcs_throttle_scale - s_last_applied_tcs_scale) > 0.04f ||
+            (rt_tel.tcs_active != (s_last_applied_tcs_scale < 0.98f))) {
+            s_last_applied_tcs_scale = rt_tel.tcs_throttle_scale;
+            float base_phase = ModeManager::instance().getActiveLimits().max_phase_amps;
+            float scaled_phase = base_phase * rt_tel.tcs_throttle_scale;
+            Vesc.sendTcsPhaseLimit(scaled_phase);
+        }
+    } else {
+        s_last_applied_tcs_scale = 1.0f;
+    }
+
+    if (rt_tel.speed_kmh > rt_tel.stats.max_speed_kmh) {
+        rt_tel.stats.max_speed_kmh = rt_tel.speed_kmh;
+    }
+    rt_tel.dynamic_wh_km = Battery.getDynamicWhKm();
+    rt_tel.est_range_km = Battery.getEstRangeKm();
+    rt_tel.stats.dynamic_wh_km = rt_tel.dynamic_wh_km;
+    if (rt_tel.voltage > 10.0f) {
+        if (rt_tel.stats.min_voltage <= 0.0f || rt_tel.voltage < rt_tel.stats.min_voltage) {
+            rt_tel.stats.min_voltage = rt_tel.voltage;
+        }
+        if (rt_tel.voltage > rt_tel.stats.max_voltage) {
+            rt_tel.stats.max_voltage = rt_tel.voltage;
+        }
+    }
+}
+
+#if !defined(NATIVE_SIMULATOR)
+static void realtimeTask(void *pvParameters) {
+    (void)pvParameters;
+    DashTelemetry rt_tel;
+    if (s_telem_mutex && xSemaphoreTake(s_telem_mutex, portMAX_DELAY) == pdTRUE) {
+        rt_tel = s_shared_telem;
+        xSemaphoreGive(s_telem_mutex);
+    } else {
+        rt_tel = telemetry;
+    }
+
+    uint32_t applied_trip_gen = s_trip_reset_req_gen;
+
+    for (;;) {
+        if (OtaManager::instance().isUpdating()) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        uint32_t req_gen = applied_trip_gen;
+        int8_t req_bat_profile = -1;
+        if (s_telem_mutex && xSemaphoreTake(s_telem_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            copyUiControlState(rt_tel, s_shared_telem);
+            req_gen = s_trip_reset_req_gen;
+            req_bat_profile = s_pending_bat_profile;
+            s_pending_bat_profile = -1;
+            xSemaphoreGive(s_telem_mutex);
+        }
+
+        if (req_bat_profile >= 0) {
+            Battery.setActiveProfile((uint8_t)req_bat_profile);
+        }
+        if (req_gen != applied_trip_gen) {
+            applied_trip_gen = req_gen;
+            rt_tel.trip_km = 0.0f;
+            rt_tel.stats.reset();
+            Battery.resetTrip();
+            Vesc.resetTripOdometer();
+        }
+
+        stepRealtimeSubsystem(rt_tel, millis());
+
+        if (s_telem_mutex && xSemaphoreTake(s_telem_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            if (s_trip_reset_req_gen == applied_trip_gen) {
+                copyLiveTelemetry(s_shared_telem, rt_tel);
+            }
+            xSemaphoreGive(s_telem_mutex);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+#endif
 
 // Safe cleanup helper whenever leaving SCREEN_RACE_TIMER via any navigation or safety path
 static void exitRaceScreenCleanup(DashTelemetry &tel) {
@@ -204,6 +404,21 @@ void setup() {
     // 11. Bluetooth Low Energy Keyless-Go Manager disabled as requested
     // BleKeylessManager::instance().begin();
 
+#if !defined(NATIVE_SIMULATOR)
+    s_shared_telem = telemetry;
+    s_telem_mutex = xSemaphoreCreateMutex();
+    if (s_telem_mutex != nullptr) {
+        ModeManager::instance().setAsyncVescPush(true);
+        BaseType_t ok = xTaskCreatePinnedToCore(realtimeTask, "rt_vesc_tcs", 8192, nullptr, 3, &s_rt_task_handle, 0);
+        if (ok == pdPASS) {
+            Serial.println("[OK] Core 0 Real-Time Control Task started (~200 Hz: VESC, GPS, TCS/TPMS).");
+        } else {
+            ModeManager::instance().setAsyncVescPush(false);
+            Serial.println("[WARN] Failed to create Core 0 task; running telemetry inline on Core 1.");
+        }
+    }
+#endif
+
     Serial.println("[OK] Setup complete. Entering main render loop.");
 }
 
@@ -212,6 +427,14 @@ void loop() {
     static uint32_t last_log_ms = 0;
     static uint32_t boot_ms = millis();
     uint32_t now = millis();
+
+#if !defined(NATIVE_SIMULATOR)
+    // Pull latest Core 0 live telemetry snapshot into Core 1 working state
+    if (s_rt_task_handle && s_telem_mutex && xSemaphoreTake(s_telem_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+        copyLiveTelemetry(telemetry, s_shared_telem);
+        xSemaphoreGive(s_telem_mutex);
+    }
+#endif
 
     // Interactive Serial Command Console via USB (115200 Baud)
     // Active both in SIMULATION_MODE and on real hardware (when USB bridge is inactive)
@@ -239,8 +462,8 @@ void loop() {
             }
             if (now - s_last_test_telem_log_ms >= 200) {
                 s_last_test_telem_log_ms = now;
-                Serial.printf("[TEST TELEM] Spd: %.1f km/h | ERPM: %.0f | MotI: %.1fA | BatI: %.1fA | Duty: %.1f%%\n",
-                              telemetry.vesc_motor_speed, telemetry.rpm * 15.0f, telemetry.phase_amps, telemetry.current_amps, telemetry.duty_cycle_pct);
+                DASH_LOGF("[TEST TELEM] Spd: %.1f km/h | ERPM: %.0f | MotI: %.1fA | BatI: %.1fA | Duty: %.1f%%\n",
+                          telemetry.vesc_motor_speed, telemetry.rpm * 15.0f, telemetry.phase_amps, telemetry.current_amps, telemetry.duty_cycle_pct);
             }
         } else {
             // Auto-stop safety timeout expired
@@ -788,7 +1011,7 @@ void loop() {
                     { '<', '0', '#' }
                 };
                 char key = KEY_CHARS[r][c];
-                Serial.printf("[TOUCH PIN] tx=%d, ty=%d -> r=%d, c=%d, key='%c'\n", tx, ty, r, c, key);
+                DASH_LOGF("[TOUCH PIN] tx=%d, ty=%d -> r=%d, c=%d, key='%c'\n", tx, ty, r, c, key);
 
                 // Tactile / acoustic motor tick feedback on button press (silent to avoid deck thumps)
                 // Vesc.triggerFocBeep(2600.0f, 0.03f, 1.8f);
@@ -939,10 +1162,10 @@ void loop() {
         static uint32_t s_last_sec_dbg = 0;
         if (now - s_last_sec_dbg >= 1000) {
             s_last_sec_dbg = now;
-            Serial.printf("[SEC_DBG] locked=%d, alarm=%d, moved=%.2fm, rpm=%.1f, v_mot=%.2f, v_gps=%.2f, sats=%d, screen=%d\n",
-                          (int)telemetry.is_locked, (int)telemetry.theft_alarm_active, telemetry.locked_moved_meters,
-                          telemetry.rpm, telemetry.vesc_motor_speed, telemetry.gps.speed_kmh,
-                          (int)telemetry.gps.satellites, (int)telemetry.screen);
+            DASH_LOGF("[SEC_DBG] locked=%d, alarm=%d, moved=%.2fm, rpm=%.1f, v_mot=%.2f, v_gps=%.2f, sats=%d, screen=%d\n",
+                      (int)telemetry.is_locked, (int)telemetry.theft_alarm_active, telemetry.locked_moved_meters,
+                      telemetry.rpm, telemetry.vesc_motor_speed, telemetry.gps.speed_kmh,
+                      (int)telemetry.gps.satellites, (int)telemetry.screen);
         }
     } else {
         if (s_was_locked) {
@@ -1171,8 +1394,20 @@ void loop() {
                 case NAV_BTN2_LONG: // Long Press Bottom / Trip Reset: Reset Trip Odometer & Statistics
                     telemetry.trip_km = 0.0f;
                     telemetry.stats.reset();
+#if !defined(NATIVE_SIMULATOR)
+                    if (s_rt_task_handle && s_telem_mutex && xSemaphoreTake(s_telem_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+                        s_shared_telem.trip_km = 0.0f;
+                        s_shared_telem.stats.reset();
+                        s_trip_reset_req_gen++;
+                        xSemaphoreGive(s_telem_mutex);
+                    } else {
+                        Battery.resetTrip();
+                        Vesc.resetTripOdometer();
+                    }
+#else
                     Battery.resetTrip();
                     Vesc.resetTripOdometer();
+#endif
                     Serial.println("[NAV] Reset Trip Odometer and Statistics to 0.0");
                     break;
 
@@ -1265,7 +1500,16 @@ void loop() {
                     {
                         uint8_t next_p = (Settings.get().active_battery_profile == 0) ? 1 : 0;
                         Settings.get().active_battery_profile = next_p;
+#if !defined(NATIVE_SIMULATOR)
+                        if (s_rt_task_handle && s_telem_mutex && xSemaphoreTake(s_telem_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+                            s_pending_bat_profile = (int8_t)next_p;
+                            xSemaphoreGive(s_telem_mutex);
+                        } else {
+                            Battery.setActiveProfile(next_p);
+                        }
+#else
                         Battery.setActiveProfile(next_p);
+#endif
                         Settings.save();
                         Serial.printf("[NAV] Fast Toggled Battery Profile: %d (%s)\n",
                                       next_p, Battery.getProfile(next_p).name);
@@ -1286,59 +1530,20 @@ void loop() {
         Serial.println("[TIMER] Hyper Boost timed out (10s limit reached, restored 60A battery limit)");
     }
 
-    // Record waveform curves every 1000ms
-    static uint32_t last_wave_sample_ms = 0;
-    if (now - last_wave_sample_ms >= 1000) {
-        last_wave_sample_ms = now;
-        for (int i = 0; i < WAVE_HISTORY_LEN - 1; i++) {
-            telemetry.speed_history[i] = telemetry.speed_history[i + 1];
-            telemetry.power_history[i] = telemetry.power_history[i + 1];
-        }
-        telemetry.speed_history[WAVE_HISTORY_LEN - 1] = telemetry.speed_kmh;
-        telemetry.power_history[WAVE_HISTORY_LEN - 1] = telemetry.power_watts;
-    }
-
-    // 2. Update Telemetry or Forward Bridge Traffic
-    if (Vesc.isBridgeActive()) {
-        Vesc.updateBridge();
-    } else {
-        Vesc.update(telemetry);
-    }
-
-    // 2b. Update Live GPS+BDS Satellite Tracker & Ground Speed Priority
-    GpsTracker::instance().update(telemetry);
-
-    // 2b2. Update Proactive Traction Control (TCS) & Virtual TPMS Engine
-    static uint32_t s_last_tcs_update_ms = millis();
-    uint32_t tcs_now = millis();
-    float tcs_dt = (tcs_now - s_last_tcs_update_ms) / 1000.0f;
-    if (tcs_dt < 0.001f) tcs_dt = 0.001f;
-    if (tcs_dt > 0.1f) tcs_dt = 0.1f;
-    s_last_tcs_update_ms = tcs_now;
-
-    TcsTpmsManager::instance().update(telemetry, tcs_dt);
-
-    static float s_last_applied_tcs_scale = 1.0f;
-    static RideMode s_tcs_last_mode = MODE_ECO;
-    static bool s_tcs_last_boost = false;
-    static bool s_tcs_last_tuning = false;
-    if (telemetry.ride_mode != s_tcs_last_mode || telemetry.boost_active != s_tcs_last_boost || telemetry.tuning_mode != s_tcs_last_tuning) {
-        s_tcs_last_mode = telemetry.ride_mode;
-        s_tcs_last_boost = telemetry.boost_active;
-        s_tcs_last_tuning = telemetry.tuning_mode;
-        s_last_applied_tcs_scale = 1.0f; // Force re-apply if TCS is actively limiting phase amps
-    }
-    if (!telemetry.is_locked && !ModeManager::instance().isLocked() && TcsTpmsManager::instance().isTcsEnabled()) {
-        if (fabsf(telemetry.tcs_throttle_scale - s_last_applied_tcs_scale) > 0.04f ||
-            (telemetry.tcs_active != (s_last_applied_tcs_scale < 0.98f))) {
-            s_last_applied_tcs_scale = telemetry.tcs_throttle_scale;
-            float base_phase = ModeManager::instance().getActiveLimits().max_phase_amps;
-            float scaled_phase = base_phase * telemetry.tcs_throttle_scale;
-            Vesc.sendTcsPhaseLimit(scaled_phase);
+    // 2. Real-time VESC / GPS / TCS subsystem (Core 0 task on ESP32; inline fallback on simulator)
+    telemetry.uptime_sec = (now - boot_ms) / 1000;
+#if !defined(NATIVE_SIMULATOR)
+    if (s_rt_task_handle && s_telem_mutex) {
+        if (xSemaphoreTake(s_telem_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            copyUiControlState(s_shared_telem, telemetry);
+            xSemaphoreGive(s_telem_mutex);
         }
     } else {
-        s_last_applied_tcs_scale = 1.0f;
+        stepRealtimeSubsystem(telemetry, now);
     }
+#else
+    stepRealtimeSubsystem(telemetry, now);
+#endif
 
     // 2b3. Smart Periodic Odometer Persistence (avoids NVS wear)
     static float s_last_saved_odo_km = -1.0f;
@@ -1360,23 +1565,6 @@ void loop() {
 #endif
     }
 
-    // 2d. Speed fusion stats sync: if active ground speed exceeds recorded max, update record
-    if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) {
-        telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
-    }
-
-    telemetry.uptime_sec = (now - boot_ms) / 1000;
-    telemetry.dynamic_wh_km = Battery.getDynamicWhKm();
-    telemetry.est_range_km = Battery.getEstRangeKm();
-    telemetry.stats.dynamic_wh_km = telemetry.dynamic_wh_km;
-    if (telemetry.voltage > 10.0f) {
-        if (telemetry.stats.min_voltage <= 0.0f || telemetry.voltage < telemetry.stats.min_voltage) {
-            telemetry.stats.min_voltage = telemetry.voltage;
-        }
-        if (telemetry.voltage > telemetry.stats.max_voltage) {
-            telemetry.stats.max_voltage = telemetry.voltage;
-        }
-    }
     uint8_t current_fault = (uint8_t)FaultManager::instance().getActiveFault();
     if (current_fault != telemetry.fault_code) {
         telemetry.fault_code = current_fault;
@@ -1505,17 +1693,19 @@ void loop() {
         if (!s_backlight_sleeping) {
             Renderer.render(telemetry);
         }
+#if defined(NATIVE_SIMULATOR)
         if (Vesc.isBridgeActive()) {
             Vesc.updateBridge();
         }
+#endif
     }
 
     // 4. Debug print over USB Serial every 2 seconds (only when bridge is inactive)
     if (!Vesc.isBridgeActive() && (now - last_log_ms >= 2000)) {
         last_log_ms = now;
-        Serial.printf("[DASH] Screen: %d | Lock: %d | Spd: %.1f km/h | Duty: %.1f%% | Bat: %.1fV (%.0f%%) | Pwr: %.0fW | Cur: %.1fA | Est: %.1fkm\n",
-                      (int)telemetry.screen, (int)telemetry.is_locked, telemetry.speed_kmh, telemetry.duty_cycle_pct, telemetry.voltage,
-                      telemetry.battery_pct, telemetry.power_watts, telemetry.current_amps, telemetry.est_range_km);
+        DASH_LOGF("[DASH] Screen: %d | Lock: %d | Spd: %.1f km/h | Duty: %.1f%% | Bat: %.1fV (%.0f%%) | Pwr: %.0fW | Cur: %.1fA | Est: %.1fkm\n",
+                  (int)telemetry.screen, (int)telemetry.is_locked, telemetry.speed_kmh, telemetry.duty_cycle_pct, telemetry.voltage,
+                  telemetry.battery_pct, telemetry.power_watts, telemetry.current_amps, telemetry.est_range_km);
     }
 
 #if !defined(NATIVE_SIMULATOR)

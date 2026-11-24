@@ -3,6 +3,7 @@
 #include "display_driver.h"
 #include "settings_manager.h"
 #include "mode_manager.h"
+#include "ui_layout.h"
 #include <math.h>
 
 ButtonHandler Buttons;
@@ -125,10 +126,7 @@ bool ButtonHandler::isSpeedNumberTouch(int16_t x, int16_t y) const {
     if (ModeManager::instance().isLocked()) return false;
     if (_active_screen != SCREEN_RIDE_DASH) return false;
 
-    // Flagship Hyper-VESC 35kW+ Cluster:
-    // Hero digital speed number centered at cx=240, cy=195 (FreeSansBold24pt7b size 2).
-    // "km/h" label starts at y=245. Hitbox strictly excludes y>=240 and outer screen area.
-    return (x >= 150 && x <= 330 && y >= 145 && y <= 238);
+    return UiLayout::DASH_SPEED_NUM_HIT.contains(x, y);
 }
 
 void ButtonHandler::processTouch(uint32_t now) {
@@ -224,7 +222,7 @@ void ButtonHandler::processTouch(uint32_t now) {
             // 2b. Fast 500ms Long Press on Top-Right Settings Icon (Ride Dash) -> Open Settings Menu
             if (!_is_locked && !ModeManager::instance().isLocked() && !_speed_touch_started && !_touch_long_fired &&
                 (_active_screen == SCREEN_RIDE_DASH || _active_screen == SCREEN_LIGHTS) &&
-                ((_touch_start_y <= 65 && _touch_start_x >= 680) || (_touch_start_y < 80 && _touch_start_x > 620)) &&
+                UiLayout::DASH_SETTINGS_HOLD_HIT.contains(_touch_start_x, _touch_start_y) &&
                 (now - _touch_start_ms >= 500)) {
                 int16_t dx = tx - _touch_start_x;
                 int16_t dy = ty - _touch_start_y;
@@ -242,25 +240,27 @@ void ButtonHandler::processTouch(uint32_t now) {
                     _touch_long_fired = true;
 
                     // Contextual Long Touch Action
-                    if (_active_screen == SCREEN_RT_GRAPHS || _active_screen == SCREEN_RACE_TIMER) {
-                        if (_touch_start_x >= 600 && _touch_start_y <= 65) {
-                            if (_active_screen == SCREEN_RT_GRAPHS) _pending_action = NAV_BTN2_LONG; // Reset Trip
-                            else if (_active_screen == SCREEN_RACE_TIMER) _pending_action = NAV_RACE_TOGGLE_POPUP; // Toggle Bestzeiten Popup
-                        } else if (_touch_start_x <= 130 && _touch_start_y <= 65) {
-                            _pending_action = NAV_BTN1_SHORT; // Top-left < DASH returns to Ride Dash
+                    if (_active_screen == SCREEN_RT_GRAPHS) {
+                        if (UiLayout::STATS_RESET_HIT.contains(_touch_start_x, _touch_start_y)) {
+                            _pending_action = NAV_BTN2_LONG;
+                        } else if (UiLayout::STATS_BACK_HIT.contains(_touch_start_x, _touch_start_y)) {
+                            _pending_action = NAV_BTN1_SHORT;
                         }
-                        // All other holds in STATS/RACE do NOT exit screen
+                    } else if (_active_screen == SCREEN_RACE_TIMER) {
+                        if (UiLayout::RACE_RECORDS_HIT.contains(_touch_start_x, _touch_start_y)) {
+                            _pending_action = NAV_RACE_TOGGLE_POPUP;
+                        } else if (UiLayout::RACE_BACK_HIT.contains(_touch_start_x, _touch_start_y)) {
+                            _pending_action = NAV_BTN1_SHORT;
+                        }
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
-                        if (_touch_start_y <= 65 && _touch_start_x <= 160) {
-                            _pending_action = NAV_SCREEN_DASH; // Top-left < DASH returns to Ride Dash
-                        } else if (_touch_start_y <= 65 && _touch_start_x >= 640) {
-                            _pending_action = NAV_SCREEN_DASH; // Top-right [X] returns to Ride Dash
+                        if (UiLayout::SETTINGS_BACK_HOLD_HIT.contains(_touch_start_x, _touch_start_y) ||
+                            UiLayout::SETTINGS_DONE_HOLD_HIT.contains(_touch_start_x, _touch_start_y)) {
+                            _pending_action = NAV_SCREEN_DASH;
                         }
-                    } else if (_touch_start_y > 390 && _touch_start_x < 400) {
+                    } else if (UiLayout::DASH_BOTTOM_RESET_HIT.contains(_touch_start_x, _touch_start_y)) {
                         // Long press on bottom-left status strip -> Reset Trip Odometer
-                        // (Touches on x >= 400 are action buttons [ BOOST ] / [ MODE ], prevent accidental reset)
                         _pending_action = NAV_BTN2_LONG;
-                    } else if ((_touch_start_y <= 65 && _touch_start_x >= 680) || (_touch_start_y < 80 && _touch_start_x > 620)) {
+                    } else if (UiLayout::DASH_SETTINGS_HOLD_HIT.contains(_touch_start_x, _touch_start_y)) {
                         // Long press top right -> Open Settings Menu
                         _pending_action = NAV_BTN1_LONG;
                     }
@@ -361,103 +361,75 @@ void ButtonHandler::processTouch(uint32_t now) {
 
                     if (_active_screen == SCREEN_RT_GRAPHS) {
                         // On RT GRAPHS Screen (Statistics Menu):
-                        if (_last_tap_x >= 600 && _last_tap_y <= 65) {
+                        if (UiLayout::STATS_RESET_HIT.contains(_last_tap_x, _last_tap_y)) {
                             _pending_action = NAV_BTN2_LONG; // Top Right -> Reset Trip
-                        } else if (_last_tap_x <= 130 && _last_tap_y <= 65) {
+                        } else if (UiLayout::STATS_BACK_HIT.contains(_last_tap_x, _last_tap_y)) {
                             _pending_action = NAV_BTN1_SHORT; // Top Left -> Return to Ride Dash
-                        } else if (_tuning_mode && _last_tap_x >= 135 && _last_tap_x <= 255 && _last_tap_y <= 65) {
+                        } else if (_tuning_mode && UiLayout::STATS_RACE_HIT.contains(_last_tap_x, _last_tap_y)) {
                             _pending_action = NAV_SCREEN_RACE; // [ RACE ] Button (Only available when tuning_mode == true!)
                         }
-                        // All other taps (on cards, tiles, empty space, brightness controls)
-                        // do NOT exit back to Dash! Only pressing < DASH returns.
                     } else if (_active_screen == SCREEN_RACE_TIMER) {
-                        // On SCREEN_RACE_TIMER:
-                        // 1. Modals have strict touch priority when open (prevents accidental trigger of background buttons)
+                        // 1. Modals have strict touch priority when open
                         if (_race_popup_open) {
-                            // Bestzeiten modal bounds (x:140..660, y:70..410)
-                            if (_last_tap_x >= 585 && _last_tap_x <= 655 && _last_tap_y >= 70 && _last_tap_y <= 135) {
-                                _pending_action = NAV_RACE_CLOSE_POPUP; // Top-Right [ X ]
-                            } else if (_last_tap_x >= 160 && _last_tap_x <= 340 && _last_tap_y >= 320 && _last_tap_y <= 395) {
-                                _pending_action = NAV_RACE_RESET_RECORDS; // [ RESET ]
-                            } else if (_last_tap_x >= 430 && _last_tap_x <= 640 && _last_tap_y >= 320 && _last_tap_y <= 395) {
-                                _pending_action = NAV_RACE_CLOSE_POPUP; // [ SCHLIESSEN ]
-                            } else if (_last_tap_x < 140 || _last_tap_x > 660 || _last_tap_y < 70 || _last_tap_y > 410) {
-                                _pending_action = NAV_RACE_CLOSE_POPUP; // Tap outside modal closes it
+                            if (UiLayout::RACE_REC_CLOSE_HIT.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP;
+                            } else if (UiLayout::RACE_REC_RESET_HIT.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_RACE_RESET_RECORDS;
+                            } else if (UiLayout::RACE_REC_DONE_HIT.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP;
+                            } else if (!UiLayout::RACE_REC_MODAL.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP;
                             }
                         } else if (_race_dyno_open) {
-                            // Dyno modal bounds (x:100..700, y:45..435)
-                            if (_last_tap_x >= 630 && _last_tap_x <= 700 && _last_tap_y >= 45 && _last_tap_y <= 105) {
-                                _pending_action = NAV_RACE_CLOSE_POPUP; // Top-Right [ X ]
-                            } else if (_last_tap_x >= 280 && _last_tap_x <= 520 && _last_tap_y >= 365 && _last_tap_y <= 435) {
-                                _pending_action = NAV_RACE_CLOSE_POPUP; // [ SCHLIESSEN ]
-                            } else if (_last_tap_x < 100 || _last_tap_x > 700 || _last_tap_y < 45 || _last_tap_y > 435) {
-                                _pending_action = NAV_RACE_CLOSE_POPUP; // Tap outside closes
+                            if (UiLayout::RACE_DYNO_CLOSE_HIT.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP;
+                            } else if (UiLayout::RACE_DYNO_DONE_HIT.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP;
+                            } else if (!UiLayout::RACE_DYNO_MODAL.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_RACE_CLOSE_POPUP;
                             }
                         } else {
                             // Base SCREEN_RACE_TIMER buttons (when no modal is open)
-                            if (_last_tap_x <= 130 && _last_tap_y <= 65) {
-                                _pending_action = NAV_SCREEN_DASH; // Top Left -> Return to Ride Dash / STATS
-                            } else if (_last_tap_x >= 630 && _last_tap_y <= 65) {
-                                _pending_action = NAV_RACE_TOGGLE_POPUP; // Top Right -> Toggle Bestzeiten Popup
-                            } else if (_last_tap_x >= 470 && _last_tap_x < 630 && _last_tap_y <= 65) {
-                                _pending_action = NAV_RACE_TOGGLE_DYNO; // Top Right -> Toggle Dyno / Diagramm
-                            } else if (_race_state == 1 || _race_state == 2) {
-                                // If COUNTDOWN or MEASURING: tapping center aborts
-                                if (_last_tap_x >= 150 && _last_tap_x <= 510 && _last_tap_y >= 100 && _last_tap_y <= 420) {
-                                    _pending_action = NAV_RACE_ABORT;
-                                }
-                            } else {
-                                // IDLE / FINISHED: tapping center starts launch
-                                if (_last_tap_x >= 150 && _last_tap_x <= 510 && _last_tap_y >= 100 && _last_tap_y <= 420) {
-                                    _pending_action = NAV_RACE_START_LAUNCH;
-                                }
+                            if (UiLayout::RACE_BACK_HIT.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_SCREEN_DASH;
+                            } else if (UiLayout::RACE_RECORDS_HIT.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_RACE_TOGGLE_POPUP;
+                            } else if (UiLayout::RACE_DYNO_HIT.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = NAV_RACE_TOGGLE_DYNO;
+                            } else if (UiLayout::RACE_CENTER_HIT.contains(_last_tap_x, _last_tap_y)) {
+                                _pending_action = (_race_state == 1 || _race_state == 2) ? NAV_RACE_ABORT : NAV_RACE_START_LAUNCH;
                             }
                         }
                     } else if (_active_screen == SCREEN_SETTINGS_MENU) {
-                        // On SETTINGS Screen:
-                        if (_last_tap_y <= 55 && _last_tap_x <= 160) {
-                            _pending_action = NAV_SCREEN_DASH; // Top Left [< DASH] -> Return to Ride Dash
-                        } else if (_last_tap_y <= 55 && _last_tap_x >= 640) {
-                            _pending_action = NAV_SCREEN_DASH; // Top Right [FERTIG / X] -> Return to Ride Dash
+                        if (UiLayout::SETTINGS_BACK_HIT.contains(_last_tap_x, _last_tap_y) ||
+                            UiLayout::SETTINGS_DONE_HIT.contains(_last_tap_x, _last_tap_y)) {
+                            _pending_action = NAV_SCREEN_DASH;
                         }
                         // Detailed tab selection and slider touches are forwarded to Renderer.handleSettingsTouch via getLastTap()
                     } else if (_active_screen == SCREEN_SETUP_WIZARD) {
-                        // On SETUP WIZARD Screen:
                         // All taps forwarded to Renderer.handleWizardTouch via getLastTap()
                     } else if (_active_screen == SCREEN_VESC_BRIDGE || _active_screen == SCREEN_WIFI_BRIDGE) {
                         // On VESC Tool Bridge Screens: tapping anywhere exits back to Dash
                         _pending_action = NAV_SCREEN_DASH;
                     } else {
                         // On SCREEN_RIDE_DASH / Default:
-                        // 1. Top Left [ STATS ] Navigation Touch Button -> Open Statistics Screen (SCREEN_RT_GRAPHS)
-                        if (_last_tap_x <= 135 && _last_tap_y <= 65) {
+                        if (UiLayout::DASH_STATS_HIT.contains(_last_tap_x, _last_tap_y)) {
                             _pending_action = NAV_SCREEN_STATS;
-                        }
-                        // 1b. Hidden Top Right Settings Touch Zone (x >= 725 clears TCS pill at x=664..720)
-                        else if (_last_tap_x >= 725 && _last_tap_y <= 65) {
+                        } else if (UiLayout::DASH_SETTINGS_TAP_HIT.contains(_last_tap_x, _last_tap_y)) {
                             _pending_action = NAV_BTN1_LONG;
-                        }
-                        // 2. Interactive Headlight Badge Touch Toggle (Top Slot 50,354 or Bottom Slot 50,416)
-                        else if (Settings.get().show_light_btn != 0 && ({
-                            bool both_gf_inc = Settings.get().incline_gforce_enabled && 
-                                               (Settings.get().show_gforce != 0) && 
+                        } else if (Settings.get().show_light_btn != 0 && ({
+                            bool both_gf_inc = Settings.get().incline_gforce_enabled &&
+                                               (Settings.get().show_gforce != 0) &&
                                                (Settings.get().show_incline != 0);
-                            int target_ly = both_gf_inc ? 354 : 416;
-                            int dx = (int)_last_tap_x - 50;
+                            int target_ly = both_gf_inc ? UiLayout::DASH_LIGHT_Y_TOP : UiLayout::DASH_LIGHT_Y_BOT;
+                            int dx = (int)_last_tap_x - UiLayout::DASH_LIGHT_CX;
                             int dy = (int)_last_tap_y - target_ly;
-                            (dx * dx + dy * dy <= 34 * 34);
+                            (dx * dx + dy * dy <= UiLayout::DASH_LIGHT_HIT_RAD * UiLayout::DASH_LIGHT_HIT_RAD);
                         })) {
                             _pending_action = NAV_LIGHT_TOGGLE;
+                        } else if (UiLayout::DASH_ACTION_ROW_HIT.contains(_last_tap_x, _last_tap_y)) {
+                            _pending_action = (_last_tap_x <= UiLayout::DASH_ACTION_SPLIT_X) ? NAV_BOOST_TOGGLE : NAV_MODE_CYCLE;
                         }
-                        // 3. Action Buttons on Ride Dash (Bottom Right: BOOST & MODE in all modes)
-                        else if (_last_tap_y >= 360 && _last_tap_y <= 465 && _last_tap_x >= 430 && _last_tap_x <= 775) {
-                            if (_last_tap_x <= 605) {
-                                _pending_action = NAV_BOOST_TOGGLE;
-                            } else {
-                                _pending_action = NAV_MODE_CYCLE;
-                            }
-                        }
-                        // Note: Hidden Top-Right Settings corner supports both tap (x>=725) and 500ms hold
                     }
                 }
             }

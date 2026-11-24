@@ -92,17 +92,19 @@ void TcsTpmsManager::begin() {
 }
 
 void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
-    if (dt_sec <= 0.0001f) dt_sec = 0.010f;
+    if (!isfinite(dt_sec) || dt_sec <= 0.0001f) dt_sec = 0.010f;
     if (dt_sec > 0.25f)    dt_sec = 0.25f;
 
     // =========================================================================
     // 1. Wheel Speed & Physics-Bounded Reference (No circular g_force loop!)
     // =========================================================================
     float v_vesc = telemetry.vesc_motor_speed;
+    if (!isfinite(v_vesc) || v_vesc < 0.0f) v_vesc = 0.0f;
     if (v_vesc < 0.1f && telemetry.rpm > 30.0f) {
-        float gear = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
-        float d_in = Settings.get().wheel_diameter_in > 5.0f ? Settings.get().wheel_diameter_in : 11.0f;
+        float gear = (Settings.get().gear_ratio > 0.1f && isfinite(Settings.get().gear_ratio)) ? Settings.get().gear_ratio : 1.0f;
+        float d_in = (Settings.get().wheel_diameter_in > 5.0f && isfinite(Settings.get().wheel_diameter_in)) ? Settings.get().wheel_diameter_in : 11.0f;
         v_vesc = (telemetry.rpm / gear) * (float)M_PI * (d_in * 0.0254f) * (60.0f / 1000.0f);
+        if (!isfinite(v_vesc) || v_vesc < 0.0f) v_vesc = 0.0f;
     }
 
     uint32_t now = millis();
@@ -144,12 +146,12 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
     }
 
     float phys_slip = v_vesc - _phys_ref_speed_kmh;
-    if (phys_slip < 0.0f) phys_slip = 0.0f;
+    if (!isfinite(phys_slip) || phys_slip < 0.0f) phys_slip = 0.0f;
 
     float gps_slip = 0.0f;
     if (gps_valid) {
         gps_slip = v_vesc - telemetry.gps.speed_kmh;
-        if (gps_slip < 0.0f) gps_slip = 0.0f;
+        if (!isfinite(gps_slip) || gps_slip < 0.0f) gps_slip = 0.0f;
         // Keep physics reference gently anchored when GPS shows normal traction
         if (gps_slip < 1.5f) {
             _phys_ref_speed_kmh = telemetry.gps.speed_kmh;
@@ -163,14 +165,15 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
         v_vesc = (gps_valid ? telemetry.gps.speed_kmh : _phys_ref_speed_kmh) + _sim_slip_override;
     }
 
-    _slip_speed_kmh = slip;
-    _slip_ratio = (v_vesc > 1.0f) ? (slip / v_vesc) : 0.0f;
+    _slip_speed_kmh = (isfinite(slip) && slip >= 0.0f) ? slip : 0.0f;
+    _slip_ratio = (v_vesc > 1.0f && isfinite(v_vesc)) ? (_slip_speed_kmh / v_vesc) : 0.0f;
+    if (!isfinite(_slip_ratio) || _slip_ratio < 0.0f) _slip_ratio = 0.0f;
 
     // =========================================================================
     // 2. Proactive Traction Control (TCS) Fast Intervention & Recovery Hysteresis
     // =========================================================================
-    // Safety Guard: NEVER engage TCS or manipulate phase current when vehicle is locked!
-    if (telemetry.is_locked || ModeManager::instance().isLocked() || !_tcs_enabled) {
+    // Safety Guard: NEVER engage TCS or manipulate phase current when vehicle is locked or VESC disconnected!
+    if (telemetry.is_locked || ModeManager::instance().isLocked() || !telemetry.vesc_connected || !_tcs_enabled) {
         _tcs_active = false;
         _throttle_scale = 1.0f;
         _spin_accel_duration_sec = 0.0f;
@@ -208,11 +211,12 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
                 effective_slip = 3.0f + excess_accel_ratio * 3.0f;
             }
             float excess_slip = effective_slip - 3.0f;
-            if (excess_slip < 0.5f) excess_slip = 0.5f;
+            if (excess_slip < 0.5f || !isfinite(excess_slip)) excess_slip = 0.5f;
 
             // Aggressive non-linear reduction targeting < 5ms wheel spin suppression
             float target_scale = 1.0f - (excess_slip / (excess_slip + 2.5f)) * 0.85f;
-            if (target_scale < 0.15f) target_scale = 0.15f;
+            if (!isfinite(target_scale) || target_scale < 0.15f) target_scale = 0.15f;
+            if (target_scale > 1.0f) target_scale = 1.0f;
 
             // Instant drop (< 5ms response time): cut current without rate limiting downward
             if (target_scale < _throttle_scale) {
@@ -241,6 +245,21 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
         }
     }
 
+    if (!isfinite(_throttle_scale) || _throttle_scale < 0.15f) _throttle_scale = 0.15f;
+    if (_throttle_scale > 1.0f) _throttle_scale = 1.0f;
+
+    // Transition-only logging: no spam in 200 Hz hot path
+    static bool s_prev_tcs_active = false;
+    if (_tcs_active != s_prev_tcs_active) {
+        s_prev_tcs_active = _tcs_active;
+        if (_tcs_active) {
+            Serial.printf("[TCS] Traction Control ENGAGED (slip: %.1f km/h, scale: %.2f)\n",
+                          _slip_speed_kmh, _throttle_scale);
+        } else {
+            Serial.println("[TCS] Traction Control DISENGAGED (traction restored)");
+        }
+    }
+
     telemetry.tcs_active = _tcs_active;
     telemetry.tcs_slip_kmh = _slip_speed_kmh;
     telemetry.tcs_throttle_scale = _throttle_scale;
@@ -251,7 +270,8 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
     // Once _has_calibrated_baseline == true, _baseline_diam_in stays FROZEN so
     // Virtual TPMS can genuinely detect gradual tire pressure loss!
     // Re-calibration only runs when explicitly triggered via startManualCalibration().
-    bool allow_calibration = _manual_calib_active || (!_has_calibrated_baseline && !Settings.get().wheel_gps_calibrated);
+    bool allow_calibration = (!telemetry.is_locked && !ModeManager::instance().isLocked() && telemetry.vesc_connected) &&
+                             (_manual_calib_active || (!_has_calibrated_baseline && !Settings.get().wheel_gps_calibrated));
 
     if (allow_calibration) {
         bool steady_cruising = (gps_valid && telemetry.gps.satellites >= 8 &&
@@ -272,17 +292,20 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
 
             // When steady cruising holds for >= 5.0 seconds:
             if (_steady_timer_sec >= 5.0f) {
-                float gear = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
-                float wheel_rpm = telemetry.rpm / gear;
-                if (wheel_rpm > 50.0f) {
+                float gear = (Settings.get().gear_ratio > 0.1f && isfinite(Settings.get().gear_ratio)) ? Settings.get().gear_ratio : 1.0f;
+                float wheel_rpm = (gear > 0.01f) ? (telemetry.rpm / gear) : 0.0f;
+                if (wheel_rpm > 50.0f && isfinite(wheel_rpm)) {
                     float v_gps_m_s = telemetry.gps.speed_kmh / 3.6f;
                     float d_eff_m = (v_gps_m_s * 60.0f) / (wheel_rpm * (float)M_PI);
                     float d_eff_in = d_eff_m / 0.0254f;
 
                     // Sanity range check for nominal 11" Segway G3 Max tire
-                    if (d_eff_in >= 8.5f && d_eff_in <= 14.5f) {
+                    if (isfinite(d_eff_in) && d_eff_in >= 8.5f && d_eff_in <= 14.5f) {
                         static constexpr float EMA_ALPHA = 0.04f;
                         _calibrated_diam_in = EMA_ALPHA * d_eff_in + (1.0f - EMA_ALPHA) * _calibrated_diam_in;
+                        if (!isfinite(_calibrated_diam_in) || _calibrated_diam_in < 8.0f || _calibrated_diam_in > 16.0f) {
+                            _calibrated_diam_in = d_eff_in;
+                        }
                         _calib_converge_sec += dt_sec;
 
                         // Finalize & freeze baseline once converged (>= 6.0s of EMA accumulation)
@@ -329,8 +352,10 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
     // =========================================================================
     // Compares effective rolling diameter against the FROZEN calibrated baseline.
     // If diameter drops by >= 4% for > 30 seconds: flags tpms_warning = true.
-    float baseline = (_baseline_diam_in > 5.0f) ? _baseline_diam_in :
-                     (Settings.get().wheel_diameter_in > 5.0f ? Settings.get().wheel_diameter_in : 11.0f);
+    float baseline = (_baseline_diam_in > 5.0f && isfinite(_baseline_diam_in)) ? _baseline_diam_in :
+                     ((Settings.get().wheel_diameter_in > 5.0f && isfinite(Settings.get().wheel_diameter_in)) ?
+                      Settings.get().wheel_diameter_in : 11.0f);
+    if (!isfinite(baseline) || baseline <= 0.1f) baseline = 11.0f;
 
     float current_eff_in = _rolling_diam_in;
     bool have_tpms_sample = false;
@@ -338,15 +363,16 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
     if (_sim_drop_pct_override >= 0.0f) {
         current_eff_in = baseline * (1.0f - (_sim_drop_pct_override / 100.0f));
         have_tpms_sample = true;
-    } else if (gps_valid && telemetry.gps.satellites >= 6 && telemetry.gps.speed_kmh >= 14.0f &&
+    } else if (!telemetry.is_locked && !ModeManager::instance().isLocked() && telemetry.vesc_connected &&
+               gps_valid && telemetry.gps.satellites >= 6 && telemetry.gps.speed_kmh >= 14.0f &&
                fabsf(telemetry.g_force) < 0.10f && !_tcs_active && !_manual_calib_active) {
-        float gear = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
-        float wheel_rpm = telemetry.rpm / gear;
-        if (wheel_rpm > 50.0f) {
+        float gear = (Settings.get().gear_ratio > 0.1f && isfinite(Settings.get().gear_ratio)) ? Settings.get().gear_ratio : 1.0f;
+        float wheel_rpm = (gear > 0.01f) ? (telemetry.rpm / gear) : 0.0f;
+        if (wheel_rpm > 50.0f && isfinite(wheel_rpm)) {
             float v_m_s = telemetry.gps.speed_kmh / 3.6f;
             float d_m = (v_m_s * 60.0f) / (wheel_rpm * (float)M_PI);
             float measured_in = d_m / 0.0254f;
-            if (measured_in >= 7.0f && measured_in <= 15.0f) {
+            if (isfinite(measured_in) && measured_in >= 7.0f && measured_in <= 15.0f) {
                 current_eff_in = measured_in;
                 have_tpms_sample = true;
             }
@@ -355,11 +381,14 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
 
     if (have_tpms_sample && current_eff_in >= 7.0f && current_eff_in <= 15.0f) {
         _rolling_diam_in = 0.15f * current_eff_in + 0.85f * _rolling_diam_in;
+        if (!isfinite(_rolling_diam_in) || _rolling_diam_in < 5.0f || _rolling_diam_in > 20.0f) {
+            _rolling_diam_in = baseline;
+        }
     }
 
     // Calculate drop percentage: (baseline - rolling) / baseline * 100%
     float drift_pct = ((baseline - _rolling_diam_in) / baseline) * 100.0f;
-    if (drift_pct < 0.0f) drift_pct = 0.0f;
+    if (!isfinite(drift_pct) || drift_pct < 0.0f) drift_pct = 0.0f;
     _tpms_drift_pct = drift_pct;
 
     static constexpr float TPMS_DROP_THRESHOLD_PCT = 4.0f;
@@ -378,6 +407,18 @@ void TcsTpmsManager::update(DashTelemetry &telemetry, float dt_sec) {
         }
     } else {
         _tpms_recovery_duration_sec = 0.0f;
+    }
+
+    // Transition-only logging: no spam in 200 Hz hot path
+    static bool s_prev_tpms_warning = false;
+    if (_tpms_warning != s_prev_tpms_warning) {
+        s_prev_tpms_warning = _tpms_warning;
+        if (_tpms_warning) {
+            Serial.printf("[TPMS] WARNING: Low tire pressure detected! Rolling diam: %.2f in (drop: %.1f%%)\n",
+                          _rolling_diam_in, _tpms_drift_pct);
+        } else {
+            Serial.println("[TPMS] Tire pressure normalized.");
+        }
     }
 
     telemetry.tpms_warning = _tpms_warning;

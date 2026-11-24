@@ -143,10 +143,89 @@ VescHandler::VescHandler()
       _sync_status(SYNC_IDLE),
       _mcconf_req_ms(0),
       _sync_ms(0),
+      _cached_wheel_diam_in(-1.0f),
+      _cached_gear_ratio(-1.0f),
+      _cached_pole_pairs(-1),
+      _wheel_circ_m((11.0f * 0.0254f) * (float)M_PI),
+      _inv_pole_pairs(1.0f / 15.0f),
+      _erpm_to_kmh_factor(0.0f),
+      _tacho_to_km_factor(0.0f),
+      _last_g_speed_kmh(0.0f),
+      _ride_time_accum_sec(0.0f),
       _horn_active(false),
       _last_horn_cmd_ms(0),
       _horn_cadence(0) {
     _wifi_client_ip[0] = '\0';
+}
+
+void VescHandler::updateWheelFactors() {
+    float diam_in = Settings.get().wheel_diameter_in;
+    if (diam_in < 1.0f) diam_in = 11.0f;
+    float gear_ratio = Settings.get().gear_ratio;
+    if (gear_ratio < 0.1f) gear_ratio = 1.0f;
+    int pole_pairs = Settings.get().motor_pole_pairs;
+    if (pole_pairs < 2) pole_pairs = 15;
+
+    if (diam_in != _cached_wheel_diam_in ||
+        gear_ratio != _cached_gear_ratio ||
+        pole_pairs != _cached_pole_pairs) {
+        _cached_wheel_diam_in = diam_in;
+        _cached_gear_ratio = gear_ratio;
+        _cached_pole_pairs = pole_pairs;
+
+        _wheel_circ_m = (diam_in * 0.0254f) * (float)M_PI;
+        _inv_pole_pairs = 1.0f / (float)pole_pairs;
+        _erpm_to_kmh_factor = (_wheel_circ_m * 0.06f) / ((float)pole_pairs * gear_ratio);
+        _tacho_to_km_factor = _wheel_circ_m / ((float)pole_pairs * 6.0f * gear_ratio * 1000.0f);
+    }
+}
+
+void VescHandler::updateDerivedStats(DashTelemetry &telemetry, float dt, bool compute_gforce) {
+    if (telemetry.current_amps > telemetry.stats.peak_current_amps) {
+        telemetry.stats.peak_current_amps = telemetry.current_amps;
+    }
+    if (telemetry.phase_amps > telemetry.stats.peak_phase_amps) {
+        telemetry.stats.peak_phase_amps = telemetry.phase_amps;
+    }
+    if (telemetry.power_watts > telemetry.stats.peak_power_watts) {
+        telemetry.stats.peak_power_watts = telemetry.power_watts;
+    }
+    if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) {
+        telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
+    }
+    if (telemetry.temp_motor > telemetry.stats.max_temp_motor) {
+        telemetry.stats.max_temp_motor = telemetry.temp_motor;
+    }
+    if (telemetry.temp_esc > telemetry.stats.max_temp_esc) {
+        telemetry.stats.max_temp_esc = telemetry.temp_esc;
+    }
+
+    if (compute_gforce && dt > 0.005f) {
+        float dv_ms = (telemetry.speed_kmh - _last_g_speed_kmh) / 3.6f;
+        float g_inst = (dv_ms / dt) / 9.80665f;
+        if (g_inst > 3.0f) g_inst = 3.0f;
+        if (g_inst < -3.0f) g_inst = -3.0f;
+        telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
+        if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
+        _last_g_speed_kmh = telemetry.speed_kmh;
+    }
+    if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
+        telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
+    }
+
+    if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
+        _ride_time_accum_sec = 0.0f;
+    }
+    if (telemetry.speed_kmh > 1.2f) {
+        _ride_time_accum_sec += dt;
+        while (_ride_time_accum_sec >= 1.0f) {
+            telemetry.stats.ride_time_sec += 1;
+            _ride_time_accum_sec -= 1.0f;
+        }
+    }
+    if (telemetry.stats.ride_time_sec > 2 && telemetry.trip_km > 0.01f) {
+        telemetry.stats.avg_speed_kmh = telemetry.trip_km / (telemetry.stats.ride_time_sec / 3600.0f);
+    }
 }
 
 void VescHandler::begin() {
@@ -375,39 +454,8 @@ void VescHandler::runSimulation(DashTelemetry &telemetry) {
     telemetry.trip_km += distance_delta;
     telemetry.odo_km  += distance_delta;
 
-    // 8. Statistics Tracking
-    if (telemetry.current_amps > telemetry.stats.peak_current_amps) {
-        telemetry.stats.peak_current_amps = telemetry.current_amps;
-    }
-    if (telemetry.phase_amps > telemetry.stats.peak_phase_amps) {
-        telemetry.stats.peak_phase_amps = telemetry.phase_amps;
-    }
-    if (telemetry.power_watts > telemetry.stats.peak_power_watts) {
-        telemetry.stats.peak_power_watts = telemetry.power_watts;
-    }
-    if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) {
-        telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
-    }
-    if (telemetry.temp_motor > telemetry.stats.max_temp_motor) {
-        telemetry.stats.max_temp_motor = telemetry.temp_motor;
-    }
-    if (telemetry.temp_esc > telemetry.stats.max_temp_esc) {
-        telemetry.stats.max_temp_esc = telemetry.temp_esc;
-    }
-    static float s_vesc_ride_time_accum = 0.0f;
-    if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
-        s_vesc_ride_time_accum = 0.0f;
-    }
-    if (telemetry.speed_kmh > 1.2f) {
-        s_vesc_ride_time_accum += dt;
-        while (s_vesc_ride_time_accum >= 1.0f) {
-            telemetry.stats.ride_time_sec += 1;
-            s_vesc_ride_time_accum -= 1.0f;
-        }
-    }
-    if (telemetry.stats.ride_time_sec > 2 && telemetry.trip_km > 0.01f) {
-        telemetry.stats.avg_speed_kmh = telemetry.trip_km / (telemetry.stats.ride_time_sec / 3600.0f);
-    }
+    // 8. Statistics Tracking (g_force already integrated in sim step 1)
+    updateDerivedStats(telemetry, dt, false);
 
     telemetry.vesc_connected = true;
 }
@@ -566,11 +614,29 @@ static void sendVescCanBufferToDetected(const uint8_t *data, size_t len,
 // Reassemble VESC CAN buffer replies addressed to ESP_CAN_ID (cmd 5, 6, 7, 8)
 static bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **out_payload, size_t *out_len) {
     static uint32_t s_last_rx_frame_ms = 0;
+    static uint8_t  s_last_src_id = 0xFF;
+    static bool     s_in_progress = false;
+
     uint32_t now_ms = millis();
     uint8_t cmd_id = (uint8_t)((msg.identifier >> 8) & 0xFF);
+    uint8_t src_id = (uint8_t)((msg.identifier >> 16) & 0xFF);
+
+    // Timeout: if no subsequent frame arrived for >500ms, abort incomplete reassembly
+    if (s_in_progress && (now_ms - s_last_rx_frame_ms > 500)) {
+        s_in_progress = false;
+        s_last_src_id = 0xFF;
+    }
+
     if (cmd_id == 5 && msg.data_length_code >= 2) {
         // CAN_PACKET_FILL_RX_BUFFER
         size_t offset = msg.data[0];
+        if (offset == 0) {
+            s_in_progress = true;
+            s_last_src_id = src_id;
+        } else if (!s_in_progress || src_id != s_last_src_id) {
+            return false; // Interleaved frame from another node or orphaned fragment
+        }
+
         s_last_rx_frame_ms = now_ms;
         size_t chunk_len = (size_t)msg.data_length_code - 1;
         if (offset + chunk_len <= CAN_RX_BUF_SIZE) {
@@ -580,6 +646,14 @@ static bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **o
     } else if (cmd_id == 6 && msg.data_length_code >= 3) {
         // CAN_PACKET_FILL_RX_BUFFER_LONG
         size_t offset = ((size_t)msg.data[0] << 8) | msg.data[1];
+        if (offset == 0) {
+            s_in_progress = true;
+            s_last_src_id = src_id;
+        } else if (!s_in_progress || src_id != s_last_src_id) {
+            return false; // Interleaved frame from another node or orphaned fragment
+        }
+
+        s_last_rx_frame_ms = now_ms;
         size_t chunk_len = (size_t)msg.data_length_code - 2;
         if (offset + chunk_len <= CAN_RX_BUF_SIZE) {
             memcpy(s_can_rx_buf + offset, &msg.data[2], chunk_len);
@@ -587,6 +661,13 @@ static bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **o
         return false;
     } else if (cmd_id == 7 && msg.data_length_code >= 6) {
         // CAN_PACKET_PROCESS_RX_BUFFER
+        if (!s_in_progress || src_id != s_last_src_id) {
+            return false; // Not matching current reassembly session
+        }
+
+        s_in_progress = false;
+        s_last_src_id = 0xFF;
+
         uint16_t rx_len = ((uint16_t)msg.data[2] << 8) | msg.data[3];
         uint16_t rx_crc = ((uint16_t)msg.data[4] << 8) | msg.data[5];
         if (rx_len > 0 && rx_len <= CAN_RX_BUF_SIZE && crc16(s_can_rx_buf, rx_len) == rx_crc) {
@@ -813,13 +894,10 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
             float duty = fabsf((float)duty_raw / 10.0f);
 
             if (is_primary) {
-                int pole_pairs = Settings.get().motor_pole_pairs > 1 ? Settings.get().motor_pole_pairs : 15;
-                float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
-                float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
-                float mech_rpm = fabsf((float)erpm / (float)pole_pairs);
-                telemetry.rpm = mech_rpm;
-                float wheel_rpm = mech_rpm / gear_ratio;
-                float v_spd = (wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f;
+                updateWheelFactors();
+                float abs_erpm = fabsf((float)erpm);
+                telemetry.rpm = abs_erpm * _inv_pole_pairs;
+                float v_spd = abs_erpm * _erpm_to_kmh_factor;
                 if (v_spd < 0.8f) v_spd = 0.0f;
                 telemetry.vesc_motor_speed = v_spd;
                 telemetry.speed_kmh = v_spd;
@@ -884,13 +962,10 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
                     s_can_tacho_init = true;
                 }
 
-                int pole_pairs = Settings.get().motor_pole_pairs > 1 ? Settings.get().motor_pole_pairs : 15;
-                float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
-                float gear_ratio = Settings.get().gear_ratio > 0.1f ? Settings.get().gear_ratio : 1.0f;
-
                 int32_t delta_tacho = tacho - s_last_can_tacho;
                 if (delta_tacho != 0) {
-                    float delta_km = fabsf(((float)delta_tacho / ((float)pole_pairs * 6.0f)) * wheel_circ_m) / (gear_ratio * 1000.0f);
+                    updateWheelFactors();
+                    float delta_km = fabsf((float)delta_tacho) * _tacho_to_km_factor;
                     if (delta_km < 1.0f) { // sanity clamp against sudden jumps
                         telemetry.odo_km += delta_km;
                         telemetry.trip_km += delta_km;
@@ -1012,44 +1087,8 @@ void VescHandler::pollCanVesc(DashTelemetry &telemetry) {
     // 2. Battery State of Charge, Remaining Wh & Degradation Learning Filter
     Battery.update(telemetry, dt);
 
-    // 3. Peak statistics tracking
-    if (telemetry.current_amps > telemetry.stats.peak_current_amps) telemetry.stats.peak_current_amps = telemetry.current_amps;
-    if (telemetry.phase_amps > telemetry.stats.peak_phase_amps) telemetry.stats.peak_phase_amps = telemetry.phase_amps;
-    if (telemetry.power_watts > telemetry.stats.peak_power_watts) telemetry.stats.peak_power_watts = telemetry.power_watts;
-    if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
-    if (telemetry.temp_motor > telemetry.stats.max_temp_motor) telemetry.stats.max_temp_motor = telemetry.temp_motor;
-    if (telemetry.temp_esc > telemetry.stats.max_temp_esc) telemetry.stats.max_temp_esc = telemetry.temp_esc;
-
-    // 4. Longitudinal acceleration G-force (if no CAN IMU packet present)
-    static float s_last_spd_can = 0.0f;
-    if (dt > 0.005f && !s_has_imu_g) {
-        float dv_ms = (telemetry.speed_kmh - s_last_spd_can) / 3.6f;
-        float g_inst = (dv_ms / dt) / 9.80665f;
-        if (g_inst > 3.0f) g_inst = 3.0f;
-        if (g_inst < -3.0f) g_inst = -3.0f;
-        telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
-        if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
-        s_last_spd_can = telemetry.speed_kmh;
-    }
-    if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
-        telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
-    }
-
-    // 5. Trip ride time & average speed calculation
-    static float s_can_ride_time_accum = 0.0f;
-    if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
-        s_can_ride_time_accum = 0.0f;
-    }
-    if (telemetry.speed_kmh > 1.2f) {
-        s_can_ride_time_accum += dt;
-        while (s_can_ride_time_accum >= 1.0f) {
-            telemetry.stats.ride_time_sec += 1;
-            s_can_ride_time_accum -= 1.0f;
-        }
-    }
-    if (telemetry.stats.ride_time_sec > 2 && telemetry.trip_km > 0.01f) {
-        telemetry.stats.avg_speed_kmh = telemetry.trip_km / (telemetry.stats.ride_time_sec / 3600.0f);
-    }
+    // 3. Peak, G-Force & Trip Average Statistics
+    updateDerivedStats(telemetry, dt, !s_has_imu_g);
 }
 #else
 void VescHandler::initCanBus() {}
@@ -1092,40 +1131,49 @@ void VescHandler::pollRealVesc(DashTelemetry &telemetry) {
 
     if (!_transport) return;
 
-    while (_transport->available()) {
-        uint8_t b = (uint8_t)_transport->read();
+    uint8_t read_chunk[64];
+    while (_transport->available() > 0) {
+        size_t avail = (size_t)_transport->available();
+        size_t to_read = (avail > sizeof(read_chunk)) ? sizeof(read_chunk) : avail;
+        size_t bytes_read = _transport->readBytes(read_chunk, to_read);
+        if (bytes_read == 0) break;
+
         last_rx_byte_ms = now;
 
-        if (rx_index == 0) {
-            if (b == 0x02 || b == 0x03) { // Start byte
-                rx_buffer[rx_index++] = b;
-            }
-        } else {
-            if (rx_index < sizeof(rx_buffer)) {
-                rx_buffer[rx_index++] = b;
+        for (size_t i = 0; i < bytes_read; ++i) {
+            uint8_t b = read_chunk[i];
 
-                // Short packet (header 0x02, payload <= 256)
-                if (rx_buffer[0] == 0x02 && rx_index >= 4) {
-                    uint8_t payload_len = rx_buffer[1];
-                    if (rx_index == (size_t)(payload_len + 5)) {
-                        if (rx_buffer[rx_index - 1] == 0x03) {
-                            parseVescPacket(rx_buffer, rx_index, telemetry);
-                        }
-                        rx_index = 0;
-                    }
-                }
-                // Long packet (header 0x03, payload > 256, e.g. COMM_GET_MCCONF)
-                else if (rx_buffer[0] == 0x03 && rx_index >= 5) {
-                    uint16_t payload_len = ((uint16_t)rx_buffer[1] << 8) | rx_buffer[2];
-                    if (rx_index == (size_t)(payload_len + 6)) {
-                        if (rx_buffer[rx_index - 1] == 0x03) {
-                            parseVescPacket(rx_buffer, rx_index, telemetry);
-                        }
-                        rx_index = 0;
-                    }
+            if (rx_index == 0) {
+                if (b == 0x02 || b == 0x03) { // Start byte
+                    rx_buffer[rx_index++] = b;
                 }
             } else {
-                rx_index = 0;
+                if (rx_index < sizeof(rx_buffer)) {
+                    rx_buffer[rx_index++] = b;
+
+                    // Short packet (header 0x02, payload <= 256)
+                    if (rx_buffer[0] == 0x02 && rx_index >= 4) {
+                        uint8_t payload_len = rx_buffer[1];
+                        if (rx_index == (size_t)(payload_len + 5)) {
+                            if (rx_buffer[rx_index - 1] == 0x03) {
+                                parseVescPacket(rx_buffer, rx_index, telemetry);
+                            }
+                            rx_index = 0;
+                        }
+                    }
+                    // Long packet (header 0x03, payload > 256, e.g. COMM_GET_MCCONF)
+                    else if (rx_buffer[0] == 0x03 && rx_index >= 5) {
+                        uint16_t payload_len = ((uint16_t)rx_buffer[1] << 8) | rx_buffer[2];
+                        if (rx_index == (size_t)(payload_len + 6)) {
+                            if (rx_buffer[rx_index - 1] == 0x03) {
+                                parseVescPacket(rx_buffer, rx_index, telemetry);
+                            }
+                            rx_index = 0;
+                        }
+                    }
+                } else {
+                    rx_index = 0;
+                }
             }
         }
     }
@@ -1168,42 +1216,7 @@ void VescHandler::pollRealVesc(DashTelemetry &telemetry) {
     // Update Battery State & Real-Time Statistics
     if (dt > 0.001f && dt < 1.0f) {
         Battery.update(telemetry, dt);
-
-        if (telemetry.current_amps > telemetry.stats.peak_current_amps) telemetry.stats.peak_current_amps = telemetry.current_amps;
-        if (telemetry.phase_amps > telemetry.stats.peak_phase_amps) telemetry.stats.peak_phase_amps = telemetry.phase_amps;
-        if (telemetry.power_watts > telemetry.stats.peak_power_watts) telemetry.stats.peak_power_watts = telemetry.power_watts;
-        if (telemetry.speed_kmh > telemetry.stats.max_speed_kmh) telemetry.stats.max_speed_kmh = telemetry.speed_kmh;
-        if (telemetry.temp_motor > telemetry.stats.max_temp_motor) telemetry.stats.max_temp_motor = telemetry.temp_motor;
-        if (telemetry.temp_esc > telemetry.stats.max_temp_esc) telemetry.stats.max_temp_esc = telemetry.temp_esc;
-
-        static float s_last_spd_can = 0.0f;
-        if (dt > 0.005f) {
-            float dv_ms = (telemetry.speed_kmh - s_last_spd_can) / 3.6f;
-            float g_inst = (dv_ms / dt) / 9.80665f;
-            if (g_inst > 3.0f) g_inst = 3.0f;
-            if (g_inst < -3.0f) g_inst = -3.0f;
-            telemetry.g_force += (g_inst - telemetry.g_force) * (dt * 5.0f);
-            if (fabsf(telemetry.g_force) < 0.02f) telemetry.g_force = 0.0f;
-            if (fabsf(telemetry.g_force) > telemetry.stats.peak_g_force) {
-                telemetry.stats.peak_g_force = fabsf(telemetry.g_force);
-            }
-            s_last_spd_can = telemetry.speed_kmh;
-        }
-
-        static float s_real_ride_time_accum = 0.0f;
-        if (telemetry.stats.ride_time_sec == 0 && telemetry.trip_km == 0.0f) {
-            s_real_ride_time_accum = 0.0f;
-        }
-        if (telemetry.speed_kmh > 1.2f) {
-            s_real_ride_time_accum += dt;
-            while (s_real_ride_time_accum >= 1.0f) {
-                telemetry.stats.ride_time_sec += 1;
-                s_real_ride_time_accum -= 1.0f;
-            }
-        }
-        if (telemetry.stats.ride_time_sec > 2 && telemetry.trip_km > 0.01f) {
-            telemetry.stats.avg_speed_kmh = telemetry.trip_km / (telemetry.stats.ride_time_sec / 3600.0f);
-        }
+        updateDerivedStats(telemetry, dt, true);
     }
 }
 
@@ -1432,17 +1445,11 @@ bool VescHandler::parseVescPayload(const uint8_t *payload, size_t payload_len, D
         telemetry.power_watts    = telemetry.voltage * telemetry.current_amps;
         telemetry.amphours_used  = ah_used / 10000.0f;
 
-        // Convert ERPM to Vehicle Speed (km/h)
-        int pole_pairs = Settings.get().motor_pole_pairs;
-        if (pole_pairs < 2) pole_pairs = 15;
-        float wheel_circ_m = (Settings.get().wheel_diameter_in * 0.0254f) * M_PI;
-        float gear_ratio = Settings.get().gear_ratio;
-        if (gear_ratio < 0.1f) gear_ratio = 1.0f;
-
-        float mech_rpm = (float)erpm / (float)pole_pairs;
-        telemetry.rpm = fabsf(mech_rpm);
-        float wheel_rpm = mech_rpm / gear_ratio;
-        float v_spd_std = fabsf((wheel_rpm * wheel_circ_m * 60.0f) / 1000.0f);
+        // Convert ERPM to Vehicle Speed (km/h) using cached factors
+        updateWheelFactors();
+        float abs_erpm = fabsf((float)erpm);
+        telemetry.rpm = abs_erpm * _inv_pole_pairs;
+        float v_spd_std = abs_erpm * _erpm_to_kmh_factor;
         if (v_spd_std < 0.8f) v_spd_std = 0.0f;
         telemetry.vesc_motor_speed = v_spd_std;
         telemetry.speed_kmh = v_spd_std;
@@ -1458,7 +1465,7 @@ bool VescHandler::parseVescPayload(const uint8_t *payload, size_t payload_len, D
 
         int32_t delta_uart_tacho = tachometer - s_last_uart_tacho;
         if (delta_uart_tacho != 0) {
-            float delta_km = fabsf(((float)delta_uart_tacho / ((float)pole_pairs * 6.0f)) * wheel_circ_m) / (gear_ratio * 1000.0f);
+            float delta_km = fabsf((float)delta_uart_tacho) * _tacho_to_km_factor;
             if (delta_km < 1.0f) { // sanity clamp against sudden jumps
                 telemetry.trip_km += delta_km;
             }
@@ -1584,7 +1591,7 @@ void VescHandler::updateUsbBridge() {
     if (_transport) {
         // UART Bridge Path: Transparent byte-stream passthrough
         while (Serial.available() > 0) {
-            uint8_t buf[512];
+            uint8_t buf[128];
             size_t n = Serial.read(buf, sizeof(buf));
             if (n > 0) {
                 _transport->write(buf, n);
@@ -1595,7 +1602,7 @@ void VescHandler::updateUsbBridge() {
         }
 
         while (_transport->available() > 0) {
-            uint8_t buf[512];
+            uint8_t buf[128];
             size_t n = _transport->readBytes(buf, sizeof(buf));
             if (n > 0) {
                 Serial.write(buf, n);
@@ -1730,6 +1737,7 @@ void VescHandler::updateWifiBridge() {
         } else {
             _wifi_client = _wifi_server.accept();
             _wifi_client.setNoDelay(true);
+            _wifi_client.setTimeout(5); // Non-blocking 5ms TX timeout prevents freezing Core 0
             _wifi_client_connected = true;
 #if VESC_USE_CAN_BUS
             s_bridge_framer.reset();
@@ -1740,13 +1748,40 @@ void VescHandler::updateWifiBridge() {
         }
     }
 
+    auto disconnectWifiClient = [&](const char *reason) {
+        _wifi_client_connected = false;
+        _wifi_client_ip[0] = '\0';
+#if VESC_USE_CAN_BUS
+        s_bridge_framer.reset();
+#endif
+        if (_wifi_client) {
+            _wifi_client.stop();
+        }
+        Serial.printf("[WIFI_BRIDGE] %s\n", reason);
+    };
+
+    auto writeWifiNonBlocking = [&](const uint8_t *data, size_t len) -> bool {
+        if (!_wifi_client || !_wifi_client.connected()) {
+            disconnectWifiClient("Client disconnected before TX.");
+            return false;
+        }
+        size_t written = _wifi_client.write(data, len);
+        _bridge_vesc_to_wifi += (uint32_t)written;
+        if (written != len || !_wifi_client.connected()) {
+            disconnectWifiClient("TCP write backpressure/error -> dropped client to protect Core 0.");
+            return false;
+        }
+        return true;
+    };
+
     if (_wifi_client && _wifi_client.connected()) {
         _wifi_client_connected = true;
 
         if (_transport) {
             // UART Bridge Path
-            while (_wifi_client.available() > 0) {
-                uint8_t buf[512];
+            int rx_chunks = 0;
+            while (_wifi_client.available() > 0 && rx_chunks++ < 8) {
+                uint8_t buf[128];
                 int bytes_read = _wifi_client.read(buf, sizeof(buf));
                 if (bytes_read > 0) {
                     _transport->write(buf, bytes_read);
@@ -1756,12 +1791,14 @@ void VescHandler::updateWifiBridge() {
                 }
             }
 
-            while (_transport->available() > 0) {
-                uint8_t buf[512];
+            int tx_chunks = 0;
+            while (_transport->available() > 0 && tx_chunks++ < 8) {
+                uint8_t buf[128];
                 size_t n = _transport->readBytes(buf, sizeof(buf));
                 if (n > 0) {
-                    _wifi_client.write(buf, n);
-                    _bridge_vesc_to_wifi += n;
+                    if (!writeWifiNonBlocking(buf, n)) {
+                        return;
+                    }
                 } else {
                     break;
                 }
@@ -1773,8 +1810,9 @@ void VescHandler::updateWifiBridge() {
             ensureCanBusHealthy();
             uint32_t now = millis();
 
-            // 1. Parse framed VESC packets from TCP client -> transmit over CAN to VESC
-            while (_wifi_client.available() > 0) {
+            // 1. Parse framed VESC packets from TCP client -> transmit over CAN to VESC (bounded per 5ms tick)
+            int rx_chunks = 0;
+            while (_wifi_client.available() > 0 && rx_chunks++ < 8) {
                 uint8_t buf[256];
                 int bytes_read = _wifi_client.read(buf, sizeof(buf));
                 if (bytes_read <= 0) break;
@@ -1802,8 +1840,9 @@ void VescHandler::updateWifiBridge() {
                     if (processCanRxFrameForEsp(msg, &rx_payload, &rx_len)) {
                         size_t framed_len = frameVescUartPacket(rx_payload, rx_len, s_bridge_tx_frame, sizeof(s_bridge_tx_frame));
                         if (framed_len > 0) {
-                            _wifi_client.write(s_bridge_tx_frame, framed_len);
-                            _bridge_vesc_to_wifi += framed_len;
+                            if (!writeWifiNonBlocking(s_bridge_tx_frame, framed_len)) {
+                                return;
+                            }
                         }
                     }
                 } else {
@@ -1814,15 +1853,7 @@ void VescHandler::updateWifiBridge() {
 #endif
     } else {
         if (_wifi_client_connected) {
-            _wifi_client_connected = false;
-            _wifi_client_ip[0] = '\0';
-#if VESC_USE_CAN_BUS
-            s_bridge_framer.reset();
-#endif
-            if (_wifi_client) {
-                _wifi_client.stop();
-            }
-            Serial.println("[WIFI_BRIDGE] Client disconnected.");
+            disconnectWifiClient("Client disconnected.");
         }
     }
 #endif

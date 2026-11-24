@@ -1247,12 +1247,15 @@ void testRaceTimerAndRecords() {
     assert(t.race_state == 1);
     printf("[PASS] Countdown at 2s remains in COUNTDOWN state.\n");
 
-    // Countdown finishes at 5s
-    Renderer.updateRaceTimer(t, 6000); // 5s elapsed
-    assert(t.race_state == 2); // MEASURING
+    // Countdown finishes at 5s (Armed state) -> Auto-Rollout triggers on launch (speed >= 1.0 km/h)
+    Renderer.updateRaceTimer(t, 6000); // 5s elapsed, speed == 0 -> remains armed in state 1
+    assert(t.race_state == 1);
+    t.speed_kmh = 1.0f; // Launch!
+    Renderer.updateRaceTimer(t, 6000);
+    assert(t.race_state == 2); // MEASURING (Auto-Rollout triggered)
     assert(t.race_launch_start_ms == 6000);
     assert(t.race_elapsed_sec == 0.0f);
-    printf("[PASS] Countdown expiration cleanly triggers MEASURING state at 0.00s.\n");
+    printf("[PASS] Auto-Rollout launch (speed >= 1.0 km/h) cleanly triggers MEASURING state at 0.00s.\n");
 
     // 3. Accelerating: at t = 7.5s (elapsed = 1.5s), speed reaches 25 km/h -> crosses 22 km/h
     t.speed_kmh = 25.0f;
@@ -3071,10 +3074,6 @@ int main(int argc, char **argv) {
     // Scenario 7: Screen 2 - RT Waveforms & Dual Controllers (Video Exact)
     // ----------------------------------------------------
     t.screen = SCREEN_RT_GRAPHS;
-    for (int i = 0; i < WAVE_HISTORY_LEN; i++) {
-        t.speed_history[i] = 25.0f + 30.0f * sinf(i * 0.15f);
-        t.power_history[i] = 4500.0f + 4000.0f * sinf(i * 0.15f + 0.5f);
-    }
     t.vesc1_max_power = 18450.0f;
     t.vesc1_max_phase = 340.0f;
     t.vesc1_max_speed = 94.2f;
@@ -3231,11 +3230,6 @@ int main(int argc, char **argv) {
     t.stats.max_voltage = 54.2f;
     t.stats.max_temp_motor = 64.0f;
     t.stats.max_temp_esc = 58.0f;
-    for (int i = 0; i < WAVE_HISTORY_LEN; i++) {
-        float ph = (float)i / (float)WAVE_HISTORY_LEN * 3.5f * 3.14159f;
-        t.speed_history[i] = 28.0f + 22.0f * sinf(ph) + 6.0f * cosf(ph * 2.1f);
-        t.power_history[i] = 1100.0f + 950.0f * sinf(ph + 0.4f) + 250.0f * cosf(ph * 1.7f);
-    }
     Renderer.invalidateCache();
     Renderer.markScreenDirty();
     renderAndSave("15_stats_rich_overview", t);
@@ -3707,6 +3701,206 @@ int main(int argc, char **argv) {
     Settings.get().color_theme = THEME_OBSIDIAN_DARK;
     t.color_theme = THEME_OBSIDIAN_DARK;
     Renderer.invalidateCache();
+
+    // ----------------------------------------------------
+    // Regression Tests (Runde 3): Dragy Auto-Rollout, Stealth-Guard Tab-Fallback, Wizard PIN-Guard
+    // ----------------------------------------------------
+    {
+        // 1. Dragy Auto-Rollout: State 1 -> State 2 only when speed_kmh >= 1.0f
+        DashTelemetry tDragy;
+        setBaseTelemetry(tDragy);
+        tDragy.screen = SCREEN_RACE_TIMER;
+        tDragy.race_state = 1; // ARMED / COUNTDOWN
+        tDragy.race_countdown_start_ms = millis();
+        tDragy.speed_kmh = 0.5f; // Below 1.0 km/h -> should remain in state 1
+        Renderer.updateRaceTimer(tDragy, millis());
+        if (tDragy.race_state != 1) {
+            fprintf(stderr, "[FAIL] Dragy Auto-Rollout premature trigger at speed < 1.0 km/h\n");
+            return 1;
+        }
+
+        tDragy.speed_kmh = 1.2f; // At/above 1.0 km/h -> triggers Auto-Rollout to state 2
+        Renderer.updateRaceTimer(tDragy, millis());
+        if (tDragy.race_state != 2 || !tDragy.boost_active) {
+            fprintf(stderr, "[FAIL] Dragy Auto-Rollout did not transition to State 2 on speed >= 1.0 km/h\n");
+            return 1;
+        }
+        printf("[PASS] Regression test: Dragy Auto-Rollout (State 1 -> State 2 at speed >= 1.0 km/h)\n");
+    }
+
+    {
+        // 2. Stealth-Guard Tab-Fallback: in legal mode (!tuning_mode), accessing tuning tabs (< TAB_DASH) falls back to TAB_DASH
+        DashTelemetry tStealth;
+        setBaseTelemetry(tStealth);
+        tStealth.screen = SCREEN_SETTINGS_MENU;
+        tStealth.tuning_mode = false;
+        ModeManager::instance().setTuningMode(false);
+
+        // Attempt setting TAB_SPEED (idx 0 < TAB_DASH)
+        Renderer.setSettingsTab(DashboardRenderer::TAB_SPEED);
+        if (Renderer.getSettingsTab() != DashboardRenderer::TAB_SPEED) {
+            fprintf(stderr, "[FAIL] Stealth-Guard test setup: initial setSettingsTab failed\n");
+            return 1;
+        }
+
+        // Touch handling forces fallback to TAB_DASH
+        Renderer.handleSettingsTouch(100, 200, tStealth);
+        if (Renderer.getSettingsTab() != DashboardRenderer::TAB_DASH) {
+            fprintf(stderr, "[FAIL] Stealth-Guard Tab-Fallback did not revert to TAB_DASH on touch\n");
+            return 1;
+        }
+
+        // Attempt setting TAB_DRAGY (idx 1 < TAB_DASH)
+        Renderer.setSettingsTab(DashboardRenderer::TAB_DRAGY);
+        Renderer.render(tStealth);
+        if (Renderer.getSettingsTab() != DashboardRenderer::TAB_DASH) {
+            fprintf(stderr, "[FAIL] Stealth-Guard Tab-Fallback did not revert to TAB_DASH on render\n");
+            return 1;
+        }
+        printf("[PASS] Regression test: Stealth-Guard Tab-Fallback (!tuning_mode && tab < TAB_DASH -> TAB_DASH)\n");
+    }
+
+    {
+        // 3. Setup-Wizard PIN-Guard: PIN with len < 4 does not advance or disable pin_lock_enabled
+        Renderer.resetSetupWizard();
+        DashTelemetry tWiz;
+        setBaseTelemetry(tWiz);
+        tWiz.setup_completed = false;
+        tWiz.screen = SCREEN_SETUP_WIZARD;
+        tWiz.wizard_step = 1;
+        Renderer.initSetupWizard(tWiz);
+        Settings.get().pin_lock_enabled = true;
+
+        // Enter single digit '5' (len = 1 < 4)
+        Renderer.handleWizardTouch(360, 230, tWiz); // '5'
+        if (strlen(tWiz.wizard_pin_buf) != 1) {
+            fprintf(stderr, "[FAIL] Setup-Wizard PIN digit input failed\n");
+            return 1;
+        }
+
+        // Press Continue button (400, 422) with incomplete PIN (< 4 digits)
+        Renderer.handleWizardTouch(400, 422, tWiz);
+        if (tWiz.wizard_step != 1 || !Settings.get().pin_lock_enabled) {
+            fprintf(stderr, "[FAIL] Setup-Wizard PIN-Guard allowed advance or disabled PIN on Continue\n");
+            return 1;
+        }
+
+        // Press '#' key (500, 350) with incomplete PIN
+        Renderer.handleWizardTouch(500, 350, tWiz);
+        if (tWiz.wizard_step != 1 || !Settings.get().pin_lock_enabled) {
+            fprintf(stderr, "[FAIL] Setup-Wizard PIN-Guard allowed advance or disabled PIN on '#'\n");
+            return 1;
+        }
+
+        Renderer.resetSetupWizard();
+        printf("[PASS] Regression test: Setup-Wizard PIN-Guard (len < 4 prevents advance / pin disable)\n");
+    }
+
+    {
+        // 4. Dragy Plateau-Finish: State 2 (MEASURING) reaches Split 1 and holds constant speed (<0.2 m/s^2 for >2.0s) below Split 3 -> auto-finishes to State 3
+        DashTelemetry tPlat;
+        setBaseTelemetry(tPlat);
+        tPlat.screen = SCREEN_RACE_TIMER;
+        tPlat.race_state = 2; // MEASURING
+        tPlat.race_launch_start_ms = 1000;
+        tPlat.race_elapsed_sec = 2.0f;
+        tPlat.speed_kmh = 30.0f; // Above Split 1 (22 km/h), below Split 3 (70 km/h)
+        tPlat.race_split_0_22 = 1.6f; // Split 1 achieved!
+        tPlat.race_split_0_50 = 0.0f;
+        tPlat.race_split_0_70 = 0.0f;
+
+        uint32_t t_now = 3000;
+        // First eval step to establish baseline evaluation speed
+        Renderer.updateRaceTimer(tPlat, t_now);
+        if (tPlat.race_state != 2) {
+            fprintf(stderr, "[FAIL] Dragy Plateau prematurely finished\n");
+            return 1;
+        }
+
+        // Advance 2.5 seconds with constant speed (accel = 0.0 m/s^2 < 0.2 m/s^2) in 250ms increments
+        for (int step = 1; step <= 10; ++step) {
+            t_now += 250;
+            tPlat.race_elapsed_sec = (float)(t_now - tPlat.race_launch_start_ms) / 1000.0f;
+            Renderer.updateRaceTimer(tPlat, t_now);
+        }
+
+        if (tPlat.race_state != 3) {
+            fprintf(stderr, "[FAIL] Dragy Plateau did not finish to State 3 after 2.5s plateau\n");
+            return 1;
+        }
+        printf("[PASS] Regression test: Dragy Plateau-Finish (constant speed >2.0s auto-finishes to State 3)\n");
+    }
+
+    {
+        // 5. Odometer-Meter-Praezision: setOdoMeters(10000000) (10.000 km) + 10x addOdoMeters(1.0f) -> exactly 10000010m
+        uint32_t saved_odo = Settings.getOdoMeters();
+        Settings.setOdoMeters(10000000);
+        if (Settings.getOdoMeters() != 10000000) {
+            fprintf(stderr, "[FAIL] setOdoMeters(10000000) failed\n");
+            return 1;
+        }
+        for (int i = 0; i < 10; ++i) {
+            Settings.addOdoMeters(1.0f);
+        }
+        if (Settings.getOdoMeters() != 10000010) {
+            fprintf(stderr, "[FAIL] addOdoMeters precision loss: expected 10000010, got %u\n", Settings.getOdoMeters());
+            return 1;
+        }
+        Settings.setOdoMeters(saved_odo); // Restore previous odometer
+        printf("[PASS] Regression test: Odometer Meter-Praezision (10000000m + 10x 1m = 10000010m without float drift)\n");
+    }
+
+    {
+        // 6. FaultManager Cooldown pro Code: Different consecutive faults logged immediately without cooldown drop
+        FaultManager::instance().clearFaults();
+        FaultManager::instance().recordFault(FAULT_UNDER_VOLTAGE, 42.0f, 10.0f, 15.0f, 40.0f, 45.0f, 100);
+        FaultManager::instance().recordFault(FAULT_ABS_OVER_CURRENT, 48.0f, 120.0f, 250.0f, 50.0f, 60.0f, 101);
+
+        if (FaultManager::instance().getFaultCount() != 2) {
+            fprintf(stderr, "[FAIL] FaultManager swallowed second distinct fault code\n");
+            return 1;
+        }
+        if (FaultManager::instance().getFault(0).code != FAULT_ABS_OVER_CURRENT ||
+            FaultManager::instance().getFault(1).code != FAULT_UNDER_VOLTAGE) {
+            fprintf(stderr, "[FAIL] FaultManager fault order or codes incorrect\n");
+            return 1;
+        }
+
+        // Duplicate identical code within 3s SHOULD be dropped by per-code cooldown
+        FaultManager::instance().recordFault(FAULT_ABS_OVER_CURRENT, 48.0f, 120.0f, 250.0f, 50.0f, 60.0f, 102);
+        if (FaultManager::instance().getFaultCount() != 2) {
+            fprintf(stderr, "[FAIL] FaultManager did not suppress duplicate consecutive fault\n");
+            return 1;
+        }
+        FaultManager::instance().clearFaults();
+        printf("[PASS] Regression test: FaultManager Cooldown pro Code (distinct codes logged, identical suppressed)\n");
+    }
+
+    {
+        // 7. BatteryManager Sag-Schutz: Under heavy load (60A), voltage sag does not corrupt prof.learned_wh
+        uint8_t prof_id = Battery.getActiveProfileIndex();
+        float initial_learned_wh = Battery.getProfile(prof_id).learned_wh;
+
+        DashTelemetry tBat;
+        setBaseTelemetry(tBat);
+        tBat.speed_kmh = 45.0f;
+        tBat.current_amps = 60.0f;
+        tBat.voltage = 38.0f; // Extreme voltage sag under full throttle load
+
+        Battery.update(tBat, 0.1f);
+
+        float current_learned_wh = Battery.getProfile(prof_id).learned_wh;
+        if (current_learned_wh != initial_learned_wh) {
+            fprintf(stderr, "[FAIL] BatteryManager corrupted learned_wh during voltage sag: was %.1f, now %.1f\n",
+                    initial_learned_wh, current_learned_wh);
+            return 1;
+        }
+        if (tBat.battery_pct <= 0.0f) {
+            fprintf(stderr, "[FAIL] BatteryManager SoC collapsed to 0%% during driving load\n");
+            return 1;
+        }
+        printf("[PASS] Regression test: BatteryManager Sag-Schutz (60A load & 38V sag preserves learned_wh and SoC)\n");
+    }
 
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");
     return 0;

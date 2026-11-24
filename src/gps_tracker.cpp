@@ -106,7 +106,10 @@ void GpsTracker::parseRmc(const char* line, DashTelemetry &telemetry) {
 
     if (status == 'A') {
         telemetry.gps.last_fix_ms = millis();
-        telemetry.gps.speed_kmh = speed_knots * 1.852f; // 1 knot = 1.852 km/h
+        float speed_kmh = speed_knots * 1.852f; // 1 knot = 1.852 km/h
+        if (!isfinite(speed_kmh) || speed_kmh < 0.0f) speed_kmh = 0.0f;
+        if (speed_kmh > 250.0f) speed_kmh = 250.0f;
+        telemetry.gps.speed_kmh = speed_kmh;
 
         // Parse UTC time
         uint32_t t_int = (uint32_t)raw_time;
@@ -115,28 +118,37 @@ void GpsTracker::parseRmc(const char* line, DashTelemetry &telemetry) {
         uint8_t utc_s = t_int % 100;
 
         int local_h = (int)utc_h + _timezone_offset;
-        if (local_h >= 24) local_h -= 24;
-        if (local_h < 0)   local_h += 24;
+        while (local_h >= 24) local_h -= 24;
+        while (local_h < 0)   local_h += 24;
 
         telemetry.gps.hour = (uint8_t)local_h;
-        telemetry.gps.minute = utc_m;
-        telemetry.gps.second = utc_s;
+        telemetry.gps.minute = (utc_m < 60) ? utc_m : 0;
+        telemetry.gps.second = (utc_s < 60) ? utc_s : 0;
 
         // Parse Date (DDMMYY)
-        telemetry.gps.day = (uint8_t)(raw_date / 10000);
-        telemetry.gps.month = (uint8_t)((raw_date / 100) % 100);
-        telemetry.gps.year = 2000 + (raw_date % 100);
+        uint8_t day = (uint8_t)(raw_date / 10000);
+        uint8_t month = (uint8_t)((raw_date / 100) % 100);
+        uint16_t year = 2000 + (raw_date % 100);
+        if (day >= 1 && day <= 31) telemetry.gps.day = day;
+        if (month >= 1 && month <= 12) telemetry.gps.month = month;
+        if (year >= 2020 && year <= 2099) telemetry.gps.year = year;
 
         // Convert NMEA lat/lon (DDMM.mmmm) to decimal degrees
         double lat_deg = floor(raw_lat / 100.0);
         double lat_min = raw_lat - (lat_deg * 100.0);
-        telemetry.gps.latitude = lat_deg + (lat_min / 60.0);
-        if (lat_ns == 'S') telemetry.gps.latitude = -telemetry.gps.latitude;
+        double lat = lat_deg + (lat_min / 60.0);
+        if (lat_ns == 'S') lat = -lat;
+        if (isfinite(lat) && lat >= -90.0 && lat <= 90.0) {
+            telemetry.gps.latitude = lat;
+        }
 
         double lon_deg = floor(raw_lon / 100.0);
         double lon_min = raw_lon - (lon_deg * 100.0);
-        telemetry.gps.longitude = lon_deg + (lon_min / 60.0);
-        if (lon_ew == 'W') telemetry.gps.longitude = -telemetry.gps.longitude;
+        double lon = lon_deg + (lon_min / 60.0);
+        if (lon_ew == 'W') lon = -lon;
+        if (isfinite(lon) && lon >= -180.0 && lon <= 180.0) {
+            telemetry.gps.longitude = lon;
+        }
     }
 }
 
@@ -181,6 +193,10 @@ void GpsTracker::parseGga(const char* line, DashTelemetry &telemetry) {
         if (token_idx > 12) break;
     }
 
+    if (sats > 64) sats = 64;
+    if (!isfinite(hdop) || hdop < 0.0f) hdop = 99.0f;
+    if (!isfinite(alt) || alt < -500.0f || alt > 10000.0f) alt = 0.0f;
+
     telemetry.gps.satellites = sats;
     telemetry.gps.hdop = hdop;
     telemetry.gps.altitude_m = alt;
@@ -205,9 +221,12 @@ void GpsTracker::update(DashTelemetry &telemetry) {
     uint32_t now = millis();
 
 #if !defined(NATIVE_SIMULATOR)
-    // Live ESP32-S3: Read all available NMEA bytes from ATGM336H on Serial2
+    // Live ESP32-S3: Read up to max 128 bytes per tick to prevent GPS bursts from blocking Core-0 5ms cycle
     if (PIN_GPS_RX >= 0) {
-        while (Serial2.available() > 0) {
+        size_t bytes_processed = 0;
+        static constexpr size_t MAX_BYTES_PER_TICK = 128;
+        while (Serial2.available() > 0 && bytes_processed < MAX_BYTES_PER_TICK) {
+            bytes_processed++;
             char c = (char)Serial2.read();
             if (c == '\r') continue;
             if (c == '\n') {

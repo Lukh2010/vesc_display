@@ -5,7 +5,10 @@
 SettingsManager Settings;
 
 SettingsManager::SettingsManager()
-    : _has_saved_snapshot(false) {
+    : _odo_meters(0),
+      _last_saved_odo_m(0),
+      _odo_accum_fraction_m(0.0f),
+      _has_saved_snapshot(false) {
     loadDefaults();
     _last_saved = _settings;
     _last_saved_race = _race_records;
@@ -48,6 +51,9 @@ void SettingsManager::loadDefaults() {
     _settings.show_incline           = 1;
     _settings.show_light_btn         = 1;
     _settings.brake_mode             = 2;
+    _odo_meters                      = 0;
+    _last_saved_odo_m                = 0;
+    _odo_accum_fraction_m            = 0.0f;
     _settings.odo_km                 = 0.0f;
     _settings.tcs_enabled            = false;
     _settings.battery_cells          = 13;
@@ -132,10 +138,25 @@ void SettingsManager::begin() {
             _settings.ble_paired_name[sizeof(_settings.ble_paired_name) - 1] = '\0';
         }
 
-        _settings.odo_km = _prefs.getFloat("odo_km", 0.0f);
-        if (isnan(_settings.odo_km) || _settings.odo_km < 0.0f || _settings.odo_km > 999999.0f) {
-            _settings.odo_km = 0.0f;
+        // Odometer precision in meters (uint32_t) + one-time NVS migration
+        if (_prefs.isKey("odo_m")) {
+            _odo_meters = _prefs.getUInt("odo_m", 0);
+        } else if (_prefs.isKey("odo_km")) {
+            float legacy_km = _prefs.getFloat("odo_km", 0.0f);
+            if (!isnan(legacy_km) && legacy_km > 0.0f) {
+                _odo_meters = (uint32_t)roundf(legacy_km * 1000.0f);
+            } else {
+                _odo_meters = 0;
+            }
+            _prefs.putUInt("odo_m", _odo_meters);
+            Serial.printf("[SETTINGS] Migrated legacy odo_km (%.3f km) -> odo_m (%u m)\n",
+                          legacy_km, (unsigned int)_odo_meters);
+        } else {
+            _odo_meters = 0;
         }
+
+        _settings.odo_km = (float)_odo_meters / 1000.0f;
+        _last_saved_odo_m = _odo_meters;
         _settings.tcs_enabled = _prefs.getBool("tcs_en", false);
         _settings.battery_cells = _prefs.getUChar("bat_cells", 13);
         if (_settings.battery_cells < 10 || _settings.battery_cells > 24) {
@@ -185,7 +206,17 @@ void SettingsManager::saveInternal(bool force) {
     }
     if (_settings.battery_cells < 10) _settings.battery_cells = 10;
     if (_settings.battery_cells > 24) _settings.battery_cells = 24;
-    if (isnan(_settings.odo_km) || _settings.odo_km < 0.0f) _settings.odo_km = 0.0f;
+
+    // Sync odometer meters and km
+    if (fabsf(_settings.odo_km - ((float)_odo_meters / 1000.0f)) > 0.005f) {
+        _odo_meters = (uint32_t)roundf(_settings.odo_km * 1000.0f);
+    } else {
+        _settings.odo_km = (float)_odo_meters / 1000.0f;
+    }
+    if (isnan(_settings.odo_km) || _settings.odo_km < 0.0f) {
+        _settings.odo_km = 0.0f;
+        _odo_meters = 0;
+    }
 
     if (force || _settings.dash_style != _last_saved.dash_style)
         _prefs.putUChar("style", _settings.dash_style);
@@ -257,8 +288,10 @@ void SettingsManager::saveInternal(bool force) {
         _prefs.putString("ble_name", _settings.ble_paired_name);
 
     bool odo_written = false;
-    if (force || fabsf(_settings.odo_km - _last_saved.odo_km) >= 0.1f) {
+    if (force || abs((int32_t)(_odo_meters - _last_saved_odo_m)) >= 100) {
+        _prefs.putUInt("odo_m", _odo_meters);
         _prefs.putFloat("odo_km", _settings.odo_km);
+        _last_saved_odo_m = _odo_meters;
         odo_written = true;
     }
     if (force || _settings.tcs_enabled != _last_saved.tcs_enabled)
@@ -274,9 +307,11 @@ void SettingsManager::saveInternal(bool force) {
         _prefs.putFloat("rc_best70", _race_records.best_0_70_sec);
 
     float prev_saved_odo = _last_saved.odo_km;
+    uint32_t prev_saved_odo_m = _last_saved_odo_m;
     _last_saved = _settings;
     if (!odo_written && !force) {
         _last_saved.odo_km = prev_saved_odo;
+        _last_saved_odo_m = prev_saved_odo_m;
     }
     _last_saved_race = _race_records;
     _has_saved_snapshot = true;
@@ -286,13 +321,38 @@ void SettingsManager::save() {
     saveInternal(false);
 }
 
+void SettingsManager::setOdoMeters(uint32_t m) {
+    _odo_meters = m;
+    _settings.odo_km = (float)_odo_meters / 1000.0f;
+    if (!_has_saved_snapshot || abs((int32_t)(_odo_meters - _last_saved_odo_m)) >= 100) {
+        _prefs.putUInt("odo_m", _odo_meters);
+        _prefs.putFloat("odo_km", _settings.odo_km);
+        _last_saved_odo_m = _odo_meters;
+        _last_saved.odo_km = _settings.odo_km;
+    }
+}
+
+void SettingsManager::addOdoMeters(float delta_m) {
+    if (isnan(delta_m) || delta_m <= 0.0f) return;
+    _odo_accum_fraction_m += delta_m;
+    uint32_t full_m = (uint32_t)_odo_accum_fraction_m;
+    if (full_m > 0) {
+        _odo_accum_fraction_m -= (float)full_m;
+        _odo_meters += full_m;
+        _settings.odo_km = (float)_odo_meters / 1000.0f;
+
+        if (!_has_saved_snapshot || abs((int32_t)(_odo_meters - _last_saved_odo_m)) >= 100) {
+            _prefs.putUInt("odo_m", _odo_meters);
+            _prefs.putFloat("odo_km", _settings.odo_km);
+            _last_saved_odo_m = _odo_meters;
+            _last_saved.odo_km = _settings.odo_km;
+        }
+    }
+}
+
 void SettingsManager::saveOdo(float odo_km) {
     if (isnan(odo_km) || odo_km < 0.0f || odo_km > 999999.0f) return;
-    _settings.odo_km = odo_km;
-    if (!_has_saved_snapshot || fabsf(odo_km - _last_saved.odo_km) >= 0.1f) {
-        _prefs.putFloat("odo_km", odo_km);
-        _last_saved.odo_km = odo_km;
-    }
+    setOdoMeters((uint32_t)roundf(odo_km * 1000.0f));
 }
 
 void SettingsManager::saveRaceRecords(const RaceRecords &records) {

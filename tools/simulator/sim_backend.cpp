@@ -660,15 +660,6 @@ void sim_init() {
     g_telemetry.race_split_0_70 = 0.0f;
     g_telemetry.race_records = Settings.getRaceRecords();
 
-    // Seed realistic sine waveform curve history (from video frame 00:11)
-    for (int i = 0; i < WAVE_HISTORY_LEN; i++) {
-        float phase = (float)i / (float)WAVE_HISTORY_LEN * 4.0f * 3.14159265f;
-        g_telemetry.speed_history[i] = 45.0f + 35.0f * sinf(phase);
-        g_telemetry.power_history[i] = 5500.0f + 4200.0f * sinf(phase);
-    }
-    g_telemetry.history_count = WAVE_HISTORY_LEN;
-    g_telemetry.last_history_sample_ms = 1000;
-
     g_telemetry.stats.reset();
     s_sim_trip_km = 0.0f;
     s_sim_wh_used = 0.0f;
@@ -1311,17 +1302,6 @@ void sim_step(uint32_t step_ms) {
     g_telemetry.vesc2_max_power = lim2.max_watt;
     g_telemetry.vesc2_max_phase = lim2.max_phase_amps;
     g_telemetry.vesc2_max_speed = g_telemetry.vesc1_max_speed;
-
-    // Update Waveform History every 1000ms
-    if (g_sim_uptime_ms - g_telemetry.last_history_sample_ms >= 1000) {
-        g_telemetry.last_history_sample_ms = g_sim_uptime_ms;
-        for (int i = 0; i < WAVE_HISTORY_LEN - 1; i++) {
-            g_telemetry.speed_history[i] = g_telemetry.speed_history[i + 1];
-            g_telemetry.power_history[i] = g_telemetry.power_history[i + 1];
-        }
-        g_telemetry.speed_history[WAVE_HISTORY_LEN - 1] = g_telemetry.speed_kmh;
-        g_telemetry.power_history[WAVE_HISTORY_LEN - 1] = g_telemetry.power_watts;
-    }
 
     // FOC Audio Turbine Sound Simulation
     g_telemetry.color_theme = Settings.get().color_theme;

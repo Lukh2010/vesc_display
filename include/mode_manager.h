@@ -3,6 +3,10 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include "dash_types.h"
+#if !defined(NATIVE_SIMULATOR)
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#endif
 
 // 3 modes in both legal and tuned profiles: ECO, SPORT, RACE
 enum ProfileModeIndex {
@@ -40,21 +44,22 @@ public:
 
     VehicleModeConfig& getConfig() { return _config; }
     const VehicleModeConfig& getConfig() const { return _config; }
+    VehicleModeConfig getConfigSnapshot() const;
 
     // Synchronizes battery series cell count (10..24) with Settings and recalculates cutoffs
     void setBatteryCells(uint8_t cells);
-    uint8_t getBatteryCells() const { return _config.battery_cells; }
+    uint8_t getBatteryCells() const;
 
-    bool isTuningMode() const { return _tuning_mode; }
+    bool isTuningMode() const;
     void setTuningMode(bool enable);
 
-    bool isBoostActive() const { return _boost_active; }
+    bool isBoostActive() const;
     void setBoostActive(bool active);
 
-    bool isLocked() const { return _is_locked; }
+    bool isLocked() const;
     void setLocked(bool locked);
 
-    RideMode getRideMode() const { return _ride_mode; }
+    RideMode getRideMode() const;
     void setRideMode(RideMode mode);
     void cycleMode();
 
@@ -64,6 +69,7 @@ public:
 
     bool checkAndClearLimitsDirty();
     void markLimitsDirty();
+    void setAsyncVescPush(bool enabled);
 
     // Sends current active limits to VESC
     void applyLimitsToVesc();
@@ -79,6 +85,10 @@ private:
     volatile bool _is_locked;
     volatile RideMode _ride_mode;
     volatile bool _limits_dirty;
+    volatile bool _async_vesc_push;
+#if !defined(NATIVE_SIMULATOR)
+    mutable SemaphoreHandle_t _mutex;
+#endif
     Preferences _prefs;
 
     void setFactoryDefaults();

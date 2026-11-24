@@ -95,6 +95,8 @@ private:
     void pollRealVesc(DashTelemetry &telemetry);
     void pollCanVesc(DashTelemetry &telemetry);
     void initCanBus();
+    void updateWheelFactors();
+    void updateDerivedStats(DashTelemetry &telemetry, float dt, bool compute_gforce);
     void sendVescGetValues();
     void sendVescGetDecodedAdc();
     bool parseVescPacket(uint8_t *buffer, size_t len, DashTelemetry &telemetry);
@@ -143,6 +145,17 @@ private:
     VescSyncStatus _sync_status;
     uint32_t       _mcconf_req_ms;
     uint32_t       _sync_ms;
+
+    // Cached Wheel / Motor Conversion Factors & Derived Stats State
+    float          _cached_wheel_diam_in;
+    float          _cached_gear_ratio;
+    int            _cached_pole_pairs;
+    float          _wheel_circ_m;
+    float          _inv_pole_pairs;
+    float          _erpm_to_kmh_factor;
+    float          _tacho_to_km_factor;
+    float          _last_g_speed_kmh;
+    float          _ride_time_accum_sec;
 
     // FOC Motor Horn State
     bool           _horn_active;

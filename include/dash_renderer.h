@@ -6,6 +6,7 @@
 #include "settings_manager.h"
 #include "battery_manager.h"
 #include "board_config.h"
+#include "ui_layout.h"
 
 class DashboardRenderer {
 public:
@@ -65,6 +66,9 @@ public:
         _last_race_split_0_50 = -999.0f;
         _last_race_split_0_70 = -999.0f;
         _last_race_g_force_x10 = -999;
+        _race_plateau_start_ms = 0;
+        _race_last_eval_ms = 0;
+        _race_last_eval_speed_kmh = 0.0f;
         _mode_banner_drawn_mode = -1;
         _mode_banner_active = false;
         _pin_screen_drawn = false;
@@ -288,12 +292,6 @@ private:
         }
     } _cache;
 
-    // Analog Needle State
-    struct NeedleCoords {
-        int tipX, tipY, b1X, b1Y, b2X, b2Y;
-        bool valid;
-    } _last_needle;
-
     // Needle & Speed Sweep Animation State
     bool     _is_sweeping;
     uint8_t  _sweep_phase;
@@ -433,6 +431,12 @@ private:
     float    _last_race_split_0_50;
     float    _last_race_split_0_70;
     int      _last_race_g_force_x10;
+    uint32_t _race_plateau_start_ms;
+    uint32_t _race_last_eval_ms;
+    float    _race_last_eval_speed_kmh;
+    uint8_t  _pb_split1_kmh;
+    uint8_t  _pb_split2_kmh;
+    uint8_t  _pb_split3_kmh;
 
     // Boot Animation State
     bool     _boot_anim_active;

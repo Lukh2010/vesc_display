@@ -376,12 +376,6 @@ struct DashTelemetry {
     bool    hazard_active;     // Flashing hazard lights active
     bool    lights_enabled;    // Master light power switch
 
-    // Real-Time Waveform History (for Screen 2 RT graphs)
-    float speed_history[WAVE_HISTORY_LEN];
-    float power_history[WAVE_HISTORY_LEN];
-    uint8_t history_count;
-    uint32_t last_history_sample_ms;
-
     // Dual VESC Controller Peak Specs (from video)
     float vesc1_max_power;
     float vesc1_max_phase;
