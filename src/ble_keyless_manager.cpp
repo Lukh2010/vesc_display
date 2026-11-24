@@ -76,7 +76,9 @@ void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <BLEAdvertising.h>
+#if BLE_KEYLESS_USE_HID
 #include <BLEHIDDevice.h>
+#endif
 #include <BLESecurity.h>
 #if defined(CONFIG_BLUEDROID_ENABLED)
 #include <esp_gap_ble_api.h>
@@ -88,7 +90,19 @@ void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
 
 static BLEServer *s_bleServer = nullptr;
 static BLECharacteristic *s_statusChar = nullptr;
+#if BLE_KEYLESS_USE_HID
 static BLEHIDDevice *s_hidDevice = nullptr;
+#endif
+
+#if defined(CONFIG_BLUEDROID_ENABLED)
+static void vescGapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
+    if (event == ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT && param) {
+        if (param->read_rssi_cmpl.status == ESP_BT_STATUS_SUCCESS) {
+            BleKeylessManager::instance().updateRssi(param->read_rssi_cmpl.rssi);
+        }
+    }
+}
+#endif
 
 class VescKeylessServerCallbacks : public BLEServerCallbacks {
 public:
@@ -186,6 +200,9 @@ void BleKeylessManager::begin() {
     }
 
     BLEDevice::init(KEYLESS_BLE_NAME);
+#if defined(CONFIG_BLUEDROID_ENABLED)
+    BLEDevice::setCustomGapHandler(vescGapEventHandler);
+#endif
 
     // Security configuration for seamless "Just Works" pairing & bonding
     BLESecurity *pSecurity = new BLESecurity();
@@ -200,6 +217,7 @@ void BleKeylessManager::begin() {
     s_bleServer = BLEDevice::createServer();
     s_bleServer->setCallbacks(new VescKeylessServerCallbacks());
 
+#if BLE_KEYLESS_USE_HID
     static const uint8_t hidReportDescriptor[] = {
         0x05, 0x0C,
         0x09, 0x01,
@@ -226,6 +244,7 @@ void BleKeylessManager::begin() {
     s_hidDevice->reportMap((uint8_t*)hidReportDescriptor, sizeof(hidReportDescriptor));
     s_hidDevice->setBatteryLevel(100);
     s_hidDevice->startServices();
+#endif
 
     BLEService *pKeylessService = s_bleServer->createService(SERVICE_UUID_KEYLESS);
     s_statusChar = pKeylessService->createCharacteristic(
@@ -239,8 +258,12 @@ void BleKeylessManager::begin() {
 
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->setAppearance(0x0180);
-    pAdvertising->addServiceUUID(s_hidDevice->hidService()->getUUID());
-    pAdvertising->addServiceUUID(BLEUUID((uint16_t)0x180F));
+#if BLE_KEYLESS_USE_HID
+    if (s_hidDevice) {
+        pAdvertising->addServiceUUID(s_hidDevice->hidService()->getUUID());
+        pAdvertising->addServiceUUID(BLEUUID((uint16_t)0x180F));
+    }
+#endif
     pAdvertising->setMinInterval(32);
     pAdvertising->setMaxInterval(48);
 
@@ -302,6 +325,7 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
     _connected = true;
     _conn_id = connId;
     _connect_time_ms = millis();
+    _last_rssi_poll_ms = _connect_time_ms;
     _rssi = -55;
     memcpy(_peer_bda, bda, 6);
 
@@ -348,6 +372,10 @@ void BleKeylessManager::onClientDisconnect() {
 void BleKeylessManager::updateRssi(int8_t rssi) {
     if (_connected) {
         _rssi = (int8_t)(0.7f * _rssi + 0.3f * rssi);
+        if (_last_telemetry) {
+            _last_telemetry->ble_rssi = _rssi;
+            _last_telemetry->ble_signal_bars = getSignalBars();
+        }
     }
 }
 
@@ -427,6 +455,18 @@ void BleKeylessManager::unpair() {
 
 void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
     _last_telemetry = &telemetry;
+
+    // Zyklisches Live-RSSI-Polling alle 1000ms bei aktiver Verbindung
+    if (_connected && (now_ms - _last_rssi_poll_ms >= 1000)) {
+        _last_rssi_poll_ms = now_ms;
+#if !defined(NATIVE_SIMULATOR) && ENABLE_BLE_KEYLESS
+#if defined(CONFIG_BLUEDROID_ENABLED)
+        esp_ble_gap_read_rssi((uint8_t*)_peer_bda);
+#endif
+#elif defined(NATIVE_SIMULATOR)
+        updateRssi(-55 + (int8_t)((now_ms / 1000) % 5));
+#endif
+    }
 
     bool state_changed = (telemetry.ble_connected != _connected) ||
                          (telemetry.ble_paired != Settings.get().ble_paired) ||

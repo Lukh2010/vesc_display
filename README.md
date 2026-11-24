@@ -130,7 +130,7 @@ Das gesamte System ist für schnelle, intuitive Bedienung mit Handschuhen währe
 | **Boost aktivieren** | Tipp auf `[ BOOST ]` (unten rechts) | Aktiviert für 10 Sekunden maximalen Leistungs-Boost |
 | **Statistiken / Graphen** | Wisch nach **Links** ($\leftarrow$) oder Tipp `[ STATS ]` | Öffnet Fahr-Statistiken, Wh/km und Live-Graphen |
 | **Trip zurücksetzen** | Langer Druck (2s) unten links auf den Trip-Zähler | Setzt Tageskilometer (`TRIP km`) und Spitzenwerte auf 0 |
-| **Einstellungen öffnen** | Tipp auf das Batterie-Badge (oben rechts) | Öffnet das Einstellungsmenü für Limits und Display-Optionen |
+| **Einstellungen öffnen** | Tipp / langer Druck oben rechts (Touch-Zone `x >= 725, y <= 65`) | Öffnet das Einstellungsmenü für Limits und Display-Optionen |
 
 ### 🔒 Sicherheit & Drosselung (Polizei-Modus)
 | Aktion | Touch-Geste / Bereich | Funktion |
@@ -144,7 +144,7 @@ Das gesamte System ist für schnelle, intuitive Bedienung mit Handschuhen währe
 | Aktion | Touch-Geste / Bereich | Funktion |
 |:---|:---|:---|
 | **Zurück zum Dashboard** | Tipp auf `[ < DASH ]` (oben links) | Kehrt aus jedem Menü, Race-Timer oder Lade-HUD sofort zum Cockpit zurück |
-| **Helligkeit anpassen** | Schieberegler oder `[-]` / `[+]` auf dem Stats-Screen | Displayhelligkeit stufenlos zwischen 20 % und 100 % regeln |
+| **Helligkeit anpassen** | Hardware-Schaltung via CH422G (>20% an / <=20% aus) bzw. Software-Dimming | Display-Hintergrundbeleuchtung schaltet hardwareseitig binär an/aus |
 | **Dragy Race starten** | Tipp auf `[ RACE ]` (Stats-Screen, nur bei Tuning) | Öffnet den Beschleunigungs-Timer mit 5s Launch Control |
 | **Parameter anpassen** | Slider / `[-]` / `[+]` in den Einstellungen | Geschwindigkeits- (km/h) und Leistungslimits (Watt) direkt verstellen |
 

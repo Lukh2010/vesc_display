@@ -395,6 +395,9 @@ private:
     bool     _wizard_pin_warn;
     int      _last_wizard_step;
     int      _last_wizard_pin_len;
+    int8_t   _last_wizard_gps;
+    int8_t   _last_wizard_incline;
+    int8_t   _last_wizard_wifi;
     bool     _wifi_bridge_inited;
 
     // Fault Banner & OTA Differential Cache
@@ -403,6 +406,20 @@ private:
     bool     _ota_inited;
     int      _last_ota_pct;
     char     _last_ota_status[64];
+
+    // Off-Screen Backbuffer Selective Dirty-Rect Tracking
+    struct DirtyRect {
+        int16_t x, y, w, h;
+    };
+    static constexpr uint8_t MAX_DIRTY_RECTS = 16;
+    DirtyRect _dirty_rects[MAX_DIRTY_RECTS];
+    uint8_t   _dirty_rect_count;
+    bool      _dirty_full;
+
+    void clearDirtyTracking() { _dirty_rect_count = 0; _dirty_full = false; }
+    void markFullDirty() { _dirty_full = true; _dirty_rect_count = 0; }
+    void addDirtyRect(int16_t x, int16_t y, int16_t w, int16_t h);
+    void flushDirtyToDisplay();
 
     // Race Screen Differential Cache (Zero Flicker & Modal Isolation)
     bool     _race_records_drawn;

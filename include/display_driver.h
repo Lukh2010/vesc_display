@@ -29,16 +29,20 @@ public:
     void clear(uint16_t color = 0x0000);
     
     WaveshareLGFX& getLgfx() { return _lcd; }
-    LovyanGFX* getCanvas() { return &_lcd; }
-    void pushCanvas() { _lcd.display(); }
+    LovyanGFX* getCanvas() { return _has_backbuffer ? static_cast<LovyanGFX*>(&_backbuffer) : static_cast<LovyanGFX*>(&_lcd); }
+    bool hasBackbuffer() const { return _has_backbuffer; }
+    void pushCanvas();
+    void pushRect(int32_t x, int32_t y, int32_t w, int32_t h);
 
     // Capacitive Touch Query
     bool getTouch(int16_t *x, int16_t *y);
 
 private:
     bool initIOExpander();
-    WaveshareLGFX _lcd;
-    uint8_t       _brightness;
+    WaveshareLGFX     _lcd;
+    lgfx::LGFX_Sprite _backbuffer;
+    bool              _has_backbuffer;
+    uint8_t           _brightness;
 };
 
 extern DisplayDriver Display;

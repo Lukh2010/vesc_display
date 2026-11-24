@@ -23,6 +23,7 @@ struct UartLock { UartLock() {} ~UartLock() {} };
 #endif
 
 VescHandler Vesc;
+static IVescTransport *s_lisp_transport = nullptr;
 
 // Standard CRC-CCITT for VESC packets
 static uint16_t crc16(const uint8_t *buf, uint32_t len) {
@@ -174,6 +175,7 @@ void VescHandler::begin() {
 #endif
     _sim_last_update_ms = millis();
     _last_poll_ms = millis();
+    s_lisp_transport = _transport;
 }
 
 void VescHandler::setSimThrottle(float pct) {
@@ -425,8 +427,15 @@ static uint32_t s_sec_last_rx_ms = 0;
 static constexpr size_t CAN_RX_BUF_SIZE = 2048;
 static uint8_t s_can_rx_buf[CAN_RX_BUF_SIZE];
 
-static void ensureCanBusHealthy() {
+static void ensureCanBusHealthy(bool force = false) {
     if (!s_can_initialized) return;
+    static uint32_t s_last_can_health_check_ms = 0;
+    uint32_t now = millis();
+    if (!force && (uint32_t)(now - s_last_can_health_check_ms) < 250) {
+        return;
+    }
+    s_last_can_health_check_ms = now;
+
     twai_status_info_t st;
     if (twai_get_status_info(&st) == ESP_OK) {
         if (st.state == TWAI_STATE_BUS_OFF) {
@@ -465,11 +474,15 @@ static void twaiTransmitToDetected(twai_message_t &msg, uint8_t cmd_id, TickType
     msg.extd = 1;
     msg.rtr = 0;
     msg.identifier = ((uint32_t)cmd_id << 8) | s_primary_vesc_id;
-    twai_transmit(&msg, timeout_ticks);
+    if (twai_transmit(&msg, timeout_ticks) != ESP_OK) {
+        ensureCanBusHealthy(true);
+    }
 
     if (s_has_secondary && s_secondary_vesc_id != s_primary_vesc_id) {
         msg.identifier = ((uint32_t)cmd_id << 8) | s_secondary_vesc_id;
-        twai_transmit(&msg, timeout_ticks);
+        if (twai_transmit(&msg, timeout_ticks) != ESP_OK) {
+            ensureCanBusHealthy(true);
+        }
     }
 }
 
@@ -490,7 +503,9 @@ static void sendVescCanBuffer(uint8_t controller_id, const uint8_t *data, size_t
         msg.data[0] = src_id;
         msg.data[1] = send_flag;
         memcpy(&msg.data[2], data, len);
-        twai_transmit(&msg, pdMS_TO_TICKS(5));
+        if (twai_transmit(&msg, pdMS_TO_TICKS(5)) != ESP_OK) {
+            ensureCanBusHealthy(true);
+        }
     } else {
         size_t i = 0;
         while (i < len) {
@@ -514,8 +529,12 @@ static void sendVescCanBuffer(uint8_t controller_id, const uint8_t *data, size_t
                 memcpy(&msg.data[2], data + i, chunk_len);
                 i += chunk_len;
             }
-            twai_transmit(&msg, pdMS_TO_TICKS(10));
-            esp_rom_delay_us(150);
+            esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(10));
+            if (err == ESP_ERR_TIMEOUT) {
+                vTaskDelay(1);
+            } else if (err != ESP_OK) {
+                ensureCanBusHealthy(true);
+            }
         }
 
         // CAN_PACKET_PROCESS_RX_BUFFER (ID 7)
@@ -530,7 +549,9 @@ static void sendVescCanBuffer(uint8_t controller_id, const uint8_t *data, size_t
         proc.data[3] = (uint8_t)(len & 0xFF);
         proc.data[4] = (uint8_t)((crc >> 8) & 0xFF);
         proc.data[5] = (uint8_t)(crc & 0xFF);
-        twai_transmit(&proc, pdMS_TO_TICKS(10));
+        if (twai_transmit(&proc, pdMS_TO_TICKS(10)) != ESP_OK) {
+            ensureCanBusHealthy(true);
+        }
     }
 }
 
@@ -550,9 +571,6 @@ static bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **o
     if (cmd_id == 5 && msg.data_length_code >= 2) {
         // CAN_PACKET_FILL_RX_BUFFER
         size_t offset = msg.data[0];
-        if (offset == 0 && (now_ms - s_last_rx_frame_ms > 250)) {
-            memset(s_can_rx_buf, 0, sizeof(s_can_rx_buf));
-        }
         s_last_rx_frame_ms = now_ms;
         size_t chunk_len = (size_t)msg.data_length_code - 1;
         if (offset + chunk_len <= CAN_RX_BUF_SIZE) {
@@ -693,8 +711,7 @@ static void dispatchBridgePayloadToCan(const uint8_t *payload, size_t payload_le
     }
 }
 
-static VescBridgeFramer s_usb_bridge_framer;
-static VescBridgeFramer s_wifi_bridge_framer;
+static VescBridgeFramer s_bridge_framer;
 static uint8_t s_bridge_tx_frame[CAN_RX_BUF_SIZE + 8];
 
 void VescHandler::initCanBus() {
@@ -1542,7 +1559,7 @@ void VescHandler::enterBridgeMode() {
     VESC_UART_PORT.setTxBufferSize(4096);
 #endif
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-    s_usb_bridge_framer.reset();
+    s_bridge_framer.reset();
 #endif
 
     // Allow in-flight telemetry frames to conclude, then flush both pipelines
@@ -1556,7 +1573,7 @@ void VescHandler::enterBridgeMode() {
 void VescHandler::exitBridgeMode() {
     _bridge_active = false;
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-    s_usb_bridge_framer.reset();
+    s_bridge_framer.reset();
 #endif
     _last_poll_ms = millis();
 }
@@ -1605,7 +1622,7 @@ void VescHandler::updateUsbBridge() {
         for (size_t i = 0; i < n; i++) {
             const uint8_t *payload = nullptr;
             size_t payload_len = 0;
-            if (s_usb_bridge_framer.feed(buf[i], now, &payload, &payload_len)) {
+            if (s_bridge_framer.feed(buf[i], now, &payload, &payload_len)) {
                 dispatchBridgePayloadToCan(payload, payload_len);
             }
         }
@@ -1652,7 +1669,7 @@ void VescHandler::enterWifiBridgeMode() {
     VESC_UART_PORT.setTxBufferSize(4096);
 #endif
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-    s_wifi_bridge_framer.reset();
+    s_bridge_framer.reset();
 #endif
 
     // Allow in-flight telemetry to conclude, then flush buffers
@@ -1669,6 +1686,7 @@ void VescHandler::enterWifiBridgeMode() {
     IPAddress subnet(255, 255, 255, 0);
     WiFi.softAPConfig(local_ip, gateway, subnet);
     WiFi.softAP("VESC-DASH-AP");
+    WiFi.setTxPower(WIFI_POWER_11dBm);
     _wifi_server.begin(6510);
     _wifi_server.setNoDelay(true);
     OtaManager::instance().begin();
@@ -1682,7 +1700,7 @@ void VescHandler::exitWifiBridgeMode() {
     _wifi_client_connected = false;
     _wifi_client_ip[0] = '\0';
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-    s_wifi_bridge_framer.reset();
+    s_bridge_framer.reset();
 #endif
     _last_poll_ms = millis();
 
@@ -1714,7 +1732,7 @@ void VescHandler::updateWifiBridge() {
             _wifi_client.setNoDelay(true);
             _wifi_client_connected = true;
 #if VESC_USE_CAN_BUS
-            s_wifi_bridge_framer.reset();
+            s_bridge_framer.reset();
 #endif
             IPAddress ip = _wifi_client.remoteIP();
             snprintf(_wifi_client_ip, sizeof(_wifi_client_ip), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
@@ -1764,7 +1782,7 @@ void VescHandler::updateWifiBridge() {
                 for (int i = 0; i < bytes_read; i++) {
                     const uint8_t *payload = nullptr;
                     size_t payload_len = 0;
-                    if (s_wifi_bridge_framer.feed(buf[i], now, &payload, &payload_len)) {
+                    if (s_bridge_framer.feed(buf[i], now, &payload, &payload_len)) {
                         dispatchBridgePayloadToCan(payload, payload_len);
                     }
                 }
@@ -1799,7 +1817,7 @@ void VescHandler::updateWifiBridge() {
             _wifi_client_connected = false;
             _wifi_client_ip[0] = '\0';
 #if VESC_USE_CAN_BUS
-            s_wifi_bridge_framer.reset();
+            s_bridge_framer.reset();
 #endif
             if (_wifi_client) {
                 _wifi_client.stop();
@@ -1978,19 +1996,15 @@ void VescHandler::sendTerminalCommand(const char *str) {
 #endif
 }
 
-void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
-    UartLock lock;
-    char lisp_cmd[64];
-    snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-beep %.0f %.2f %.1f)", freq, duration_s, voltage);
-
-#if !SIMULATION_MODE
-    size_t slen = strlen(lisp_cmd);
+static void sendLispCmd(const char *cmd) {
+    if (!cmd) return;
+    size_t slen = strlen(cmd);
     if (slen > 60) slen = 60;
     uint8_t payload[64];
     payload[0] = 138; // COMM_LISP_REPL_CMD (0x8A)
-    memcpy(&payload[1], lisp_cmd, slen);
+    memcpy(&payload[1], cmd, slen);
 
-    if (_transport) {
+    if (s_lisp_transport) {
         uint8_t packet[70];
         packet[0] = 0x02;
         packet[1] = (uint8_t)(slen + 1);
@@ -1999,14 +2013,23 @@ void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
         packet[3 + slen] = (uint8_t)(tcrc >> 8);
         packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
         packet[5 + slen] = 0x03;
-        _transport->write(packet, slen + 6);
+        s_lisp_transport->write(packet, slen + 6);
     }
 
 #if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
     if (s_can_initialized) {
-        sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
+        sendVescCanBufferToDetected(payload, slen + 1, VescHandler::ESP_CAN_ID, 2);
     }
 #endif
+}
+
+void VescHandler::triggerFocBeep(float freq, float duration_s, float voltage) {
+    UartLock lock;
+    char lisp_cmd[64];
+    snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-beep %.0f %.2f %.1f)", freq, duration_s, voltage);
+
+#if !SIMULATION_MODE
+    sendLispCmd(lisp_cmd);
 #endif
 
     Serial.printf("[VESC_ALARM] FOC Motor Siren Beep: %.0f Hz, %.2f s, %.1f V -> '%s'\n",
@@ -2027,29 +2050,7 @@ void VescHandler::playFocTone(uint8_t channel, float freq, float voltage) {
     }
 
 #if !SIMULATION_MODE
-    size_t slen = strlen(lisp_cmd);
-    if (slen > 60) slen = 60;
-    uint8_t payload[64];
-    payload[0] = 138; // COMM_LISP_REPL_CMD (0x8A)
-    memcpy(&payload[1], lisp_cmd, slen);
-
-    if (_transport) {
-        uint8_t packet[70];
-        packet[0] = 0x02;
-        packet[1] = (uint8_t)(slen + 1);
-        memcpy(&packet[2], payload, slen + 1);
-        uint16_t tcrc = crc16(payload, slen + 1);
-        packet[3 + slen] = (uint8_t)(tcrc >> 8);
-        packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
-        packet[5 + slen] = 0x03;
-        _transport->write(packet, slen + 6);
-    }
-
-#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-    if (s_can_initialized) {
-        sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
-    }
-#endif
+    sendLispCmd(lisp_cmd);
 #endif
 }
 
@@ -2065,29 +2066,7 @@ void VescHandler::sendFocPlayStop() {
     snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-play-stop)");
 
 #if !SIMULATION_MODE || defined(NATIVE_SIMULATOR)
-    size_t slen = strlen(lisp_cmd);
-    if (slen > 60) slen = 60;
-    uint8_t payload[64];
-    payload[0] = 138; // COMM_LISP_REPL_CMD (0x8A)
-    memcpy(&payload[1], lisp_cmd, slen);
-
-    if (_transport) {
-        uint8_t packet[70];
-        packet[0] = 0x02;
-        packet[1] = (uint8_t)(slen + 1);
-        memcpy(&packet[2], payload, slen + 1);
-        uint16_t tcrc = crc16(payload, slen + 1);
-        packet[3 + slen] = (uint8_t)(tcrc >> 8);
-        packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
-        packet[5 + slen] = 0x03;
-        _transport->write(packet, slen + 6);
-    }
-
-#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-    if (s_can_initialized) {
-        sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
-    }
-#endif
+    sendLispCmd(lisp_cmd);
 #endif
 }
 
@@ -2114,29 +2093,7 @@ void VescHandler::triggerFocHorn(bool active) {
         snprintf(lisp_cmd, sizeof(lisp_cmd), "(foc-beep %.0f 200 5.8)", freq);
 
 #if !SIMULATION_MODE || defined(NATIVE_SIMULATOR)
-        size_t slen = strlen(lisp_cmd);
-        if (slen > 60) slen = 60;
-        uint8_t payload[64];
-        payload[0] = 138; // COMM_LISP_REPL_CMD (0x8A)
-        memcpy(&payload[1], lisp_cmd, slen);
-
-        if (_transport) {
-            uint8_t packet[70];
-            packet[0] = 0x02;
-            packet[1] = (uint8_t)(slen + 1);
-            memcpy(&packet[2], payload, slen + 1);
-            uint16_t tcrc = crc16(payload, slen + 1);
-            packet[3 + slen] = (uint8_t)(tcrc >> 8);
-            packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
-            packet[5 + slen] = 0x03;
-            _transport->write(packet, slen + 6);
-        }
-
-#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-        if (s_can_initialized) {
-            sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
-        }
-#endif
+        sendLispCmd(lisp_cmd);
 #endif
 
         Serial.printf("[VESC_HORN] FOC Motor Horn ACTIVE: %.0f Hz, 200 ms, 5.8 V -> '%s'\n",
@@ -2384,29 +2341,7 @@ void VescHandler::syncWheelDiameterToVesc(float wheel_diam_in) {
     // 2. VESC LispBM Command: (conf-set 'si-wheel-diameter <meters>)
     char lisp_cmd[64];
     snprintf(lisp_cmd, sizeof(lisp_cmd), "(conf-set 'si-wheel-diameter %.4f)", diam_m);
-    size_t slen = strlen(lisp_cmd);
-    if (slen > 60) slen = 60;
-    uint8_t payload[64];
-    payload[0] = 138; // COMM_LISP_REPL_CMD
-    memcpy(&payload[1], lisp_cmd, slen);
-
-    if (_transport) {
-        uint8_t packet[70];
-        packet[0] = 0x02;
-        packet[1] = (uint8_t)(slen + 1);
-        memcpy(&packet[2], payload, slen + 1);
-        uint16_t tcrc = crc16(payload, slen + 1);
-        packet[3 + slen] = (uint8_t)(tcrc >> 8);
-        packet[4 + slen] = (uint8_t)(tcrc & 0xFF);
-        packet[5 + slen] = 0x03;
-        _transport->write(packet, slen + 6);
-    }
-
-#if !defined(NATIVE_SIMULATOR) && VESC_USE_CAN_BUS
-    if (s_can_initialized) {
-        sendVescCanBufferToDetected(payload, slen + 1, ESP_CAN_ID, 2);
-    }
-#endif
+    sendLispCmd(lisp_cmd);
 
 #if !defined(NATIVE_SIMULATOR)
     Serial.printf("[VESC] Synchronized calibrated wheel diameter to VESC: %.1f in (%.4f m)\n",

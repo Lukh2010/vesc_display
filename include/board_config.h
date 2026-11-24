@@ -14,20 +14,20 @@
 #define LCD_WIDTH   800
 #define LCD_HEIGHT  480
 
-// ST7262 RGB Parallel Timing & Clock (Rock-solid 30 FPS stable timing)
+// ST7262 RGB Parallel Timing & Clock (Harmonized for Waveshare 4.3" & 7.0" 800x480)
 #define LCD_PIN_HSYNC   46
 #define LCD_PIN_VSYNC   3
 #define LCD_PIN_DE      5
 #define LCD_PIN_PCLK    7
-#define LCD_FREQ_HZ     14000000 // 14 MHz for rock-solid 30 FPS without horizontal wobble
+#define LCD_FREQ_HZ     12000000 // 12 MHz (exact 240MHz/20 integer divisor, zero jitter on 4.3" & 7")
 
-// ST7262 RGB Timing Parameters (800x480 standard)
-#define LCD_HPW         10
-#define LCD_HBP         10
+// ST7262 RGB Timing Parameters (Conservative blanking porches for 4.3" & 7.0" stability)
+#define LCD_HPW         8
+#define LCD_HBP         16
 #define LCD_HFP         20
-#define LCD_VPW         10
-#define LCD_VBP         10
-#define LCD_VFP         10
+#define LCD_VPW         4
+#define LCD_VBP         12
+#define LCD_VFP         12
 
 // ST7262 RGB Bus Data Pins (16-bit RGB565)
 // Blue: B0 - B4 (D0 - D4)

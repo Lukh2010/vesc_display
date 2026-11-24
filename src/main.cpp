@@ -223,7 +223,8 @@ void loop() {
     static bool s_test_gas_is_duty = false;
     static uint32_t s_last_test_gas_stream_ms = 0;
     static uint32_t s_last_test_telem_log_ms = 0;
-    static String s_cmd_line = "";
+    static char s_cmd_line[48] = {0};
+    static size_t s_cmd_len = 0;
 
     // Continuous drive stream while test gas active (every 30ms = ~33Hz refresh for VESC watchdog)
     if (s_test_gas_active) {
@@ -309,7 +310,7 @@ void loop() {
             }
 
             // 2. Immediate Emergency Stop / Gas Shortcuts (only non-letter keys when line buffer is empty)
-            if (s_cmd_line.length() == 0) {
+            if (s_cmd_len == 0) {
                 if (c == '+') {
                     if (telemetry.is_locked) {
                         Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben (z. B. '1234') vor Gas geben.");
@@ -344,9 +345,13 @@ void loop() {
 
             // 3. Line accumulator for text & single-letter commands (e.g. 'unlock', 'reset', 'help', 'w', 'p', 'r', 'h')
             if (c == '\r' || c == '\n') {
-                s_cmd_line.trim();
-                if (s_cmd_line.length() > 0) {
-                    if (s_cmd_line.equalsIgnoreCase("w")) {
+                while (s_cmd_len > 0 && (s_cmd_line[s_cmd_len - 1] == ' ' || s_cmd_line[s_cmd_len - 1] == '\t')) {
+                    s_cmd_line[--s_cmd_len] = '\0';
+                }
+                char *cmd = s_cmd_line;
+                while (*cmd == ' ' || *cmd == '\t') cmd++;
+                if (*cmd != '\0') {
+                    if (strcasecmp(cmd, "w") == 0) {
                         if (telemetry.is_locked) {
                             Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben (z. B. '1234') vor Gas geben.");
                         } else {
@@ -362,7 +367,7 @@ void loop() {
                             Renderer.markScreenDirty();
                             Serial.printf("[TEST GAS] Motor-Strom %.1fA gesendet (Auto-Cutoff in 1.5s)!\n", test_amps);
                         }
-                    } else if (s_cmd_line.equalsIgnoreCase("p")) {
+                    } else if (strcasecmp(cmd, "p") == 0) {
                         if (!telemetry.is_locked && (telemetry.speed_kmh > 0.8f || telemetry.vesc_motor_speed > 0.8f)) {
                             Serial.println("[SAFETY] Locking rejected: vehicle is moving!");
                         } else {
@@ -378,7 +383,7 @@ void loop() {
                             }
                             Serial.printf("[SERIAL] PIN-Lockscreen: %s\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT");
                         }
-                    } else if (s_cmd_line.equalsIgnoreCase("r")) {
+                    } else if (strcasecmp(cmd, "r") == 0) {
                         strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
                         Settings.save();
                         telemetry.is_locked = false;
@@ -391,7 +396,7 @@ void loop() {
                         Renderer.invalidateCache();
                         Renderer.triggerNeedleSweep();
                         Serial.println("[SERIAL] PIN auf '1234' resetet & System entsperrt!");
-                    } else if (s_cmd_line.equalsIgnoreCase("h") || s_cmd_line == "?" || s_cmd_line.equalsIgnoreCase("help")) {
+                    } else if (strcasecmp(cmd, "h") == 0 || strcmp(cmd, "?") == 0 || strcasecmp(cmd, "help") == 0) {
                         Serial.println("=== DISPLAY SERIAL COMMANDS ===");
                         Serial.println("  0-9       : PIN Ziffer eintippen (1234 zum Entsperren)");
                         Serial.println("  < / bksp  : PIN Ziffer loeschen");
@@ -405,7 +410,7 @@ void loop() {
                         Serial.println("  theme     : Farb-Theme umschalten");
                         Serial.println("  unlock    : Direkt per Textbefehl entsperren");
                         Serial.println("===============================");
-                    } else if (s_cmd_line.equalsIgnoreCase("unlock") || s_cmd_line == Settings.get().pin_code) {
+                    } else if (strcasecmp(cmd, "unlock") == 0 || strcmp(cmd, Settings.get().pin_code) == 0) {
                         telemetry.is_locked = false;
                         telemetry.theft_alarm_active = false;
                         telemetry.locked_moved_meters = 0.0f;
@@ -418,7 +423,7 @@ void loop() {
                         Renderer.invalidateCache();
                         Renderer.triggerNeedleSweep();
                         Serial.println("[PIN] System UNLOCKED via Serial Command! Alarm disarmed.");
-                    } else if (s_cmd_line.equalsIgnoreCase("lock")) {
+                    } else if (strcasecmp(cmd, "lock") == 0) {
                         if (telemetry.speed_kmh > 0.8f || telemetry.vesc_motor_speed > 0.8f) {
                             Serial.println("[SAFETY] Locking rejected: vehicle is moving!");
                         } else {
@@ -428,30 +433,30 @@ void loop() {
                             Renderer.invalidateCache();
                             Serial.println("[PIN] System LOCKED via Serial Command.");
                         }
-                    } else if (s_cmd_line.equalsIgnoreCase("tuning on") || s_cmd_line.equalsIgnoreCase("tuning")) {
+                    } else if (strcasecmp(cmd, "tuning on") == 0 || strcasecmp(cmd, "tuning") == 0) {
                         telemetry.tuning_mode = true;
                         ModeManager::instance().setTuningMode(true);
                         Buttons.setTuningMode(true);
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
                         Serial.println("[MODE] TUNING-MODUS AKTIVIERT (Offener Modus, Drossel aus)!");
-                    } else if (s_cmd_line.equalsIgnoreCase("tuning off") || s_cmd_line.equalsIgnoreCase("legal")) {
+                    } else if (strcasecmp(cmd, "tuning off") == 0 || strcasecmp(cmd, "legal") == 0) {
                         telemetry.tuning_mode = false;
                         ModeManager::instance().setTuningMode(false);
                         Buttons.setTuningMode(false);
                         Renderer.markScreenDirty();
                         Renderer.invalidateCache();
                         Serial.println("[MODE] LEGALER POLIZEI-MODUS AKTIVIERT (20 km/h gedrosselt)!");
-                    } else if (s_cmd_line.equalsIgnoreCase("mode eco")) {
+                    } else if (strcasecmp(cmd, "mode eco") == 0) {
                         ModeManager::instance().setRideMode(MODE_ECO);
                         Serial.println("[MODE] Ride-Mode -> ECO");
-                    } else if (s_cmd_line.equalsIgnoreCase("mode sport")) {
+                    } else if (strcasecmp(cmd, "mode sport") == 0) {
                         ModeManager::instance().setRideMode(MODE_SPORT);
                         Serial.println("[MODE] Ride-Mode -> SPORT");
-                    } else if (s_cmd_line.equalsIgnoreCase("mode race")) {
+                    } else if (strcasecmp(cmd, "mode race") == 0) {
                         ModeManager::instance().setRideMode(MODE_RACE);
                         Serial.println("[MODE] Ride-Mode -> RACE");
-                    } else if (s_cmd_line.equalsIgnoreCase("vollgas") || s_cmd_line.equalsIgnoreCase("max")) {
+                    } else if (strcasecmp(cmd, "vollgas") == 0 || strcasecmp(cmd, "max") == 0) {
                         if (telemetry.is_locked) {
                             Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben.");
                         } else {
@@ -471,18 +476,18 @@ void loop() {
                                           mode_phase, ModeManager::instance().getActiveModeName(),
                                           telemetry.tuning_mode ? "AN" : "AUS");
                         }
-                    } else if (s_cmd_line.startsWith("gas ") || s_cmd_line.startsWith("cur ")) {
+                    } else if (strncasecmp(cmd, "gas ", 4) == 0 || strncasecmp(cmd, "cur ", 4) == 0) {
                         if (telemetry.is_locked) {
                             Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben.");
                         } else {
-                            String param = s_cmd_line.substring(4);
-                            param.trim();
-                            int space_idx = param.indexOf(' ');
-                            float amps = param.toFloat();
+                            const char *param = cmd + 4;
+                            while (*param == ' ') param++;
+                            char *endptr = nullptr;
+                            float amps = strtof(param, &endptr);
                             float secs = 1.5f;
-                            if (space_idx > 0) {
-                                amps = param.substring(0, space_idx).toFloat();
-                                secs = param.substring(space_idx + 1).toFloat();
+                            if (endptr && *endptr == ' ') {
+                                while (*endptr == ' ') endptr++;
+                                secs = strtof(endptr, nullptr);
                                 if (secs > 5.0f) secs = 5.0f;
                                 if (secs < 0.2f) secs = 0.2f;
                             }
@@ -511,18 +516,18 @@ void loop() {
                                 Serial.println("[TEST GAS] Motor 0.0A gestoppt.");
                             }
                         }
-                    } else if (s_cmd_line.startsWith("duty ")) {
+                    } else if (strncasecmp(cmd, "duty ", 5) == 0) {
                         if (telemetry.is_locked) {
                             Serial.println("[WARNUNG] System ist GESPERRT! Erst PIN eingeben.");
                         } else {
-                            String param = s_cmd_line.substring(5);
-                            param.trim();
-                            int space_idx = param.indexOf(' ');
-                            float duty_pct = param.toFloat();
+                            const char *param = cmd + 5;
+                            while (*param == ' ') param++;
+                            char *endptr = nullptr;
+                            float duty_pct = strtof(param, &endptr);
                             float secs = 1.5f;
-                            if (space_idx > 0) {
-                                duty_pct = param.substring(0, space_idx).toFloat();
-                                secs = param.substring(space_idx + 1).toFloat();
+                            if (endptr && *endptr == ' ') {
+                                while (*endptr == ' ') endptr++;
+                                secs = strtof(endptr, nullptr);
                                 if (secs > 5.0f) secs = 5.0f;
                                 if (secs < 0.2f) secs = 0.2f;
                             }
@@ -553,7 +558,7 @@ void loop() {
                                 Serial.println("[TEST DUTY] Motor 0% gestoppt.");
                             }
                         }
-                    } else if (s_cmd_line.equalsIgnoreCase("stop") || s_cmd_line.equalsIgnoreCase("s")) {
+                    } else if (strcasecmp(cmd, "stop") == 0 || strcasecmp(cmd, "s") == 0) {
                         s_test_gas_active = false;
                         s_test_gas_start_ms = 0;
                         s_test_gas_duration_ms = 0;
@@ -566,7 +571,7 @@ void loop() {
                         Vesc.setSimThrottle(0.0f);
                         Renderer.markScreenDirty();
                         Serial.println("[TEST STOP] Motor gestoppt.");
-                    } else if (s_cmd_line.equalsIgnoreCase("status") || s_cmd_line.equalsIgnoreCase("i")) {
+                    } else if (strcasecmp(cmd, "status") == 0 || strcasecmp(cmd, "i") == 0) {
                         Serial.println("=== SYSTEM STATUS ===");
                         Serial.printf("  Lock: %s | PIN-Code: '%s'\n", telemetry.is_locked ? "GESPERRT" : "ENTSPERRT", Settings.get().pin_code);
                         Serial.printf("  Alarm: %s | Moved: %.2fm\n", telemetry.theft_alarm_active ? "AKTIV" : "INAKTIV", telemetry.locked_moved_meters);
@@ -575,7 +580,7 @@ void loop() {
                                       telemetry.vesc_motor_speed, telemetry.rpm, telemetry.phase_amps, telemetry.current_amps, telemetry.voltage);
                         Serial.printf("  Mode: %s | Theme: %s\n", ModeManager::instance().getActiveModeName(), DashboardRenderer::getThemePalette(telemetry.color_theme).name);
                         Serial.println("=====================");
-                    } else if (s_cmd_line.equalsIgnoreCase("theme")) {
+                    } else if (strcasecmp(cmd, "theme") == 0) {
                         uint8_t th = (Settings.get().color_theme + 1) % THEME_COUNT;
                         Settings.get().color_theme = th;
                         Settings.save();
@@ -583,14 +588,16 @@ void loop() {
                         Renderer.invalidateCache();
                         Renderer.markScreenDirty();
                         Serial.printf("[SERIAL] Farb-Theme gewechselt auf: %s\n", DashboardRenderer::getThemePalette(th).name);
-                    } else if (s_cmd_line.equalsIgnoreCase("help")) {
+                    } else if (strcasecmp(cmd, "help") == 0) {
                         Serial.println("Befehle: unlock, lock, gas <A>, duty <%>, stop, status, theme, help");
                     }
-                    s_cmd_line = "";
                 }
+                s_cmd_line[0] = '\0';
+                s_cmd_len = 0;
             } else if (c >= 32 && c <= 126) {
-                if (s_cmd_line.length() < 32) {
-                    s_cmd_line += c;
+                if (s_cmd_len < sizeof(s_cmd_line) - 1) {
+                    s_cmd_line[s_cmd_len++] = c;
+                    s_cmd_line[s_cmd_len] = '\0';
                 }
             }
         }

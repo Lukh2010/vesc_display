@@ -2,6 +2,17 @@
 #include <string.h>
 #include <stdio.h>
 
+#define FAULT_BLOB_MAGIC   0x464C5432 // "FLT2"
+#define FAULT_BLOB_VERSION 1
+
+struct FaultHistoryBlob {
+    uint32_t magic;
+    uint8_t  version;
+    uint8_t  fault_count;
+    uint8_t  reserved[2];
+    FaultRecord history[MAX_FAULT_HISTORY];
+};
+
 FaultManager& FaultManager::instance() {
     static FaultManager inst;
     return inst;
@@ -21,6 +32,17 @@ void FaultManager::begin() {
 
 void FaultManager::loadFromNvs() {
     _prefs.begin("vesc_faults", false);
+
+    // 1. Try loading NVS Blob (hist_v2)
+    FaultHistoryBlob blob;
+    size_t read_bytes = _prefs.getBytes("hist_v2", &blob, sizeof(blob));
+    if (read_bytes == sizeof(blob) && blob.magic == FAULT_BLOB_MAGIC && blob.version == FAULT_BLOB_VERSION) {
+        _fault_count = (blob.fault_count > MAX_FAULT_HISTORY) ? MAX_FAULT_HISTORY : blob.fault_count;
+        memcpy(_history, blob.history, sizeof(_history));
+        return;
+    }
+
+    // 2. Fallback: Legacy individual keys
     _fault_count = _prefs.getUChar("f_count", 0);
     if (_fault_count > MAX_FAULT_HISTORY) {
         _fault_count = MAX_FAULT_HISTORY;
@@ -49,34 +71,23 @@ void FaultManager::loadFromNvs() {
         snprintf(k, sizeof(k), "f_%d_tm", i);
         _history[i].temp_mot = _prefs.getFloat(k, 0.0f);
     }
+
+    // Auto-migrate legacy entries to single blob
+    if (_fault_count > 0) {
+        saveToNvs();
+    }
 }
 
 void FaultManager::saveToNvs() {
     _prefs.begin("vesc_faults", false);
-    _prefs.putUChar("f_count", _fault_count);
-    for (uint8_t i = 0; i < _fault_count; i++) {
-        char k[16];
-        snprintf(k, sizeof(k), "f_%d_c", i);
-        _prefs.putUChar(k, _history[i].code);
+    FaultHistoryBlob blob;
+    memset(&blob, 0, sizeof(blob));
+    blob.magic = FAULT_BLOB_MAGIC;
+    blob.version = FAULT_BLOB_VERSION;
+    blob.fault_count = _fault_count;
+    memcpy(blob.history, _history, sizeof(_history));
 
-        snprintf(k, sizeof(k), "f_%d_t", i);
-        _prefs.putUInt(k, _history[i].timestamp_s);
-
-        snprintf(k, sizeof(k), "f_%d_v", i);
-        _prefs.putFloat(k, _history[i].voltage);
-
-        snprintf(k, sizeof(k), "f_%d_i", i);
-        _prefs.putFloat(k, _history[i].current);
-
-        snprintf(k, sizeof(k), "f_%d_pi", i);
-        _prefs.putFloat(k, _history[i].phase_current);
-
-        snprintf(k, sizeof(k), "f_%d_tf", i);
-        _prefs.putFloat(k, _history[i].temp_fet);
-
-        snprintf(k, sizeof(k), "f_%d_tm", i);
-        _prefs.putFloat(k, _history[i].temp_mot);
-    }
+    _prefs.putBytes("hist_v2", &blob, sizeof(blob));
 }
 
 void FaultManager::recordFault(uint8_t code, float v, float i, float phase_i, float fet_temp, float mot_temp, uint32_t uptime_s) {

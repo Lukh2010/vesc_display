@@ -52,15 +52,15 @@ WaveshareLGFX::WaveshareLGFX() {
 
         cfg.hsync_polarity    = 0;
         cfg.hsync_front_porch = LCD_HFP; // 20
-        cfg.hsync_pulse_width = LCD_HPW; // 10
-        cfg.hsync_back_porch  = LCD_HBP; // 10
+        cfg.hsync_pulse_width = LCD_HPW; // 8
+        cfg.hsync_back_porch  = LCD_HBP; // 16
 
         cfg.vsync_polarity    = 0;
-        cfg.vsync_front_porch = LCD_VFP; // 10
-        cfg.vsync_pulse_width = LCD_VPW; // 10
-        cfg.vsync_back_porch  = LCD_VBP; // 10
+        cfg.vsync_front_porch = LCD_VFP; // 12
+        cfg.vsync_pulse_width = LCD_VPW; // 4
+        cfg.vsync_back_porch  = LCD_VBP; // 12
 
-        cfg.pclk_active_neg   = 0;
+        cfg.pclk_active_neg   = 1; // ST7262/LovyanGFX standard for Waveshare 4.3" & 7.0"
         cfg.de_idle_high      = 0;
         cfg.pclk_idle_high    = 0;
 
@@ -90,7 +90,7 @@ WaveshareLGFX::WaveshareLGFX() {
     setPanel(&_panel_instance);
 }
 
-DisplayDriver::DisplayDriver() : _brightness(DEFAULT_BRIGHTNESS) {}
+DisplayDriver::DisplayDriver() : _has_backbuffer(false), _brightness(DEFAULT_BRIGHTNESS) {}
 
 bool DisplayDriver::initIOExpander() {
     Wire.begin(TOUCH_I2C_SDA, TOUCH_I2C_SCL);
@@ -160,6 +160,19 @@ bool DisplayDriver::init() {
     _lcd.setRotation(0); // Landscape: 800 x 480
     _lcd.fillScreen(0x001F); // Startup test color (Navy Blue) so we instantly see panel is ALIVE!
 
+    // Allocate 800x480 16-bit PSRAM off-screen backbuffer (768 KB) to eliminate flicker/tearing
+    _backbuffer.setColorDepth(16);
+    _backbuffer.setPsram(true);
+    if (_backbuffer.createSprite(LCD_WIDTH, LCD_HEIGHT) != nullptr) {
+        _has_backbuffer = true;
+        _backbuffer.fillScreen(0x0000);
+        Serial.printf("[DISPLAY OK] Off-screen PSRAM Backbuffer active (%u KB)\n",
+                      (unsigned)(LCD_WIDTH * LCD_HEIGHT * 2 / 1024));
+    } else {
+        _has_backbuffer = false;
+        Serial.println("[DISPLAY WARN] PSRAM Backbuffer allocation failed; falling back to direct &_lcd!");
+    }
+
     Serial.printf("[DISPLAY OK] Resolution: %d x %d\n", (int)_lcd.width(), (int)_lcd.height());
     Serial.printf("[DISPLAY OK] Free Heap: %lu bytes, Free PSRAM: %lu bytes\n", (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getFreePsram());
     return true;
@@ -182,7 +195,42 @@ void DisplayDriver::setBrightness(uint8_t brightness) {
 }
 
 void DisplayDriver::clear(uint16_t color) {
+    if (_has_backbuffer) {
+        _backbuffer.fillScreen(color);
+    }
     _lcd.fillScreen(color);
+}
+
+void DisplayDriver::pushCanvas() {
+    if (!_has_backbuffer) {
+        _lcd.display();
+        return;
+    }
+    _lcd.startWrite();
+    _backbuffer.pushSprite(&_lcd, 0, 0);
+    _lcd.endWrite();
+}
+
+void DisplayDriver::pushRect(int32_t x, int32_t y, int32_t w, int32_t h) {
+    if (!_has_backbuffer) {
+        return;
+    }
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > LCD_WIDTH)  w = LCD_WIDTH - x;
+    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
+    if (w <= 0 || h <= 0) return;
+
+    const uint16_t *src = reinterpret_cast<const uint16_t *>(_backbuffer.getBuffer());
+    if (!src) return;
+
+    const int32_t stride = _backbuffer.width();
+    _lcd.startWrite();
+    for (int32_t row = 0; row < h; ++row) {
+        const lgfx::swap565_t *line = reinterpret_cast<const lgfx::swap565_t *>(src + (y + row) * stride + x);
+        _lcd.pushImage(x, y + row, w, 1, line);
+    }
+    _lcd.endWrite();
 }
 
 bool DisplayDriver::getTouch(int16_t *x, int16_t *y) {

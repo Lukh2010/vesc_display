@@ -55,16 +55,46 @@ void BatteryManager::loadDefaults() {
     _profiles[1].health_soh_pct      = 100.0f;
 }
 
+#define BATTERY_BLOB_MAGIC   0x42415432 // "BAT2"
+#define BATTERY_BLOB_VERSION 1
+
+struct BatteryProfileBlob {
+    uint32_t magic;
+    uint8_t  version;
+    uint8_t  active_profile;
+    uint8_t  reserved[2];
+    BatteryProfile profiles[2];
+};
+
+static BatteryProfileBlob s_last_saved_battery_blob;
+static bool s_has_saved_battery_snapshot = false;
+
 void BatteryManager::begin() {
     _prefs.begin("ebike_bat", false);
 
-    // Auto-migration to 48V 12.75Ah default profile
+    // 1. Try loading NVS Blob (prof_v2)
+    BatteryProfileBlob blob;
+    size_t read_bytes = _prefs.getBytes("prof_v2", &blob, sizeof(blob));
+    if (read_bytes == sizeof(blob) && blob.magic == BATTERY_BLOB_MAGIC && blob.version == BATTERY_BLOB_VERSION) {
+        _active_profile_id = (blob.active_profile > 1) ? 0 : blob.active_profile;
+        memcpy(_profiles, blob.profiles, sizeof(_profiles));
+        s_last_saved_battery_blob = blob;
+        s_has_saved_battery_snapshot = true;
+        Serial.printf("[BATTERY] Loaded profile %d (%s) from NVS blob (prof_v2) - %.2fAh / %.0fWh - Health: %.1f%%\n",
+                      _active_profile_id, _profiles[_active_profile_id].name,
+                      _profiles[_active_profile_id].capacity_ah,
+                      _profiles[_active_profile_id].learned_wh,
+                      _profiles[_active_profile_id].health_soh_pct);
+        return;
+    }
+
+    // 2. Fallback: Legacy individual keys or default initialization
     if (!_prefs.isKey("bat_48v_1275ah_v3")) {
         loadDefaults();
         saveProfiles();
         _prefs.putBool("bat_48v_1275ah_v3", true);
         _prefs.putBool("bat_init", true);
-        Serial.println("[BATTERY] Initialized/Migrated to 48V 12.75Ah (612 Wh) battery profile.");
+        Serial.println("[BATTERY] Initialized default 48V 12.75Ah battery profiles blob.");
     } else {
         _active_profile_id = _prefs.getUChar("active_p", 0);
         if (_active_profile_id > 1) _active_profile_id = 0;
@@ -95,31 +125,32 @@ void BatteryManager::begin() {
             _profiles[i].health_soh_pct = (_profiles[i].nominal_wh > 0.0f) ? 
                 ((_profiles[i].learned_wh / _profiles[i].nominal_wh) * 100.0f) : 100.0f;
         }
-        Serial.printf("[BATTERY] Loaded profile %d (%s) - %.2fAh / %.0fWh - Health: %.1f%%\n",
-                      _active_profile_id, _profiles[_active_profile_id].name,
-                      _profiles[_active_profile_id].capacity_ah,
-                      _profiles[_active_profile_id].learned_wh,
-                      _profiles[_active_profile_id].health_soh_pct);
+
+        // Migrate to blob format
+        saveProfiles();
+        Serial.printf("[BATTERY] Migrated legacy profiles to blob format - Active: %d (%s)\n",
+                      _active_profile_id, _profiles[_active_profile_id].name);
     }
 }
 
 void BatteryManager::saveProfiles() {
-    _prefs.putUChar("active_p", _active_profile_id);
-    for (int i = 0; i < 2; i++) {
-        char k[16];
-        snprintf(k, sizeof(k), "p%d_name", i);
-        _prefs.putString(k, _profiles[i].name);
-        snprintf(k, sizeof(k), "p%d_ah", i);
-        _prefs.putFloat(k, _profiles[i].capacity_ah);
-        snprintf(k, sizeof(k), "p%d_nom", i);
-        _prefs.putFloat(k, _profiles[i].nominal_wh);
-        snprintf(k, sizeof(k), "p%d_lrn", i);
-        _prefs.putFloat(k, _profiles[i].learned_wh);
-        snprintf(k, sizeof(k), "p%d_tot", i);
-        _prefs.putFloat(k, _profiles[i].total_wh_discharged);
-        snprintf(k, sizeof(k), "p%d_cyc", i);
-        _prefs.putUShort(k, _profiles[i].charge_cycles);
+    _prefs.begin("ebike_bat", false);
+    BatteryProfileBlob blob;
+    memset(&blob, 0, sizeof(blob));
+    blob.magic = BATTERY_BLOB_MAGIC;
+    blob.version = BATTERY_BLOB_VERSION;
+    blob.active_profile = _active_profile_id;
+    memcpy(blob.profiles, _profiles, sizeof(_profiles));
+
+    // Dirty-check: Skip NVS flash write if nothing changed
+    if (s_has_saved_battery_snapshot && memcmp(&s_last_saved_battery_blob, &blob, sizeof(blob)) == 0) {
+        return;
     }
+
+    _prefs.putBytes("prof_v2", &blob, sizeof(blob));
+    s_last_saved_battery_blob = blob;
+    s_has_saved_battery_snapshot = true;
+    Serial.printf("[BATTERY] Saved battery profiles blob (prof_v2) to NVS. Active: %d\n", _active_profile_id);
 }
 
 void BatteryManager::setActiveProfile(uint8_t id) {

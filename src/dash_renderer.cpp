@@ -221,11 +221,16 @@ DashboardRenderer::DashboardRenderer()
       _wizard_pin_warn(false),
       _last_wizard_step(-1),
       _last_wizard_pin_len(-1),
+      _last_wizard_gps(-1),
+      _last_wizard_incline(-1),
+      _last_wizard_wifi(-1),
       _wifi_bridge_inited(false),
       _last_fault_code(0),
       _last_fault_flash(-1),
       _ota_inited(false),
       _last_ota_pct(-1),
+      _dirty_rect_count(0),
+      _dirty_full(false),
       _race_records_drawn(false),
       _race_dyno_drawn(false),
       _last_race_arc_angle(130.0f),
@@ -314,8 +319,67 @@ void DashboardRenderer::begin(DisplayDriver *display) {
     initSmoothFonts();
     _cache.invalidate();
     _screen_dirty = true;
+    markFullDirty();
     _active_style = (DashboardStyle)Settings.get().dash_style;
     _active_theme = Settings.get().color_theme;
+}
+
+void DashboardRenderer::addDirtyRect(int16_t x, int16_t y, int16_t w, int16_t h) {
+    if (_dirty_full || w <= 0 || h <= 0) return;
+
+    int32_t x0 = (x < 0) ? 0 : x;
+    int32_t y0 = (y < 0) ? 0 : y;
+    int32_t x1 = (int32_t)x + w;
+    int32_t y1 = (int32_t)y + h;
+    if (x1 > 800) x1 = 800;
+    if (y1 > 480) y1 = 480;
+    if (x0 >= x1 || y0 >= y1) return;
+
+    int16_t cx = (int16_t)x0;
+    int16_t cy = (int16_t)y0;
+    int16_t cw = (int16_t)(x1 - x0);
+    int16_t ch = (int16_t)(y1 - y0);
+
+    // Coalesce overlapping or adjacent rects to keep blit count low
+    for (uint8_t i = 0; i < _dirty_rect_count; i++) {
+        DirtyRect &r = _dirty_rects[i];
+        int32_t rx1 = (int32_t)r.x + r.w;
+        int32_t ry1 = (int32_t)r.y + r.h;
+        if (cx <= rx1 + 4 && x1 >= r.x - 4 && cy <= ry1 + 4 && y1 >= r.y - 4) {
+            int32_t nx0 = (cx < r.x) ? cx : r.x;
+            int32_t ny0 = (cy < r.y) ? cy : r.y;
+            int32_t nx1 = (x1 > rx1) ? x1 : rx1;
+            int32_t ny1 = (y1 > ry1) ? y1 : ry1;
+            r.x = (int16_t)nx0;
+            r.y = (int16_t)ny0;
+            r.w = (int16_t)(nx1 - nx0);
+            r.h = (int16_t)(ny1 - ny0);
+            return;
+        }
+    }
+
+    if (_dirty_rect_count < MAX_DIRTY_RECTS) {
+        _dirty_rects[_dirty_rect_count++] = { cx, cy, cw, ch };
+    } else {
+        // Fallback: too many fragments -> promote to full screen blit
+        markFullDirty();
+    }
+}
+
+void DashboardRenderer::flushDirtyToDisplay() {
+#if !defined(NATIVE_SIMULATOR)
+    if (_display && _display->hasBackbuffer()) {
+        if (_dirty_full) {
+            _display->pushCanvas();
+        } else {
+            for (uint8_t i = 0; i < _dirty_rect_count; i++) {
+                const DirtyRect &r = _dirty_rects[i];
+                _display->pushRect(r.x, r.y, r.w, r.h);
+            }
+        }
+    }
+#endif
+    clearDirtyTracking();
 }
 
 // ==============================================================================
@@ -398,6 +462,7 @@ void DashboardRenderer::skipBootAnimation() {
         _screen_dirty = true;
         if (_canvas) {
             _canvas->fillScreen(currentTheme().bg);
+            markFullDirty();
         }
         if (!Settings.get().pin_lock_enabled) {
             triggerNeedleSweep();
@@ -437,6 +502,7 @@ void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms, const DashTelem
             int ly = (480 - BOOT_LOGO_HEIGHT) / 2;
             _canvas->drawPng(BOOT_LOGO_PNG, BOOT_LOGO_PNG_LEN, lx, ly);
             _canvas->releasePngMemory();
+            markFullDirty();
         }
         return;
     }
@@ -447,6 +513,9 @@ void DashboardRenderer::renderBootAnimation(uint32_t elapsed_ms, const DashTelem
         _boot_anim_phase = 2;
         _boot_log_lines_drawn = 0;
         _canvas->fillScreen(COLOR_BLACK);
+        markFullDirty();
+    } else {
+        addDirtyRect(40, 50, 720, 366);
     }
 
     const int start_x = 40;
@@ -548,20 +617,19 @@ void DashboardRenderer::triggerNeedleSweep() {
 // ==============================================================================
 // Top-Level Screen Dispatcher
 // ==============================================================================
-namespace {
-struct CanvasWriteGuard {
-    LovyanGFX *c;
-    explicit CanvasWriteGuard(LovyanGFX *canvas) : c(canvas) {
-        if (c) c->startWrite();
-    }
-    ~CanvasWriteGuard() {
-        if (c) c->endWrite();
-    }
-};
-} // namespace
-
 void DashboardRenderer::render(const DashTelemetry &telemetry) {
-    CanvasWriteGuard write_guard(_canvas);
+    struct RenderScopeGuard {
+        DashboardRenderer *r;
+        LovyanGFX *c;
+        RenderScopeGuard(DashboardRenderer *renderer, LovyanGFX *canvas) : r(renderer), c(canvas) {
+            if (c) c->startWrite();
+        }
+        ~RenderScopeGuard() {
+            if (c) c->endWrite();
+            if (r) r->flushDirtyToDisplay();
+        }
+    };
+    RenderScopeGuard render_guard(this, _canvas);
 
     // 0. Boot Animation Sequence
     if (_boot_anim_active) {
@@ -736,6 +804,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         case SCREEN_RT_GRAPHS:
             if (!_stats_inited) {
                 _canvas->fillScreen(pal.bg);
+                markFullDirty();
                 initRtGraphsScreen(telemetry);
                 _screen_dirty = false;
             } else if (_screen_dirty) {
@@ -748,6 +817,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         case SCREEN_SETTINGS_MENU:
             if (_screen_dirty || !_settings_inited) {
                 initSettingsScreen(telemetry);
+                markFullDirty();
                 _screen_dirty = false;
             }
             renderSettingsScreen(telemetry);
@@ -756,6 +826,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         case SCREEN_VESC_BRIDGE:
             if (_screen_dirty) {
                 _canvas->fillScreen(pal.bg);
+                markFullDirty();
                 initVescBridgeScreen(telemetry);
                 _screen_dirty = false;
             }
@@ -765,6 +836,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         case SCREEN_WIFI_BRIDGE:
             if (!_wifi_bridge_inited || _screen_dirty) {
                 _canvas->fillScreen(pal.bg);
+                markFullDirty();
                 initWifiBridgeScreen(telemetry);
                 _wifi_bridge_inited = true;
                 _screen_dirty = false;
@@ -775,6 +847,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
         case SCREEN_RACE_TIMER:
             if (_screen_dirty) {
                 _canvas->fillScreen(pal.bg);
+                markFullDirty();
                 initRaceTimerScreen(telemetry);
                 _screen_dirty = false;
             }
@@ -797,6 +870,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             _last_fault_code = telemetry.fault_code;
             _last_fault_flash = flash;
             drawFaultBanner(telemetry.fault_code);
+            addDirtyRect(20, 8, 760, 56);
         }
     }
 
@@ -811,6 +885,7 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
             } else {
                 _canvas->fillCircle(790, 10, 5, pal.bg);
             }
+            addDirtyRect(784, 4, 12, 12);
         }
     }
 }
@@ -1004,6 +1079,7 @@ static void drawThermalsRow(LovyanGFX *canvas, const lgfx::IFont *bodyFont, floa
 void DashboardRenderer::initHyper35kwStyle(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillScreen(pal.bg);
+    markFullDirty();
     _mode_banner_active = (millis() < telemetry.mode_badge_until);
     _mode_banner_drawn_mode = -1;
     _hyper_inited = false;
@@ -1065,6 +1141,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _mode_banner_active = banner_now;
         _mode_banner_drawn_mode = -1;
         _canvas->fillRect(434, 170, 340, 114, pal.bg);
+        addDirtyRect(434, 170, 340, 114);
         _cache.battery_pct = -999;
         _cache.voltage_x10 = -999;
         _cache.phase_x10 = -9999;
@@ -1128,6 +1205,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
     bool reached_full = (target_angle >= 404.5f && _last_arc_angle < 404.5f);
     bool left_full    = (target_angle < 404.5f && _last_arc_angle >= 404.5f);
 
+    bool arc_dirty = false;
     if (!_hyper_inited) {
         if (target_angle > 135.0f) {
             _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, target_angle, arcCol);
@@ -1140,12 +1218,14 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
+        arc_dirty = true;
     } else if (target_angle <= 135.0f && _last_arc_angle > 135.0f) {
         _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, _last_arc_angle + 1.0f, pal.track);
         _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         _canvas->fillCircle(e_cap_x, e_cap_y, 14, pal.track);
         _last_arc_angle = 135.0f;
         _last_arc_col = arcCol;
+        arc_dirty = true;
     } else if (arcCol != _last_arc_col) {
         if (target_angle < _last_arc_angle) {
             _canvas->fillArc(cx, cy, r_in, r_out, target_angle, _last_arc_angle + 1.0f, pal.track);
@@ -1164,6 +1244,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         }
         _last_arc_angle = target_angle;
         _last_arc_col = arcCol;
+        arc_dirty = true;
     } else if (reached_full || left_full || fabsf(target_angle - _last_arc_angle) >= 0.8f) {
         if (target_angle > _last_arc_angle) {
             if (_last_arc_angle <= 135.0f) {
@@ -1183,6 +1264,10 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             }
         }
         _last_arc_angle = target_angle;
+        arc_dirty = true;
+    }
+    if (arc_dirty) {
+        addDirtyRect(cx - 165, cy - 165, 330, 330);
     }
 
     // 1b. Top Status Header: Clock in Center (only shown when GPS has valid fix)
@@ -1204,6 +1289,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             } else {
                 _canvas->fillRect(340, 16, 120, 38, pal.bg);
             }
+            addDirtyRect(340, 14, 120, 42);
         }
     }
 
@@ -1225,6 +1311,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->fillRoundRect(tx, 21, 78, 26, 13, pal.accent_danger);
             drawSmoothText(UIF_SMALL, "REIFEN", tx + 39, 34, textdatum_t::middle_center, onPrimaryFg(pal), pal.accent_danger);
         }
+        addDirtyRect(540, 18, 190, 30);
     }
 
     // 2. Rider Tag (if set)
@@ -1242,6 +1329,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         uint16_t spdCol = (_is_sweeping) ? pal.text : ((spd >= 85.0f) ? pal.accent_danger : pal.text);
         _canvas->fillRect(cx - 88, 162, 176, 68, pal.bg);
         drawSmoothText(UIF_HERO_NUM, spdBuf, cx, 196, textdatum_t::middle_center, spdCol, pal.bg);
+        addDirtyRect(cx - 88, 162, 176, 68);
     }
 
     // Vector Satellite icon under "km/h"
@@ -1251,6 +1339,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         if (gps_connected) {
             drawMiniSatellite(_canvas, cx, 286, pal);
         }
+        addDirtyRect(cx - 18, 272, 36, 30);
     }
 
     // 5. Right Column: Hero Power Readout (Roboto Bold 72px smooth tabular digits)
@@ -1272,6 +1361,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             if (!_hyper_inited) {
                 drawSmoothText(UIF_HEADING, "W", 730, 82, textdatum_t::top_left, pal.muted, pal.bg);
             }
+            addDirtyRect(442, 54, 282, 60);
         }
     }
 
@@ -1290,6 +1380,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         snprintf(dBuf, sizeof(dBuf), "%d%%", cur_duty);
         _canvas->fillRect(675, 118, 92, 26, pal.bg);
         drawSmoothText(UIF_HEADING, dBuf, 765, 118, textdatum_t::top_right, pal.text, pal.bg);
+        addDirtyRect(675, 118, 92, 26);
     }
 
     if (!_hyper_inited || cur_d_fill != _cache.duty_fill_w || dutyCol != _cache.duty_col) {
@@ -1303,6 +1394,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         if (cur_d_fill > 0) {
             _canvas->fillRoundRect(445, 150, cur_d_fill, 10, 5, dutyCol);
         }
+        addDirtyRect(445, 150, 320, 10);
     }
 
     // 7. Right Column: Dynamic Mode Banner Overlay OR Battery / Currents Readout
@@ -1324,6 +1416,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             drawSmoothText(UIF_MED_NUM, mNames[mIdx], cX + cW / 2, cY + 58, textdatum_t::middle_center, mCol, pal.surface);
 
             _canvas->fillRoundRect(cX + 24, cY + cH - 12, cW - 48, 4, 2, mCol);
+            addDirtyRect(434, 170, 340, 114);
         }
     } else {
         _mode_banner_drawn_mode = -1;
@@ -1367,6 +1460,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
                     _canvas->fillRoundRect(445, 218, bFillW, 14, 7, bCol);
                 }
             }
+            addDirtyRect(442, 172, 324, 62);
         }
 
         if (!_hyper_inited || cur_v10 != _cache.voltage_x10) {
@@ -1379,6 +1473,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             }
             _canvas->fillRect(630, 178, 138, 28, pal.bg);
             drawSmoothText(UIF_HEADING, vBuf, 765, 180, textdatum_t::top_right, pal.text, pal.bg);
+            addDirtyRect(630, 178, 138, 28);
         }
 
         if (!_hyper_inited || cur_pha != _cache.phase_x10) {
@@ -1387,6 +1482,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             snprintf(motBuf, sizeof(motBuf), "MOTOR %d A", cur_pha);
             _canvas->fillRect(442, 246, 165, 24, pal.bg);
             drawSmoothText(UIF_BODY, motBuf, 445, 248, textdatum_t::top_left, pal.text, pal.bg);
+            addDirtyRect(442, 246, 165, 24);
         }
 
         if (!_hyper_inited || cur_a != _cache.current_x10) {
@@ -1395,6 +1491,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             snprintf(bBuf, sizeof(bBuf), "BATTERY %d A", cur_a);
             _canvas->fillRect(605, 246, 165, 24, pal.bg);
             drawSmoothText(UIF_BODY, bBuf, 765, 248, textdatum_t::top_right, pal.text, pal.bg);
+            addDirtyRect(605, 246, 165, 24);
         }
     }
 
@@ -1407,6 +1504,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         else snprintf(rngBuf, sizeof(rngBuf), "%d km", cur_range);
         _canvas->fillRect(442, 314, 170, 38, pal.bg);
         drawSmoothText(UIF_MED_NUM, rngBuf, 445, 316, textdatum_t::top_left, pal.text, pal.bg);
+        addDirtyRect(442, 314, 170, 38);
     }
 
     // 8b. Trip Distance Readout
@@ -1417,6 +1515,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         snprintf(tripBuf, sizeof(tripBuf), "%.1f km", telemetry.trip_km);
         _canvas->fillRect(616, 314, 158, 38, pal.bg);
         drawSmoothText(UIF_MED_NUM, tripBuf, 620, 316, textdatum_t::top_left, pal.text, pal.bg);
+        addDirtyRect(616, 314, 158, 38);
     }
 
     // 9. Right Column: Bottom Touch Action Buttons
@@ -1436,6 +1535,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->drawRoundRect(445, 380, 152, 72, 16, pal.border);
             drawSmoothText(UIF_HEADING, "BOOST", 521, 416, textdatum_t::middle_center, pal.text, pal.surface);
         }
+        addDirtyRect(445, 380, 152, 72);
     }
 
     int8_t cur_banner = banner_now ? 1 : 0;
@@ -1452,6 +1552,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->drawRoundRect(614, 381, 150, 70, 15, mCol);
             drawSmoothText(UIF_HEADING, mNames[mIdx], 689, 416, textdatum_t::middle_center, mCol, pal.surface);
         }
+        addDirtyRect(613, 380, 152, 72);
     }
 
     // 10. Bottom Left: Dynamic Vector Badges & Centered Thermals Row
@@ -1503,6 +1604,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
             _canvas->fillRect(20, 324, 62, 62, pal.bg);
             _canvas->fillRect(20, 386, 122, 62, pal.bg);
             _canvas->fillRect(156, 396, 170, 42, pal.bg);
+            addDirtyRect(20, 324, 308, 124);
         }
         _cache.temp_esc = -999;
         _cache.temp_motor = -999;
@@ -1518,6 +1620,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         _cache.temp_motor = cur_mot;
         _canvas->fillRect(156, 396, 170, 42, pal.bg);
         drawThermalsRow(_canvas, getUiFont(UIF_BODY), telemetry.temp_esc, telemetry.temp_motor, temp_x, 408, pal);
+        addDirtyRect(156, 396, 170, 42);
     }
 
     const lgfx::IFont *smallFont = getUiFont(UIF_SMALL);
@@ -1526,6 +1629,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         if (!_hyper_inited || badge_cfg_changed || cur_g10 != _cache.g_force_x10) {
             _cache.g_force_x10 = cur_g10;
             drawGForceBadge(_canvas, smallFont, telemetry.g_force, gf_x, gf_y, 27, pal);
+            addDirtyRect(gf_x - 28, gf_y - 28, 56, 56);
         }
     }
 
@@ -1534,6 +1638,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         if (!_hyper_inited || badge_cfg_changed || cur_inc_x10 != _cache.incline_deg) {
             _cache.incline_deg = cur_inc_x10;
             drawInclineBadge(_canvas, smallFont, telemetry.incline_deg, inc_x, inc_y, 27, pal);
+            addDirtyRect(inc_x - 28, inc_y - 28, 56, 56);
         }
     }
 
@@ -1542,6 +1647,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
         if (!_hyper_inited || badge_cfg_changed || cur_light != _cache.lights_enabled) {
             _cache.lights_enabled = cur_light;
             drawLightBadge(_canvas, smallFont, telemetry.lights_enabled, light_x, light_y, 27, pal);
+            addDirtyRect(light_x - 28, light_y - 28, 56, 56);
         }
     }
 
@@ -1554,6 +1660,7 @@ void DashboardRenderer::renderHyper35kwStyle(const DashTelemetry &telemetry) {
 #if ENABLE_LIGHTS_SCREEN
 void DashboardRenderer::initLightsScreen(const DashTelemetry &telemetry) {
     _canvas->fillScreen(currentTheme().bg);
+    markFullDirty();
 }
 
 void DashboardRenderer::drawColorWheel(int cx, int cy, int r_in, int r_out, uint8_t selected_hue) {
@@ -1568,6 +1675,7 @@ void DashboardRenderer::drawColorWheel(int cx, int cy, int r_in, int r_out, uint
 void DashboardRenderer::renderLightsScreen(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillScreen(pal.bg);
+    markFullDirty();
     drawSmoothText(UIF_HEADING, "LIGHTS", 35, 22, textdatum_t::top_left, pal.text, pal.bg);
     drawPillToggle(690, 18, telemetry.lights_enabled, pal);
 
@@ -1596,6 +1704,7 @@ void DashboardRenderer::renderLightsScreen(const DashTelemetry &telemetry) {
 void DashboardRenderer::initRtGraphsScreen(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillScreen(pal.bg);
+    markFullDirty();
 
     // Top Bar: Back Button [< DASH], [ RACE ] Button, Center Title, Reset Trip Button
     _canvas->fillRoundRect(20, 12, 110, 36, 18, pal.surface);
@@ -1694,6 +1803,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         int titleX = cur_tm ? 430 : 380;
         _canvas->fillRect(250, 12, 380, 36, pal.bg);
         drawSmoothText(UIF_HEADING, "FAHRDATEN & STATISTIK", titleX, 30, textdatum_t::middle_center, pal.primary, pal.bg);
+        addDirtyRect(140, 12, 490, 38);
     }
 
     // Police Mode Masking: When tuning_mode == false, limit high-performance stats
@@ -1716,6 +1826,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         drawSmoothText(UIF_HEADING, distBuf, 36, 86, textdatum_t::top_left, pal.text, pal.surface);
         char odoBuf[24]; snprintf(odoBuf, sizeof(odoBuf), "ODO: %.1f km", telemetry.odo_km);
         drawSmoothText(UIF_SMALL, odoBuf, 36, 122, textdatum_t::top_left, pal.muted, pal.surface);
+        addDirtyRect(36, 86, 168, 56);
     }
 
     // Col 2: FAHRZEIT (Ride time & Avg speed)
@@ -1734,6 +1845,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         drawSmoothText(UIF_HEADING, timeBuf, 225, 86, textdatum_t::top_left, pal.text, pal.surface);
         char avgSpd[24]; snprintf(avgSpd, sizeof(avgSpd), "Avg: %.1f km/h", disp_avg_spd);
         drawSmoothText(UIF_SMALL, avgSpd, 225, 122, textdatum_t::top_left, pal.muted, pal.surface);
+        addDirtyRect(225, 86, 168, 56);
     }
 
     // Col 3: MAX SPEED (Max speed & Live speed)
@@ -1747,6 +1859,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         drawSmoothText(UIF_HEADING, maxSpd, 415, 86, textdatum_t::top_left, pal.text, pal.surface);
         char liveSpd[24]; snprintf(liveSpd, sizeof(liveSpd), "Live: %.1f km/h", disp_live_spd);
         drawSmoothText(UIF_SMALL, liveSpd, 415, 122, textdatum_t::top_left, pal.muted, pal.surface);
+        addDirtyRect(415, 86, 168, 56);
     }
 
     // Col 4: ENERGIE (Trip Wh & Remaining Wh)
@@ -1760,6 +1873,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         drawSmoothText(UIF_HEADING, whBuf, 605, 86, textdatum_t::top_left, pal.text, pal.surface);
         char remWh[16]; snprintf(remWh, sizeof(remWh), "Rest: %.0f Wh", telemetry.remaining_wh);
         drawSmoothText(UIF_SMALL, remWh, 605, 122, textdatum_t::top_left, pal.muted, pal.surface);
+        addDirtyRect(605, 86, 168, 56);
     }
 
     // Tile 1: MAX LEISTUNG (PEAK WATT & PS)
@@ -1773,6 +1887,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         float ps_stat = disp_peak_pwr * 0.00135962f;
         char psBuf[16]; snprintf(psBuf, sizeof(psBuf), "%.1f PS", ps_stat);
         drawSmoothText(UIF_BODY, psBuf, 32, 238, textdatum_t::top_left, pal.primary, pal.surface);
+        addDirtyRect(32, 202, 220, 62);
     }
 
     // Tile 2: PEAK AKKU-STROM
@@ -1782,6 +1897,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _canvas->fillRect(290, 202, 220, 62, pal.surface);
         char curBuf[16]; snprintf(curBuf, sizeof(curBuf), "%.1f A", disp_peak_curr);
         drawSmoothText(UIF_HEADING, curBuf, 290, 202, textdatum_t::top_left, pal.text, pal.surface);
+        addDirtyRect(290, 202, 220, 62);
     }
 
     // Tile 3: PEAK PHASENSTROM
@@ -1791,6 +1907,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _canvas->fillRect(548, 202, 220, 62, pal.surface);
         char phaBuf[16]; snprintf(phaBuf, sizeof(phaBuf), "%.1f A", disp_peak_pha);
         drawSmoothText(UIF_HEADING, phaBuf, 548, 202, textdatum_t::top_left, pal.text, pal.surface);
+        addDirtyRect(548, 202, 220, 62);
     }
 
     // Tile 4: VERBRAUCH & EFFIZIENZ
@@ -1805,6 +1922,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         drawSmoothText(UIF_HEADING, effBuf, 32, 356, textdatum_t::top_left, pal.text, pal.surface);
         char dynBuf[32]; snprintf(dynBuf, sizeof(dynBuf), "Rollend (2km): %.1f Wh/km", dynWh);
         drawSmoothText(UIF_SMALL, dynBuf, 32, 400, textdatum_t::top_left, pal.muted, pal.surface);
+        addDirtyRect(32, 356, 220, 68);
     }
 
     // Tile 5: AKKU-SPANNUNG (MIN/MAX)
@@ -1820,6 +1938,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         drawSmoothText(UIF_HEADING, vBuf, 290, 356, textdatum_t::top_left, pal.text, pal.surface);
         char vSub[32]; snprintf(vSub, sizeof(vSub), "Live: %.1fV (Sag Check)", telemetry.voltage);
         drawSmoothText(UIF_SMALL, vSub, 290, 400, textdatum_t::top_left, pal.muted, pal.surface);
+        addDirtyRect(290, 356, 220, 68);
     }
 
     // Tile 6: MAX TEMPERATUR
@@ -1831,6 +1950,7 @@ void DashboardRenderer::renderRtGraphsScreen(const DashTelemetry &telemetry) {
         _canvas->fillRect(548, 356, 220, 60, pal.surface);
         char tmpBuf[32]; snprintf(tmpBuf, sizeof(tmpBuf), "%.0f °C / %.0f °C", telemetry.stats.max_temp_motor, telemetry.stats.max_temp_esc);
         drawSmoothText(UIF_HEADING, tmpBuf, 548, 356, textdatum_t::top_left, pal.text, pal.surface);
+        addDirtyRect(548, 356, 220, 60);
     }
 
     _stats_inited = true;
@@ -1927,6 +2047,7 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
         _last_pin_vesc_conn = -1;
 
         _canvas->fillScreen(pal.bg);
+        markFullDirty();
 
         if (alarm) {
             // Crisp high-visibility crimson border frame
@@ -1991,6 +2112,7 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
             }
             drawSmoothText(UIF_BODY, pillBuf, px + 46, py + ph / 2, textdatum_t::middle_left,
                            valid_bat ? pal.text : pal.muted, pal.surface);
+            addDirtyRect(px, py, pw, ph);
         }
     }
 
@@ -2007,10 +2129,16 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
     }
     if (active_key != _last_pin_active_key) {
         if (_last_pin_active_key >= 0) {
-            drawKeypadButton(_last_pin_active_key / 3, _last_pin_active_key % 3, false);
+            int r = _last_pin_active_key / 3;
+            int c = _last_pin_active_key % 3;
+            drawKeypadButton(r, c, false);
+            addDirtyRect(col_x[c], row_y[r], btn_w, btn_h);
         }
         if (active_key >= 0) {
-            drawKeypadButton(active_key / 3, active_key % 3, true);
+            int r = active_key / 3;
+            int c = active_key % 3;
+            drawKeypadButton(r, c, true);
+            addDirtyRect(col_x[c], row_y[r], btn_w, btn_h);
         }
         _last_pin_active_key = active_key;
     }
@@ -2051,6 +2179,7 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
             drawSmoothText(UIF_BODY, "4-stelligen Entsperrcode eingeben", 400, 140,
                            textdatum_t::middle_center, pal.muted, pal.bg);
         }
+        addDirtyRect(160, 86, 480, 72);
     }
 }
 
@@ -2116,6 +2245,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
 
     if (!_settings_inited) {
         _canvas->fillScreen(pal.bg);
+        markFullDirty();
 
         // 1. Sleek Header Bar: [< DASH], Title, [FERTIG]
         _canvas->fillRoundRect(20, 12, 108, 34, 17, pal.surface);
@@ -2128,6 +2258,8 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         drawSmoothText(UIF_BODY, "FERTIG", 726, 29, textdatum_t::middle_center, onPrimaryFg(pal), pal.primary);
 
         _settings_inited = true;
+    } else {
+        addDirtyRect(0, _pin_modal_open ? 26 : 54, 800, _pin_modal_open ? 454 : 426);
     }
 
     // 2. Segmented Tab Bar (Stealth-safe: Legal = 3 tabs, Tuning = 5 tabs)
@@ -3046,6 +3178,7 @@ void DashboardRenderer::initVescBridgeScreen(const DashTelemetry &telemetry) {
     (void)telemetry;
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillScreen(pal.bg);
+    markFullDirty();
 
     _canvas->fillRoundRect(20, 12, 108, 34, 17, pal.surface);
     _canvas->drawRoundRect(20, 12, 108, 34, 17, pal.border);
@@ -3096,6 +3229,7 @@ void DashboardRenderer::renderVescBridgeScreen(const DashTelemetry &telemetry) {
         char buf[32]; fmtBytes(pc_bytes, buf, sizeof(buf));
         _canvas->fillRect(38, 224, 320, 44, pal.surface);
         drawSmoothText(UIF_MED_NUM, buf, 38, 226, textdatum_t::top_left, pal.text, pal.surface);
+        addDirtyRect(38, 224, 320, 44);
     }
 
     if (vesc_bytes != _bridge_last_vesc_bytes) {
@@ -3103,6 +3237,7 @@ void DashboardRenderer::renderVescBridgeScreen(const DashTelemetry &telemetry) {
         char buf[32]; fmtBytes(vesc_bytes, buf, sizeof(buf));
         _canvas->fillRect(428, 224, 320, 44, pal.surface);
         drawSmoothText(UIF_MED_NUM, buf, 428, 226, textdatum_t::top_left, pal.text, pal.surface);
+        addDirtyRect(428, 224, 320, 44);
     }
 }
 
@@ -3113,6 +3248,7 @@ void DashboardRenderer::initWifiBridgeScreen(const DashTelemetry &telemetry) {
     (void)telemetry;
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillScreen(pal.bg);
+    markFullDirty();
 
     _canvas->fillRoundRect(20, 12, 108, 34, 17, pal.surface);
     _canvas->drawRoundRect(20, 12, 108, 34, 17, pal.border);
@@ -3201,6 +3337,7 @@ void DashboardRenderer::renderWifiBridgeScreen(const DashTelemetry &telemetry) {
             drawSmoothText(UIF_BODY, "4. Host: 192.168.4.1  •  Port: 6510",  426, 272, textdatum_t::top_left, pal.text, pal.surface);
             drawSmoothText(UIF_BODY, "5. Auf 'Connect' tippen!",             426, 304, textdatum_t::top_left, pal.primary, pal.surface);
         }
+        addDirtyRect(416, 112, 358, 260);
     }
 
     if (connected) {
@@ -3214,12 +3351,14 @@ void DashboardRenderer::renderWifiBridgeScreen(const DashTelemetry &telemetry) {
             char buf[32]; fmtBytes(rx_bytes, buf, sizeof(buf));
             _canvas->fillRect(570, 220, 194, 30, pal.surface);
             drawSmoothText(UIF_HEADING, buf, 764, 222, textdatum_t::top_right, pal.text, pal.surface);
+            addDirtyRect(570, 220, 194, 30);
         }
         if (tx_bytes != _bridge_last_wifi_tx) {
             _bridge_last_wifi_tx = tx_bytes;
             char buf[32]; fmtBytes(tx_bytes, buf, sizeof(buf));
             _canvas->fillRect(570, 260, 194, 30, pal.surface);
             drawSmoothText(UIF_HEADING, buf, 764, 262, textdatum_t::top_right, pal.text, pal.surface);
+            addDirtyRect(570, 260, 194, 30);
         }
     }
 }
@@ -3351,6 +3490,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
 void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillScreen(pal.bg);
+    markFullDirty();
     _cache.invalidate();
     _race_records_drawn = false;
     _race_dyno_drawn = false;
@@ -3477,6 +3617,7 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
             drawSmoothText(UIF_HEADING, "LAUNCH CONTROL", 304, 30,
                            textdatum_t::middle_center, pal.muted, pal.bg);
         }
+        addDirtyRect(134, 8, 336, 44);
     }
 
     // 2. Speedometer Arc (Differential Update, 270° sweep: 135° to 405°)
@@ -3489,10 +3630,12 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     int s_cap_x = cx + (int)roundf(cosf(135.0f * deg2rad) * mid_r);
     int s_cap_y = cy + (int)roundf(sinf(135.0f * deg2rad) * mid_r);
 
+    bool race_arc_dirty = false;
     if (target_angle <= 135.0f && _last_race_arc_angle > 135.0f) {
         _canvas->fillArc(cx, cy, r_in, r_out, 135.0f, _last_race_arc_angle + 1.0f, pal.track);
         _canvas->fillCircle(s_cap_x, s_cap_y, 14, pal.track);
         _last_race_arc_angle = 135.0f;
+        race_arc_dirty = true;
     } else if (fabsf(target_angle - _last_race_arc_angle) >= 0.8f) {
         if (target_angle > _last_race_arc_angle) {
             if (_last_race_arc_angle <= 135.0f) {
@@ -3506,6 +3649,10 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
             }
         }
         _last_race_arc_angle = target_angle;
+        race_arc_dirty = true;
+    }
+    if (race_arc_dirty) {
+        addDirtyRect(cx - 162, cy - 162, 324, 324);
     }
 
     // Hero Digital Speed inside Ring
@@ -3516,6 +3663,7 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
         snprintf(spdBuf, sizeof(spdBuf), "%d", cur_spd_int);
         _canvas->fillRect(cx - 88, cy - 48, 176, 68, pal.bg);
         drawSmoothText(UIF_HERO_NUM, spdBuf, cx, cy - 14, textdatum_t::middle_center, pal.text, pal.bg);
+        addDirtyRect(cx - 88, cy - 48, 176, 68);
     }
 
     // 3. Center Action Button cleanly below the horseshoe ring (ZERO arc overlap!)
@@ -3558,6 +3706,7 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
             _canvas->drawRoundRect(cx - 106, btnY, 212, btnH, 24, pal.primary);
             drawSmoothText(UIF_BODY, "NEUER LAUNCH", cx, btnY + btnH / 2, textdatum_t::middle_center, pal.primary, pal.surface);
         }
+        addDirtyRect(cx - 116, btnY - 4, 232, btnH + 8);
     }
 
     // Commit state cache AFTER both header and button updated
@@ -3585,6 +3734,7 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
         } else {
             drawSmoothText(UIF_MED_NUM, "--.-- s", 550, y, textdatum_t::top_left, pal.muted, pal.surface);
         }
+        addDirtyRect(548, y, 218, 40);
     };
 
     if (s1_changed || (telemetry.race_state == 2 && active_0_22 && timer_needs_update)) {
@@ -3604,12 +3754,14 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
     if (cur_g10 != _last_race_g_force_x10) {
         _last_race_g_force_x10 = cur_g10;
         drawGForceBadge(_canvas, getUiFont(UIF_SMALL), telemetry.g_force, 50, 416, 27, pal);
+        addDirtyRect(22, 388, 56, 56);
     }
 }
 
 void DashboardRenderer::drawRaceRecordsModal(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
     int mx = 140, my = 70, mw = 520, mh = 340;
+    addDirtyRect(mx, my, mw, mh);
     drawCard(mx, my, mw, mh, pal.surface, pal.accent_warn, 16);
     _canvas->drawRoundRect(mx + 1, my + 1, mw - 2, mh - 2, 15, pal.accent_warn);
 
@@ -3654,6 +3806,7 @@ void DashboardRenderer::drawRaceRecordsModal(const DashTelemetry &telemetry) {
 void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
     const ColorThemePalette &pal = currentTheme();
     int mx = 100, my = 45, mw = 600, mh = 390;
+    addDirtyRect(mx, my, mw, mh);
 
     // Dark modal surface card with primary border
     drawCard(mx, my, mw, mh, pal.surface, pal.primary, 16);
@@ -3846,6 +3999,9 @@ void DashboardRenderer::resetSetupWizard() {
     _wizard_inited = false;
     _last_wizard_step = -1;
     _last_wizard_pin_len = -1;
+    _last_wizard_gps = -1;
+    _last_wizard_incline = -1;
+    _last_wizard_wifi = -1;
     _wizard_step = 0;
     _wizard_pin_buf[0] = '\0';
     _screen_dirty = true;
@@ -3857,6 +4013,9 @@ void DashboardRenderer::initSetupWizard(const DashTelemetry &telemetry) {
         _wizard_pin_buf[0] = '\0';
         _last_wizard_step = -1;
         _last_wizard_pin_len = -1;
+        _last_wizard_gps = -1;
+        _last_wizard_incline = -1;
+        _last_wizard_wifi = -1;
         _wizard_inited = true;
     }
 }
@@ -3867,9 +4026,13 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
     bool step_changed = (_wizard_step != _last_wizard_step) || !_wizard_inited;
     if (step_changed) {
         _canvas->fillScreen(pal.bg);
+        markFullDirty();
         _last_wizard_step = _wizard_step;
         _wizard_inited = true;
         _last_wizard_pin_len = -1;
+        _last_wizard_gps = -1;
+        _last_wizard_incline = -1;
+        _last_wizard_wifi = -1;
     }
 
     if (_wizard_step == 0) {
@@ -3974,6 +4137,7 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
                 drawSmoothText(UIF_BODY, "4 ZIFFERN EINGEBEN (ODER OBEN SKIP)", 400, 422,
                                textdatum_t::middle_center, pal.muted, pal.surface_alt);
             }
+            addDirtyRect(mx, my, mw, mh);
         }
     } else if (_wizard_step == 2) {
         if (step_changed) {
@@ -3998,9 +4162,24 @@ void DashboardRenderer::renderSetupWizard(const DashTelemetry &telemetry) {
             drawSmoothText(UIF_HEADING, "SETUP ABSCHLIESSEN & STARTEN", 400, 409, textdatum_t::middle_center, onPrimaryFg(pal), pal.accent_ok);
         }
 
-        drawPillToggle(700, 106, Settings.get().gps_enabled, pal);
-        drawPillToggle(700, 200, Settings.get().incline_gforce_enabled, pal);
-        drawPillToggle(700, 294, Settings.get().wifi_bridge_enabled, pal);
+        int8_t cur_gps = Settings.get().gps_enabled ? 1 : 0;
+        if (step_changed || cur_gps != _last_wizard_gps) {
+            _last_wizard_gps = cur_gps;
+            drawPillToggle(700, 106, cur_gps != 0, pal);
+            addDirtyRect(700, 106, 60, 32);
+        }
+        int8_t cur_inc = Settings.get().incline_gforce_enabled ? 1 : 0;
+        if (step_changed || cur_inc != _last_wizard_incline) {
+            _last_wizard_incline = cur_inc;
+            drawPillToggle(700, 200, cur_inc != 0, pal);
+            addDirtyRect(700, 200, 60, 32);
+        }
+        int8_t cur_wifi = Settings.get().wifi_bridge_enabled ? 1 : 0;
+        if (step_changed || cur_wifi != _last_wizard_wifi) {
+            _last_wizard_wifi = cur_wifi;
+            drawPillToggle(700, 294, cur_wifi != 0, pal);
+            addDirtyRect(700, 294, 60, 32);
+        }
     }
 }
 
@@ -4143,6 +4322,7 @@ bool DashboardRenderer::handleWizardTouch(int16_t tx, int16_t ty, DashTelemetry 
 void DashboardRenderer::initOtaScreen() {
     const ColorThemePalette &pal = currentTheme();
     _canvas->fillScreen(pal.bg);
+    markFullDirty();
 
     uint16_t hdrBg = blendRgb565(pal.surface, pal.primary, pal.is_light ? 22 : 36);
     drawCard(40, 24, 720, 56, hdrBg, pal.primary, 14);
@@ -4189,6 +4369,8 @@ void DashboardRenderer::renderOtaScreen(int pct, const char *status) {
         if (fillW > 8) {
             _canvas->fillRoundRect(barX, barY, fillW, barH, 12, (pct >= 100) ? pal.accent_ok : pal.primary);
         }
+        addDirtyRect(260, 174, 280, 80);
+        addDirtyRect(barX, barY, barW, barH);
     }
 
     if (strncmp(_last_ota_status, safe_status, sizeof(_last_ota_status) - 1) != 0) {
@@ -4197,5 +4379,6 @@ void DashboardRenderer::renderOtaScreen(int pct, const char *status) {
         _canvas->fillRect(60, 314, 680, 44, pal.surface);
         drawSmoothText(UIF_HEADING, _last_ota_status, 400, 336,
                        textdatum_t::middle_center, pal.text, pal.surface);
+        addDirtyRect(60, 314, 680, 44);
     }
 }

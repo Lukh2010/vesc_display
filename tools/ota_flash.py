@@ -72,9 +72,9 @@ def upload_firmware(ip, bin_path):
 
     filesize = os.path.getsize(bin_path)
     filename = os.path.basename(bin_path)
-    url = f"http://{ip}/update"
+    url = f"http://{ip}/update?size={filesize}"
 
-    print(f"\n⚡ Starte kabellosen OTA-Flash: {filename} ({filesize / 1024:.1f} KB) -> http://{ip}/update")
+    print(f"\n⚡ Starte kabellosen OTA-Flash: {filename} ({filesize / 1024:.1f} KB) -> {url}")
 
     mp = MultipartStream(filename, bin_path)
 

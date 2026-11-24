@@ -161,7 +161,7 @@ function startUpload() {
   formData.append('update', selectedFile, selectedFile.name);
 
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/update', true);
+  xhr.open('POST', '/update?size=' + encodeURIComponent(selectedFile.size), true);
 
   xhr.upload.addEventListener('progress', (e) => {
     if (e.lengthComputable) {
@@ -197,6 +197,9 @@ function startUpload() {
 )rawliteral";
 
 void OtaManager::setupRoutes() {
+    const char* headerkeys[] = {"Content-Length"};
+    _server.collectHeaders(headerkeys, 1);
+
     // 1. Root redirect to /update
     _server.on("/", HTTP_GET, [this]() {
         _server.sendHeader("Location", "/update");
@@ -236,9 +239,17 @@ void OtaManager::setupRoutes() {
         if (upload.status == UPLOAD_FILE_START) {
             _is_updating = true;
             _total_bytes = 1200000;
+            if (_server.hasArg("size")) {
+                uint32_t s = (uint32_t)_server.arg("size").toInt();
+                if (s > 10000) _total_bytes = s;
+            } else if (_server.hasHeader("Content-Length")) {
+                uint32_t cl = (uint32_t)_server.header("Content-Length").toInt();
+                if (cl > 10000) _total_bytes = cl;
+            }
             _bytes_written = 0;
             strncpy(_status_text, "Starte OTA Flash...", sizeof(_status_text));
-            Serial.printf("[OTA] Firmware Upload gestartet: %s\n", upload.filename.c_str());
+            Serial.printf("[OTA] Firmware Upload gestartet: %s (Erwartete Groesse: %u Bytes)\n",
+                          upload.filename.c_str(), (unsigned int)_total_bytes);
 
             if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
                 Update.printError(Serial);

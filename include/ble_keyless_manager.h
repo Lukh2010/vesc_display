@@ -5,6 +5,10 @@
 #include "settings_manager.h"
 #include "mode_manager.h"
 
+#ifndef BLE_KEYLESS_USE_HID
+#define BLE_KEYLESS_USE_HID 1
+#endif
+
 class BleKeylessManager {
 public:
     static BleKeylessManager& instance();
