@@ -171,6 +171,7 @@ private:
     void drawCard(int x, int y, int w, int h, uint16_t bg, uint16_t border, int r = 10);
     void drawPillToggle(int x, int y, bool on, const ColorThemePalette &pal);
     void drawLockIcon(int cx, int cy, uint16_t col, uint16_t bg);
+    void drawGForceBadge(float g_force, int cx, int cy, int r, const ColorThemePalette &pal);
 
     // Screen State
     DashboardScreen _active_screen;

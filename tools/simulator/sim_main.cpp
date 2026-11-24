@@ -17,7 +17,9 @@
 #include "vesc_uart.h"
 #include "mode_manager.h"
 #include "fault_manager.h"
+#define private public
 #include "gps_tracker.h"
+#undef private
 #include "ble_keyless_manager.h"
 #include "ota_manager.h"
 #include "tcs_tpms_manager.h"
@@ -3900,6 +3902,82 @@ int main(int argc, char **argv) {
             return 1;
         }
         printf("[PASS] Regression test: BatteryManager Sag-Schutz (60A load & 38V sag preserves learned_wh and SoC)\n");
+    }
+
+    {
+        // 8. TcsTpmsManager Safety: When is_locked=true or wheel_diameter_in=0, no NaN occurs and TCS remains deactivated
+        DashTelemetry tTcs;
+        setBaseTelemetry(tTcs);
+        tTcs.is_locked = true;
+        tTcs.vesc_connected = true;
+        tTcs.vesc_motor_speed = 35.0f;
+        tTcs.phase_amps = 40.0f;
+        tTcs.throttle_pct = 80.0f;
+        tTcs.rpm = 2500.0f;
+
+        float saved_diam = Settings.get().wheel_diameter_in;
+        Settings.get().wheel_diameter_in = 0.0f; // invalid diameter!
+
+        TcsTpmsManager::instance().update(tTcs, 0.05f);
+
+        if (tTcs.tcs_active) {
+            fprintf(stderr, "[FAIL] TCS activated while vehicle is locked\n");
+            return 1;
+        }
+        if (tTcs.tcs_throttle_scale != 1.0f) {
+            fprintf(stderr, "[FAIL] TCS throttle scale altered while vehicle is locked\n");
+            return 1;
+        }
+        if (isnan(tTcs.tcs_slip_kmh) || isnan(tTcs.tcs_throttle_scale) ||
+            isnan(tTcs.calibrated_wheel_diam_inch) || isnan(tTcs.tpms_drift_pct)) {
+            fprintf(stderr, "[FAIL] TcsTpmsManager generated NaN with wheel_diameter_in=0\n");
+            return 1;
+        }
+
+        Settings.get().wheel_diameter_in = saved_diam;
+        printf("[PASS] Regression test: TcsTpmsManager Safety (is_locked=true & diam=0: no NaN, TCS inactive)\n");
+    }
+
+    {
+        // 9. GpsTracker NMEA-Checksumme: Corrupted checksum (*FF) rejected, valid checksum updates Speed & Valid-Flag
+        DashTelemetry tGps;
+        setBaseTelemetry(tGps);
+        tGps.gps.valid = false;
+        tGps.gps.speed_kmh = 0.0f;
+
+        // 1. Corrupt RMC checksum (*FF)
+        const char *bad_rmc = "$GNRMC,091523.00,A,5231.1234,N,01324.5678,E,25.0,180.0,121126,,,A*FF";
+        GpsTracker::instance().parseNmeaLine(bad_rmc, tGps);
+        if (tGps.gps.speed_kmh != 0.0f) {
+            fprintf(stderr, "[FAIL] GpsTracker accepted corrupted NMEA RMC checksum\n");
+            return 1;
+        }
+
+        // 2. Corrupt GGA checksum (*FF)
+        const char *bad_gga = "$GNGGA,091523.00,5231.1234,N,01324.5678,E,1,14,0.9,45.2,M,45.0,M,,*FF";
+        GpsTracker::instance().parseNmeaLine(bad_gga, tGps);
+        if (tGps.gps.valid) {
+            fprintf(stderr, "[FAIL] GpsTracker accepted corrupted NMEA GGA checksum\n");
+            return 1;
+        }
+
+        // 3. Valid GGA sentence (*49)
+        const char *good_gga = "$GNGGA,091523.00,5231.1234,N,01324.5678,E,1,14,0.9,45.2,M,45.0,M,,*49";
+        GpsTracker::instance().parseNmeaLine(good_gga, tGps);
+        if (!tGps.gps.valid || tGps.gps.satellites != 14) {
+            fprintf(stderr, "[FAIL] GpsTracker failed to validate correct NMEA GGA sentence\n");
+            return 1;
+        }
+
+        // 4. Valid RMC sentence (*7C -> 25.0 knots * 1.852 = 46.3 km/h)
+        const char *good_rmc = "$GNRMC,091523.00,A,5231.1234,N,01324.5678,E,25.0,180.0,121126,,,A*7C";
+        GpsTracker::instance().parseNmeaLine(good_rmc, tGps);
+        if (fabsf(tGps.gps.speed_kmh - 46.3f) > 0.1f) {
+            fprintf(stderr, "[FAIL] GpsTracker failed to parse valid NMEA RMC speed: expected 46.3, got %.2f\n", tGps.gps.speed_kmh);
+            return 1;
+        }
+
+        printf("[PASS] Regression test: GpsTracker NMEA Checksumme (corrupted *FF rejected, valid sentence parsed)\n");
     }
 
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");

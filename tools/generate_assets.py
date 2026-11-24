@@ -388,7 +388,7 @@ def generate_ui_fonts(header_path: Path) -> list[dict]:
             "UI_FONT_MED_NUM",
             ROBOTO_BOLD,
             34,
-            list(" 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZkmhs%.:-+/°"),
+            list(" 0123456789.:-+/%°kmhsABCEGIKMNOPRSTVW"),
             True,
             "Medium tabular KPIs, Battery %, Range, Trip, Mode names, Race timer — Roboto Bold 34px",
         ),

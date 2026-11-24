@@ -20,6 +20,9 @@ g++ -std=c++17 -O2 -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   -Iinclude \
   -I"$LGFX_SRC_DIR" \
   src/dash_renderer.cpp \
+  src/screen_race.cpp \
+  src/screen_settings.cpp \
+  src/screen_wizard_pin.cpp \
   src/settings_manager.cpp \
   src/battery_manager.cpp \
   src/buttons.cpp \
@@ -58,6 +61,9 @@ g++ -std=c++17 -O2 -fPIC -shared -DLGFX_LINUX_FB -DNATIVE_SIMULATOR \
   -Iinclude \
   -I"$LGFX_SRC_DIR" \
   src/dash_renderer.cpp \
+  src/screen_race.cpp \
+  src/screen_settings.cpp \
+  src/screen_wizard_pin.cpp \
   src/settings_manager.cpp \
   src/battery_manager.cpp \
   src/buttons.cpp \
