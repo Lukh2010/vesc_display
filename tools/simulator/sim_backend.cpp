@@ -1207,7 +1207,7 @@ void sim_step(uint32_t step_ms) {
                     g_telemetry.tuning_mode = true;
                     Buttons.setTuningMode(true);
                     ModeManager::instance().setTuningMode(true);
-                    g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                    g_telemetry.mode_badge_until = millis() + 2500;
                     ensureZeroSpeedIfIdle();
                     Renderer.markScreenDirty();
                     break;
@@ -1217,7 +1217,7 @@ void sim_step(uint32_t step_ms) {
                     ModeManager::instance().setTuningMode(false);
                     g_telemetry.boost_active = false;
                     ModeManager::instance().setBoostActive(false);
-                    g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                    g_telemetry.mode_badge_until = millis() + 2500;
                     if (g_telemetry.screen == SCREEN_RACE_TIMER) {
                         g_telemetry.screen = SCREEN_RIDE_DASH;
                         g_telemetry.race_state = 0;
@@ -1237,7 +1237,7 @@ void sim_step(uint32_t step_ms) {
                 case NAV_MODE_CYCLE:
                     g_telemetry.ride_mode = (RideMode)(((int)g_telemetry.ride_mode + 1) % MODE_COUNT);
                     ModeManager::instance().setRideMode(g_telemetry.ride_mode);
-                    g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                    g_telemetry.mode_badge_until = millis() + 2500;
                     ensureZeroSpeedIfIdle();
                     Renderer.markScreenDirty();
                     break;
@@ -1755,7 +1755,7 @@ void sim_trigger_nav(int nav_action) {
                 g_telemetry.tuning_mode = true;
                 Buttons.setTuningMode(true);
                 ModeManager::instance().setTuningMode(true);
-                g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                g_telemetry.mode_badge_until = millis() + 2500;
                 ensureZeroSpeedIfIdle();
                 break;
             case NAV_TUNING_DISABLE:
@@ -1764,7 +1764,7 @@ void sim_trigger_nav(int nav_action) {
                 ModeManager::instance().setTuningMode(false);
                 g_telemetry.boost_active = false;
                 ModeManager::instance().setBoostActive(false);
-                g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                g_telemetry.mode_badge_until = millis() + 2500;
                 if (g_telemetry.screen == SCREEN_RACE_TIMER) {
                     g_telemetry.screen = SCREEN_RIDE_DASH;
                     g_telemetry.race_state = 0;
@@ -1784,7 +1784,7 @@ void sim_trigger_nav(int nav_action) {
             case NAV_MODE_CYCLE:
                 g_telemetry.ride_mode = (RideMode)(((int)g_telemetry.ride_mode + 1) % MODE_COUNT);
                 ModeManager::instance().setRideMode(g_telemetry.ride_mode);
-                g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+                g_telemetry.mode_badge_until = millis() + 2500;
                 ensureZeroSpeedIfIdle();
                 break;
             case NAV_HAZARD_TOGGLE:
@@ -1818,7 +1818,7 @@ void sim_toggle_boost() {
 void sim_cycle_mode() {
     g_telemetry.ride_mode = (RideMode)(((int)g_telemetry.ride_mode + 1) % MODE_COUNT);
     ModeManager::instance().setRideMode(g_telemetry.ride_mode);
-    g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+    g_telemetry.mode_badge_until = millis() + 2500;
     ensureZeroSpeedIfIdle();
     Renderer.markScreenDirty();
 }
@@ -1827,7 +1827,7 @@ void sim_set_ride_mode(int mode) {
     if (mode >= 0 && mode < MODE_COUNT) {
         g_telemetry.ride_mode = (RideMode)mode;
         ModeManager::instance().setRideMode(g_telemetry.ride_mode);
-        g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+        g_telemetry.mode_badge_until = millis() + 2500;
         ensureZeroSpeedIfIdle();
         Renderer.markScreenDirty();
     }
@@ -1852,7 +1852,7 @@ void sim_set_light_hue(int hue) {
 
 void sim_set_tuning_mode(int enable) {
     g_telemetry.tuning_mode = (enable != 0);
-    g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+    g_telemetry.mode_badge_until = millis() + 2500;
     Buttons.setTuningMode(g_telemetry.tuning_mode);
     ModeManager::instance().setTuningMode(g_telemetry.tuning_mode);
     if (!g_telemetry.tuning_mode && g_telemetry.screen == SCREEN_RACE_TIMER) {
@@ -1874,7 +1874,7 @@ void sim_set_tuning_mode(int enable) {
 
 void sim_toggle_tuning_mode() {
     g_telemetry.tuning_mode = !g_telemetry.tuning_mode;
-    g_telemetry.mode_badge_until = g_sim_uptime_ms + 2500;
+    g_telemetry.mode_badge_until = millis() + 2500;
     Buttons.setTuningMode(g_telemetry.tuning_mode);
     ModeManager::instance().setTuningMode(g_telemetry.tuning_mode);
     if (!g_telemetry.tuning_mode && g_telemetry.screen == SCREEN_RACE_TIMER) {
