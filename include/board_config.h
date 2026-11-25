@@ -144,6 +144,9 @@
 // WLED Addressable Underglow / Brake Strip (WS2812B / SK6812 / WS2815 via ESP32-S3 RMT)
 #define PIN_WLED_DATA       15
 #define WLED_LED_COUNT      60
+#ifndef WLED_REAR_LED_COUNT
+#define WLED_REAR_LED_COUNT 12
+#endif
 #ifndef ENABLE_WLED
 #define ENABLE_WLED         1
 #endif

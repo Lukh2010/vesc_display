@@ -329,6 +329,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <span><button onclick="fetch('/api/emergency_unlock').catch(()=>{})" style="background:#0f172a; border:1px solid #eab308; color:#fde047; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔓 Emergency Unlock</button></span>
   <span><button onclick="fetch('/api/boot_animation').catch(()=>{})" style="background:#0f172a; border:1px solid #a855f7; color:#c084fc; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🎬 Boot Animation (Replay)</button></span>
   <span><button onclick="fetch('/api/vesc_link?toggle=1').catch(()=>{})" style="background:#0f172a; border:1px solid #06b6d4; color:#22d3ee; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">🔌 VESC Link Toggle (V)</button></span>
+  <span><a href="/wled" target="_blank" style="background:#0f172a; border:1px solid #a855f7; color:#e9d5ff; border-radius:4px; padding:2px 8px; text-decoration:none; font-weight:bold; font-size:11px;">💡 WLED Studio</a></span>
   <span><a href="/portal" target="_blank" style="color:#00e5ff; text-decoration:underline; font-weight:bold;">⚙️ Captive Portal</a> (<a href="http://localhost:8081" target="_blank" style="color:#00e5ff;">Port 8081</a>)</span>
 </div>
 
@@ -509,6 +510,276 @@ HTML_PAGE = """<!DOCTYPE html>
 
 PORTAL_HTML_CACHE = None
 
+WLED_LOCK = threading.Lock()
+WLED_STATE = {
+    "on": True,
+    "bri": 180,
+    "fx": 1,
+    "col": [0, 229, 255],
+    "rear": 12,
+    "theme": True,
+}
+WLED_EFFECTS = ["Solid", "Speed-Glow", "Breathe", "Rainbow", "Scanner"]
+
+def build_wled_state_dict():
+    with sim_lock:
+        tuning = bool(current_telemetry.tuning_mode)
+    with WLED_LOCK:
+        s = dict(WLED_STATE)
+        col = list(WLED_STATE["col"])
+    return {
+        "on": s["on"],
+        "bri": s["bri"],
+        "transition": 0,
+        "ps": -1,
+        "pl": -1,
+        "rear": s["rear"],
+        "theme": s["theme"],
+        "tuning": tuning,
+        "seg": [{
+            "id": 0,
+            "start": 0,
+            "stop": 60,
+            "len": 60,
+            "on": s["on"],
+            "bri": s["bri"],
+            "col": [col, [0, 0, 0], [0, 0, 0]],
+            "fx": s["fx"],
+            "sx": 128,
+            "ix": 128,
+            "pal": 0,
+        }],
+    }
+
+def build_wled_info_dict():
+    return {
+        "ver": "0.14.0",
+        "vid": 2312080,
+        "leds": {"count": 60, "pwr": 0, "fps": 40, "maxpwr": 850, "maxseg": 2, "rgbw": False},
+        "str": False,
+        "name": "VESC-Dash-WLED-Sim",
+        "udpport": 21324,
+        "live": False,
+        "fxcount": 5,
+        "palcount": 1,
+        "arch": "esp32s3",
+        "core": "v4.4",
+        "freeheap": 245760,
+        "uptime": int(time.time()),
+        "opt": 79,
+        "brand": "WLED",
+        "product": "VESC-HyperDash",
+        "ip": "127.0.0.1",
+    }
+
+def apply_wled_state_json(body):
+    try:
+        data = json.loads(body) if body else {}
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    with WLED_LOCK:
+        if isinstance(data.get("on"), bool):
+            WLED_STATE["on"] = data["on"]
+        if isinstance(data.get("bri"), (int, float)):
+            WLED_STATE["bri"] = max(0, min(255, int(data["bri"])))
+        if isinstance(data.get("rear"), (int, float)):
+            WLED_STATE["rear"] = max(0, min(60, int(data["rear"])))
+        has_theme = isinstance(data.get("theme"), bool)
+        if has_theme:
+            WLED_STATE["theme"] = data["theme"]
+        if isinstance(data.get("fx"), (int, float)):
+            WLED_STATE["fx"] = max(0, min(4, int(data["fx"])))
+        segs = data.get("seg")
+        if isinstance(segs, list) and segs and isinstance(segs[0], dict):
+            s0 = segs[0]
+            if isinstance(s0.get("fx"), (int, float)):
+                WLED_STATE["fx"] = max(0, min(4, int(s0["fx"])))
+            if isinstance(s0.get("on"), bool):
+                WLED_STATE["on"] = s0["on"]
+            if isinstance(s0.get("bri"), (int, float)):
+                WLED_STATE["bri"] = max(0, min(255, int(s0["bri"])))
+            cols = s0.get("col")
+            if isinstance(cols, list) and cols and isinstance(cols[0], list) and len(cols[0]) >= 3:
+                if not (has_theme and WLED_STATE["theme"]):
+                    WLED_STATE["col"] = [max(0, min(255, int(c))) for c in cols[0][:3]]
+                    WLED_STATE["theme"] = False
+
+WLED_HTML_PAGE = r"""<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>VESC WLED Studio (Simulator)</title>
+<style>
+:root{--bg:#06090f;--card:#0e1522;--bdr:#1e293b;--acc:#00e5ff;--ok:#10b981;--warn:#f59e0b;--red:#ef4444;--txt:#e2e8f0;--mut:#64748b}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:radial-gradient(circle at 50% -10%,#102038 0%,var(--bg) 65%);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;min-height:100vh;padding:16px;display:flex;justify-content:center}
+.wrap{width:100%;max-width:560px;display:flex;flex-direction:column;gap:14px}
+.hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:var(--card);border:1px solid var(--bdr);border-radius:16px}
+.brand h1{font-size:18px;letter-spacing:1.2px;font-weight:800;background:linear-gradient(90deg,#00e5ff,#38bdf8,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.brand small{color:var(--mut);font-size:11px;letter-spacing:.5px}
+.pwr{border:none;border-radius:999px;padding:10px 20px;font-weight:800;font-size:13px;cursor:pointer;transition:.2s;letter-spacing:.8px}
+.pwr.on{background:linear-gradient(135deg,#00e5ff,#0284c7);color:#04101c;box-shadow:0 0 18px rgba(0,229,255,.45)}
+.pwr.off{background:#1e293b;color:#94a3b8}
+.badge{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-radius:12px;font-size:12px;font-weight:700;letter-spacing:.3px;border:1px solid rgba(16,185,129,.35);background:rgba(16,185,129,.1);color:#34d399}
+.badge.stealth{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.12);color:#fbbf24}
+.badge button{background:#0a101b;border:1px solid currentColor;color:inherit;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer}
+.card{background:var(--card);border:1px solid var(--bdr);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.lbl{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#94a3b8}
+.lbl span:last-child{color:var(--acc);font-family:monospace;font-size:13px}
+.strip-box{background:#05070c;border:1px solid #172033;border-radius:12px;padding:12px 10px}
+.strip{display:grid;grid-template-columns:repeat(30,1fr);gap:3px}
+.led{height:12px;border-radius:3px;background:#111827;transition:background .08s,box-shadow .08s}
+.seg-info{display:flex;justify-content:space-between;margin-top:8px;font-size:11px;color:var(--mut)}
+.seg-info b{color:#cbd5e1}
+.fx-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.fx{background:#0a101b;border:1px solid var(--bdr);color:#cbd5e1;border-radius:10px;padding:10px 6px;font-size:12px;font-weight:700;cursor:pointer;transition:.15s;text-align:center}
+.fx:hover{border-color:#38bdf8}
+.fx.act{background:rgba(0,229,255,.14);border-color:var(--acc);color:#fff;box-shadow:0 0 12px rgba(0,229,255,.25)}
+.col-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+input[type=color]{width:48px;height:38px;border:none;border-radius:10px;background:none;cursor:pointer}
+.sw{width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.2);cursor:pointer;transition:.15s}
+.sw:hover{transform:scale(1.12)}
+.tbtn{margin-left:auto;background:#0a101b;border:1px solid var(--bdr);color:#cbd5e1;border-radius:10px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer}
+.tbtn.act{border-color:#a855f7;background:rgba(168,85,247,.2);color:#e9d5ff}
+input[type=range]{width:100%;accent-color:var(--acc);height:6px;cursor:pointer}
+.ftr{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--mut);padding:4px 6px}
+.ftr a{color:var(--acc);text-decoration:none;font-weight:700}
+</style></head><body>
+<div class="wrap">
+  <div class="hdr">
+    <div class="brand"><h1>VESC WLED STUDIO</h1><small>2-SEGMENT STEALTH ENGINE &bull; WLED-APP API (LOCALHOST)</small></div>
+    <button id="pwr" class="pwr on" onclick="togglePwr()">AN</button>
+  </div>
+  <div id="stealth" class="badge">
+    <span id="stealth-txt">&#x1F6E1; STEALTH-SCHUTZ: Unterboden nur im Tuning-Modus aktiv</span>
+    <button onclick="fetch('/api/tuning?toggle=1').catch(()=>{})">Modus umschalten</button>
+  </div>
+  <div class="card">
+    <div class="lbl"><span>Live 60-LED Vorschau</span><span id="split-txt">0..11 R&uuml;cklicht | 12..59 Unterboden</span></div>
+    <div class="strip-box">
+      <div id="strip" class="strip"></div>
+      <div class="seg-info"><span>&#x1F534; Seg 0: <b>R&uuml;cklicht / Bremse</b></span><span>&#x2728; Seg 1: <b>Unterboden (Tuning)</b></span></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="lbl"><span>Effekt-Modus (Unterboden)</span><span id="fx-name">Speed-Glow</span></div>
+    <div class="fx-grid" id="fx-grid">
+      <button class="fx" data-fx="0">Solid</button>
+      <button class="fx" data-fx="1">Speed-Glow</button>
+      <button class="fx" data-fx="2">Breathe</button>
+      <button class="fx" data-fx="3">Rainbow</button>
+      <button class="fx" data-fx="4">Scanner</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="lbl"><span>Farbe &amp; Theme-Sync</span><span id="col-hex">#00E5FF</span></div>
+    <div class="col-row">
+      <input type="color" id="picker" value="#00e5ff">
+      <div class="sw" style="background:#00e5ff" onclick="pickHex('#00e5ff')"></div>
+      <div class="sw" style="background:#10b981" onclick="pickHex('#10b981')"></div>
+      <div class="sw" style="background:#f43f5e" onclick="pickHex('#f43f5e')"></div>
+      <div class="sw" style="background:#a855f7" onclick="pickHex('#a855f7')"></div>
+      <div class="sw" style="background:#f59e0b" onclick="pickHex('#f59e0b')"></div>
+      <div class="sw" style="background:#ffffff" onclick="pickHex('#ffffff')"></div>
+      <button id="theme-btn" class="tbtn act" onclick="toggleTheme()">&#x1F3A8; Theme-Sync</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="lbl"><span>Helligkeit</span><span id="bri-val">71%</span></div>
+    <input type="range" id="bri" min="10" max="255" value="180">
+    <div class="lbl" style="margin-top:6px"><span>R&uuml;cklicht-LEDs (Segment 0)</span><span id="rear-val">12 LEDs</span></div>
+    <input type="range" id="rear" min="0" max="30" value="12">
+  </div>
+  <div class="ftr">
+    <span>WLED-App API: <b>/json</b> aktiv</span>
+    <a href="/">&#x2B05; Zur&uuml;ck zum Live Display</a>
+  </div>
+</div>
+<script>
+const FX=["Solid","Speed-Glow","Breathe","Rainbow","Scanner"];
+let S={on:true,bri:180,fx:1,col:[0,229,255],rear:12,theme:true,tuning:true,brake:false};
+const strip=document.getElementById("strip");
+const leds=[];
+for(let i=0;i<60;i++){const d=document.createElement("div");d.className="led";strip.appendChild(d);leds.push(d);}
+function hex(r,g,b){return "#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join("").toUpperCase();}
+function syncUI(){
+  const p=document.getElementById("pwr");
+  p.textContent=S.on?"AN":"AUS";p.className="pwr "+(S.on?"on":"off");
+  document.getElementById("bri").value=S.bri;
+  document.getElementById("bri-val").textContent=Math.round(S.bri*100/255)+"%";
+  document.getElementById("rear").value=S.rear;
+  document.getElementById("rear-val").textContent=S.rear+" LEDs";
+  document.getElementById("split-txt").textContent=S.rear>0?`0..${S.rear-1} R\u00fccklicht | ${S.rear}..59 Unterboden`:"0..59 Unterboden";
+  document.getElementById("fx-name").textContent=FX[S.fx]||"Solid";
+  document.querySelectorAll(".fx").forEach(b=>b.classList.toggle("act",Number(b.dataset.fx)===S.fx));
+  const h=hex(S.col[0],S.col[1],S.col[2]);
+  document.getElementById("picker").value=h.toLowerCase();
+  document.getElementById("col-hex").textContent=S.theme?"THEME":h;
+  document.getElementById("theme-btn").classList.toggle("act",S.theme);
+  const sb=document.getElementById("stealth");
+  sb.classList.toggle("stealth",!S.tuning);
+  document.getElementById("stealth-txt").textContent=S.tuning?"\u2705 TUNING-MODUS: Unterboden + R\u00fccklicht aktiv":"\uD83D\uDC6E POLICE-MODUS (STEALTH): Unterboden AUS, nur R\u00fccklicht aktiv";
+}
+async function push(payload){
+  try{
+    const r=await fetch("/json/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    const d=await r.json();applyState(d);
+  }catch(e){}
+}
+function applyState(d){
+  if(!d)return;
+  if(typeof d.on==="boolean")S.on=d.on;
+  if(typeof d.bri==="number")S.bri=d.bri;
+  if(typeof d.rear==="number")S.rear=d.rear;
+  if(typeof d.theme==="boolean")S.theme=d.theme;
+  if(typeof d.tuning==="boolean")S.tuning=d.tuning;
+  if(d.seg&&d.seg[0]){
+    if(typeof d.seg[0].fx==="number")S.fx=d.seg[0].fx;
+    if(d.seg[0].col&&d.seg[0].col[0])S.col=d.seg[0].col[0];
+  }
+  syncUI();
+}
+function togglePwr(){S.on=!S.on;syncUI();push({on:S.on});}
+function toggleTheme(){S.theme=!S.theme;syncUI();push({theme:S.theme});}
+function pickHex(h){
+  const r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);
+  S.col=[r,g,b];S.theme=false;syncUI();push({theme:false,seg:[{col:[[r,g,b]]}]});
+}
+document.getElementById("picker").addEventListener("input",e=>pickHex(e.target.value));
+document.getElementById("bri").addEventListener("change",e=>{S.bri=Number(e.target.value);syncUI();push({bri:S.bri});});
+document.getElementById("bri").addEventListener("input",e=>{S.bri=Number(e.target.value);document.getElementById("bri-val").textContent=Math.round(S.bri*100/255)+"%";});
+document.getElementById("rear").addEventListener("change",e=>{S.rear=Number(e.target.value);syncUI();push({rear:S.rear});});
+document.getElementById("rear").addEventListener("input",e=>{S.rear=Number(e.target.value);syncUI();});
+document.querySelectorAll(".fx").forEach(b=>b.addEventListener("click",()=>{S.fx=Number(b.dataset.fx);syncUI();push({seg:[{fx:S.fx}]});}));
+function hsv(h){let f=(n,k=(n+h*6)%6)=>1-Math.max(Math.min(k,4-k,1),0);return[Math.round(f(5)*255),Math.round(f(3)*255),Math.round(f(1)*255)];}
+let tick=0;
+function anim(){
+  tick++;
+  const bri=S.bri/255;
+  for(let i=0;i<60;i++){
+    let r=0,g=0,b=0;
+    if(S.on){
+      if(i<S.rear){r=S.brake?255:110;g=0;b=0;}
+      else if(S.tuning){
+        const k=i-S.rear,n=Math.max(1,60-S.rear);
+        let c=S.col;
+        if(S.fx===0){r=c[0];g=c[1];b=c[2];}
+        else if(S.fx===1){const w=.45+.55*Math.sin(tick*.14-k*.25);r=c[0]*w;g=c[1]*w;b=c[2]*w;}
+        else if(S.fx===2){const w=.25+.75*(.5+.5*Math.sin(tick*.07));r=c[0]*w;g=c[1]*w;b=c[2]*w;}
+        else if(S.fx===3){c=hsv((k/n+tick*.008)%1);r=c[0];g=c[1];b=c[2];}
+        else if(S.fx===4){const pos=(Math.sin(tick*.08)*.5+.5)*(n-1);const d=Math.max(0,1-Math.abs(k-pos)/4.5);r=c[0]*d;g=c[1]*d;b=c[2]*d;}
+      }
+    }
+    r=Math.round(r*bri);g=Math.round(g*bri);b=Math.round(b*bri);
+    const el=leds[i];
+    if(r+g+b>8){el.style.background=`rgb(${r},${g},${b})`;el.style.boxShadow=`0 0 6px rgb(${r},${g},${b})`;}
+    else{el.style.background="#111827";el.style.boxShadow="none";}
+  }
+  requestAnimationFrame(anim);
+}
+fetch("/json/state").then(r=>r.json()).then(applyState).catch(()=>{});
+setInterval(()=>{fetch("/api/telemetry").then(r=>r.ok?r.json():null).then(t=>{if(!t)return;S.tuning=!!t.tuning_mode;S.brake=(t.current_amps<-2.0||t.g_force<-0.45);syncUI();}).catch(()=>{});},400);
+syncUI();anim();
+</script></body></html>"""
+
 def get_captive_portal_html():
     return """<!DOCTYPE html><html><head><meta charset="utf-8"><title>HyperDash Autark</title>
     <style>body{background:#0a0c10;color:#fff;font-family:sans-serif;text-align:center;padding:50px;}</style></head>
@@ -521,6 +792,23 @@ class WebDemoHandler(BaseHTTPRequestHandler):
         # Silence HTTP access logs to keep console clean
         return
 
+    def send_cors_json(self, payload):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.end_headers()
+        self.wfile.write(json.dumps(payload).encode("utf-8"))
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -531,6 +819,30 @@ class WebDemoHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(HTML_PAGE.encode("utf-8"))
+
+        elif path == "/wled":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(WLED_HTML_PAGE.encode("utf-8"))
+
+        elif path == "/json/state":
+            self.send_cors_json(build_wled_state_dict())
+
+        elif path == "/json/info":
+            self.send_cors_json(build_wled_info_dict())
+
+        elif path == "/json/eff":
+            self.send_cors_json(WLED_EFFECTS)
+
+        elif path == "/json":
+            self.send_cors_json({
+                "state": build_wled_state_dict(),
+                "info": build_wled_info_dict(),
+                "effects": WLED_EFFECTS,
+                "palettes": ["Default"],
+            })
 
         elif path in ["/portal", "/portal.html"]:
             self.send_response(200)
@@ -840,6 +1152,10 @@ class WebDemoHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
 
+        elif path in ("/json/state", "/json"):
+            apply_wled_state_json(body)
+            self.send_cors_json(build_wled_state_dict())
+
         elif path == "/update":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -933,6 +1249,10 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
+
+        elif path in ("/json/state", "/json"):
+            apply_wled_state_json(body)
+            self.send_cors_json(build_wled_state_dict())
 
         elif path == "/update":
             self.send_response(200)

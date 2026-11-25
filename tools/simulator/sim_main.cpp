@@ -4198,6 +4198,80 @@ int main(int argc, char **argv) {
         printf("[PASS] Regression test: Fault-Blackbox Modal Open, Clear (Count==0) & Close (Test #12)\n");
     }
 
+    // -------------------------------------------------------------
+    // Regression Test 13: WLED 2-Segment Stealth-Underglow (Police vs Tuning + API)
+    // -------------------------------------------------------------
+    {
+        WledController &wled = WledController::instance();
+        wled.begin();
+        wled.setEnabled(true);
+        wled.setBrightness(255);
+        wled.setRearLedCount(WLED_REAR_LED_COUNT);
+        assert(wled.getRearLedCount() == 12);
+
+        DashTelemetry st;
+        setBaseTelemetry(st);
+        uint32_t t_ms = 9000;
+
+        // 1. Police Mode (!tuning_mode): Segment 0 legal rear red, Segment 1 STRICTLY (0,0,0)!
+        st.tuning_mode = false;
+        st.is_locked = false;
+        st.theft_alarm_active = false;
+        st.current_amps = 4.0f;
+        st.speed_kmh = 20.0f;
+        wled.setCustomColor(0, 255, 128);
+        wled.setEffect(WledController::EFFECT_SOLID);
+        wled.update(st, t_ms);
+        for (int i = 0; i < wled.getRearLedCount(); i++) {
+            WledRgb c = wled.getLedRgb(i);
+            assert(c.r == 90 && c.g == 0 && c.b == 0);
+        }
+        for (int i = wled.getRearLedCount(); i < wled.getLedCount(); i++) {
+            WledRgb c = wled.getLedRgb(i);
+            assert(c.r == 0 && c.g == 0 && c.b == 0);
+        }
+
+        // Police Mode Braking: Segment 0 bright brake red, Segment 1 STILL STRICTLY (0,0,0)!
+        st.current_amps = -6.0f;
+        t_ms += 40;
+        wled.update(st, t_ms);
+        assert(wled.getLedRgb(0).r == 255 && wled.getLedRgb(0).g == 0 && wled.getLedRgb(0).b == 0);
+        assert(wled.getLedRgb(12).r == 0 && wled.getLedRgb(12).g == 0 && wled.getLedRgb(12).b == 0);
+
+        // 2. Tuning Mode (tuning_mode == true): Segment 0 rear tail, Segment 1 Custom Color & Effects!
+        st.tuning_mode = true;
+        st.current_amps = 8.0f;
+        t_ms += 40;
+        wled.update(st, t_ms);
+        assert(wled.getLedRgb(0).r == 90 && wled.getLedRgb(0).g == 0 && wled.getLedRgb(0).b == 0);
+        assert(wled.getLedRgb(12).r == 0 && wled.getLedRgb(12).g == 255 && wled.getLedRgb(12).b == 128);
+        assert(wled.getColorR() == 0 && wled.getColorG() == 255 && wled.getColorB() == 128);
+        assert(!wled.isUsingThemeColor());
+
+        // Theme color + Rainbow + Scanner + Clamping
+        wled.setUseThemeColor(true);
+        assert(wled.isUsingThemeColor());
+        st.color_theme = THEME_NIGHT_DIM;
+        wled.setEffect(WledController::EFFECT_RAINBOW);
+        t_ms += 40;
+        wled.update(st, t_ms);
+        WledRgb r0 = wled.getLedRgb(12), r1 = wled.getLedRgb(36);
+        assert((r0.r != r1.r) || (r0.g != r1.g) || (r0.b != r1.b));
+
+        wled.setEffect(99);
+        assert(wled.getEffect() == WledController::EFFECT_SCANNER);
+        wled.setRearLedCount(250);
+        assert(wled.getRearLedCount() == WLED_LED_COUNT);
+
+        // Restore clean defaults
+        wled.setRearLedCount(WLED_REAR_LED_COUNT);
+        wled.setUseThemeColor(true);
+        wled.setEffect(WledController::EFFECT_SPEED_GLOW);
+        wled.setBrightness(180);
+        wled.setEnabled(true);
+        printf("[PASS] Regression test: WLED 2-Segment Stealth-Underglow (Police Stealth vs Tuning Custom/Effects) (Test #13)\n");
+    }
+
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");
     return 0;
 }

@@ -20,23 +20,44 @@ enum WledEffectMode : uint8_t {
 };
 
 /**
- * @brief Zero-heap Hardware-RMT WLED engine for WS2812B / SK6812 / WS2815 strips.
+ * @brief Zero-heap 2-Segment Hardware-RMT WLED engine for WS2812B / SK6812 / WS2815 strips.
  *
- * Designed to execute at ~40 Hz inside Core 0 realtimeTask while remaining
- * 100% deterministic and testable under NATIVE_SIMULATOR.
+ * Segment 0 (0 .. _rear_led_count - 1): Legal Rear Tail & Adaptive Brake Light (always active).
+ * Segment 1 (_rear_led_count .. WLED_LED_COUNT - 1): Tuning Underglow (STRICTLY OFF in Police Mode).
  */
 class WledController {
 public:
+    static constexpr uint8_t EFFECT_SOLID      = 0;
+    static constexpr uint8_t EFFECT_SPEED_GLOW = 1;
+    static constexpr uint8_t EFFECT_BREATHE    = 2;
+    static constexpr uint8_t EFFECT_RAINBOW    = 3;
+    static constexpr uint8_t EFFECT_SCANNER    = 4;
+    static constexpr uint8_t EFFECT_MAX        = 4;
+
     static WledController& instance();
 
     void begin();
     void update(const DashTelemetry &telemetry, uint32_t now_ms);
 
-    void setEnabled(bool enabled);
-    bool isEnabled() const { return _enabled; }
+    void setEnabled(bool en);
+    bool isEnabled() const;
 
-    void setBrightness(uint8_t brightness);
-    uint8_t getBrightness() const { return _brightness; }
+    void setBrightness(uint8_t bri);
+    uint8_t getBrightness() const;
+
+    void setCustomColor(uint8_t r, uint8_t g, uint8_t b);
+    void setUseThemeColor(bool use_theme);
+    bool isUsingThemeColor() const;
+
+    uint8_t getColorR() const;
+    uint8_t getColorG() const;
+    uint8_t getColorB() const;
+
+    void setEffect(uint8_t fx);
+    uint8_t getEffect() const;
+
+    void setRearLedCount(uint8_t count);
+    uint8_t getRearLedCount() const;
 
     WledRgb getLedRgb(int idx) const;
     WledEffectMode getActiveMode() const { return _active_mode; }
@@ -47,8 +68,11 @@ private:
 
     static WledRgb themePrimaryRgb(uint8_t color_theme);
     static WledRgb scaleRgb(WledRgb c, uint8_t scale);
+    static WledRgb colorWheel(uint8_t pos);
 
     void renderEffect(const DashTelemetry &telemetry, uint32_t now_ms, uint32_t dt_ms);
+    void renderUnderglowSegment(uint8_t rear_count, uint8_t effect, WledRgb base, uint8_t brightness,
+                                const DashTelemetry &telemetry, uint32_t now_ms, uint32_t dt_ms);
     void flushHardware();
 
     WledRgb        _leds[WLED_LED_COUNT];
@@ -57,6 +81,12 @@ private:
     bool           _rmt_ready;
     bool           _has_updated;
     uint8_t        _brightness;
+    bool           _use_theme_color;
+    uint8_t        _custom_r;
+    uint8_t        _custom_g;
+    uint8_t        _custom_b;
+    uint8_t        _effect;
+    uint8_t        _rear_led_count;
     WledEffectMode _active_mode;
     uint32_t       _last_update_ms;
     uint32_t       _anim_phase;

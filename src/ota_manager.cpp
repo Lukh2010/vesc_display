@@ -1,4 +1,10 @@
 #include "ota_manager.h"
+#if !defined(NATIVE_SIMULATOR)
+#include "wled_controller.h"
+#include "wled_web_ui.h"
+#include <ctype.h>
+#include <stdlib.h>
+#endif
 
 OtaManager& OtaManager::instance() {
     static OtaManager s_instance;
@@ -218,6 +224,115 @@ static const uint8_t OTA_HTML_PAGE_GZ[] PROGMEM = {
     0x25, 0x4F, 0x1D, 0x00, 0x00
 };
 
+static const char* findJsonKey(const char* json, const char* key) {
+    char pat[24];
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    const char* p = strstr(json, pat);
+    if (!p) return nullptr;
+    p += strlen(pat);
+    while (*p && (*p == ' ' || *p == '\t' || *p == ':' || *p == '\r' || *p == '\n')) p++;
+    return p;
+}
+
+static bool parseJsonBool(const char* json, const char* key, bool& out) {
+    const char* p = findJsonKey(json, key);
+    if (!p) return false;
+    if (strncmp(p, "true", 4) == 0 || *p == '1') { out = true; return true; }
+    if (strncmp(p, "false", 5) == 0 || *p == '0') { out = false; return true; }
+    return false;
+}
+
+static bool parseJsonInt(const char* json, const char* key, int& out) {
+    const char* p = findJsonKey(json, key);
+    if (!p || (!isdigit((unsigned char)*p) && *p != '-')) return false;
+    out = (int)strtol(p, nullptr, 10);
+    return true;
+}
+
+static void applyWledStateJson(const char* body) {
+    if (!body || !*body) return;
+    WledController& w = WledController::instance();
+
+    bool bval = false;
+    int ival = 0;
+
+    if (parseJsonBool(body, "on", bval)) w.setEnabled(bval);
+    if (parseJsonInt(body, "bri", ival)) {
+        if (ival < 0) ival = 0;
+        if (ival > 255) ival = 255;
+        w.setBrightness((uint8_t)ival);
+    }
+    if (parseJsonInt(body, "fx", ival)) {
+        if (ival < 0) ival = 0;
+        w.setEffect((uint8_t)ival);
+    }
+    if (parseJsonInt(body, "rear", ival)) {
+        if (ival < 0) ival = 0;
+        if (ival > WLED_LED_COUNT) ival = WLED_LED_COUNT;
+        w.setRearLedCount((uint8_t)ival);
+    }
+
+    bool has_theme = parseJsonBool(body, "theme", bval);
+    if (has_theme) w.setUseThemeColor(bval);
+
+    // Parse WLED color array: "col":[[r,g,b]...]
+    const char* col = findJsonKey(body, "col");
+    if (col && !(has_theme && bval)) {
+        while (*col && *col != '[') col++;
+        while (*col == '[' || *col == ' ') col++;
+        if (isdigit((unsigned char)*col)) {
+            char* end = nullptr;
+            long r = strtol(col, &end, 10);
+            if (end && *end == ',') {
+                long g = strtol(end + 1, &end, 10);
+                if (end && *end == ',') {
+                    long b = strtol(end + 1, &end, 10);
+                    if (r < 0) r = 0; if (r > 255) r = 255;
+                    if (g < 0) g = 0; if (g > 255) g = 255;
+                    if (b < 0) b = 0; if (b > 255) b = 255;
+                    w.setCustomColor((uint8_t)r, (uint8_t)g, (uint8_t)b);
+                }
+            }
+        }
+    }
+}
+
+static size_t buildWledStateJson(char* out, size_t out_size) {
+    WledController& w = WledController::instance();
+    int n = snprintf(out, out_size,
+        "{\"on\":%s,\"bri\":%u,\"transition\":0,\"ps\":-1,\"pl\":-1,"
+        "\"rear\":%u,\"theme\":%s,"
+        "\"seg\":[{\"id\":0,\"start\":0,\"stop\":%d,\"len\":%d,"
+        "\"on\":%s,\"bri\":%u,\"col\":[[%u,%u,%u],[0,0,0],[0,0,0]],"
+        "\"fx\":%u,\"sx\":128,\"ix\":128,\"pal\":0}]}",
+        w.isEnabled() ? "true" : "false",
+        (unsigned)w.getBrightness(),
+        (unsigned)w.getRearLedCount(),
+        w.isUsingThemeColor() ? "true" : "false",
+        WLED_LED_COUNT, WLED_LED_COUNT,
+        w.isEnabled() ? "true" : "false",
+        (unsigned)w.getBrightness(),
+        (unsigned)w.getColorR(), (unsigned)w.getColorG(), (unsigned)w.getColorB(),
+        (unsigned)w.getEffect());
+    return (n > 0 && (size_t)n < out_size) ? (size_t)n : (out_size - 1);
+}
+
+static size_t buildWledInfoJson(char* out, size_t out_size) {
+    String ip = WiFi.softAPIP().toString();
+    int n = snprintf(out, out_size,
+        "{\"ver\":\"0.14.0\",\"vid\":2312080,"
+        "\"leds\":{\"count\":%d,\"pwr\":0,\"fps\":40,\"maxpwr\":850,\"maxseg\":2,\"rgbw\":false},"
+        "\"str\":false,\"name\":\"VESC-Dash-WLED\",\"udpport\":21324,\"live\":false,"
+        "\"fxcount\":5,\"palcount\":1,\"arch\":\"esp32s3\",\"core\":\"v4.4\","
+        "\"freeheap\":%u,\"uptime\":%u,\"opt\":79,"
+        "\"brand\":\"WLED\",\"product\":\"VESC-HyperDash\",\"ip\":\"%s\"}",
+        WLED_LED_COUNT,
+        (unsigned int)ESP.getFreeHeap(),
+        (unsigned int)(millis() / 1000UL),
+        ip.c_str());
+    return (n > 0 && (size_t)n < out_size) ? (size_t)n : (out_size - 1);
+}
+
 void OtaManager::setupRoutes() {
     const char* headerkeys[] = {"Content-Length"};
     _server.collectHeaders(headerkeys, 1);
@@ -232,6 +347,76 @@ void OtaManager::setupRoutes() {
     _server.on("/update", HTTP_GET, [this]() {
         _server.sendHeader("Content-Encoding", "gzip");
         _server.send_P(200, "text/html", (const char*)OTA_HTML_PAGE_GZ, sizeof(OTA_HTML_PAGE_GZ));
+    });
+
+    // 2b. WLED Studio Web-UI (Gzip compressed)
+    _server.on("/wled", HTTP_GET, [this]() {
+        _server.sendHeader("Content-Encoding", "gzip");
+        _server.send_P(200, "text/html", (const char*)WLED_HTML_PAGE_GZ, sizeof(WLED_HTML_PAGE_GZ));
+    });
+
+    // 2c. Official WLED-App compatible JSON-API
+    auto sendCors = [this]() {
+        _server.sendHeader("Access-Control-Allow-Origin", "*");
+        _server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        _server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    };
+
+    _server.on("/json/info", HTTP_GET, [this, sendCors]() {
+        char buf[512];
+        buildWledInfoJson(buf, sizeof(buf));
+        sendCors();
+        _server.send(200, "application/json", buf);
+    });
+
+    _server.on("/json/state", HTTP_GET, [this, sendCors]() {
+        char buf[384];
+        buildWledStateJson(buf, sizeof(buf));
+        sendCors();
+        _server.send(200, "application/json", buf);
+    });
+
+    _server.on("/json/eff", HTTP_GET, [this, sendCors]() {
+        sendCors();
+        _server.send(200, "application/json",
+            "[\"Solid\",\"Speed-Glow\",\"Breathe\",\"Rainbow\",\"Scanner\"]");
+    });
+
+    _server.on("/json", HTTP_GET, [this, sendCors]() {
+        char st[384];
+        char inf[512];
+        char full[1024];
+        buildWledStateJson(st, sizeof(st));
+        buildWledInfoJson(inf, sizeof(inf));
+        snprintf(full, sizeof(full),
+            "{\"state\":%s,\"info\":%s,"
+            "\"effects\":[\"Solid\",\"Speed-Glow\",\"Breathe\",\"Rainbow\",\"Scanner\"],"
+            "\"palettes\":[\"Default\"]}",
+            st, inf);
+        sendCors();
+        _server.send(200, "application/json", full);
+    });
+
+    auto handleWledPost = [this, sendCors]() {
+        if (_server.hasArg("plain")) {
+            applyWledStateJson(_server.arg("plain").c_str());
+        }
+        char buf[384];
+        buildWledStateJson(buf, sizeof(buf));
+        sendCors();
+        _server.send(200, "application/json", buf);
+    };
+
+    _server.on("/json/state", HTTP_POST, handleWledPost);
+    _server.on("/json", HTTP_POST, handleWledPost);
+
+    _server.on("/json/state", HTTP_OPTIONS, [this, sendCors]() {
+        sendCors();
+        _server.send(204, "text/plain", "");
+    });
+    _server.on("/json", HTTP_OPTIONS, [this, sendCors]() {
+        sendCors();
+        _server.send(204, "text/plain", "");
     });
 
     // 3. Status JSON API for terminal/scripts
