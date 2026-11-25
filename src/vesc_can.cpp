@@ -153,8 +153,10 @@ void sendVescCanBufferToDetected(const uint8_t *data, size_t len,
 
 // Reassemble VESC CAN buffer replies addressed to ESP_CAN_ID (cmd 5, 6, 7, 8)
 bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **out_payload, size_t *out_len) {
+    if (msg.data_length_code > 8) {
+        return false;
+    }
     static uint32_t s_last_rx_frame_ms = 0;
-    static uint8_t  s_last_src_id = 0xFF;
     static bool     s_in_progress = false;
 
     uint32_t now_ms = millis();
@@ -163,7 +165,6 @@ bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **out_payl
     // Timeout: if no subsequent frame arrived for >500ms, abort incomplete reassembly
     if (s_in_progress && (now_ms - s_last_rx_frame_ms > 500)) {
         s_in_progress = false;
-        s_last_src_id = 0xFF;
     }
 
     if (cmd_id == 5 && msg.data_length_code >= 2) {
@@ -202,8 +203,6 @@ bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **out_payl
             return false; // Not matching current reassembly session
         }
 
-        uint8_t sender_id = msg.data[0];
-        s_last_src_id = sender_id;
         s_in_progress = false;
 
         uint16_t rx_len = ((uint16_t)msg.data[2] << 8) | msg.data[3];
@@ -216,8 +215,6 @@ bool processCanRxFrameForEsp(const twai_message_t &msg, const uint8_t **out_payl
         return false;
     } else if (cmd_id == 8 && msg.data_length_code >= 3) {
         // CAN_PACKET_PROCESS_SHORT_BUFFER: data[0] is sender controller_id
-        uint8_t sender_id = msg.data[0];
-        s_last_src_id = sender_id;
         size_t rx_len = (size_t)msg.data_length_code - 2;
         if (rx_len <= 6) {
             memcpy(s_can_rx_buf, &msg.data[2], rx_len);

@@ -172,6 +172,7 @@ DashboardRenderer::DashboardRenderer()
       _pin_modal_success(false),
       _pin_modal_success_ms(0),
       _fault_modal_open(false),
+      _last_wled_sig(0xFFFFFFFFUL),
       _wizard_step(0),
       _wizard_inited(false),
       _wizard_pin_warn(false),
@@ -249,16 +250,19 @@ const lgfx::IFont* DashboardRenderer::getUiFont(UiFont f) const {
 }
 
 void DashboardRenderer::useFont(UiFont f) {
+    if (!_canvas) return;
     _canvas->setFont(getUiFont(f));
     _canvas->setTextSize(1);
 }
 
 void DashboardRenderer::resetFont() {
+    if (!_canvas) return;
     useFont(UIF_BODY);
     _canvas->setTextPadding(0);
 }
 
 void DashboardRenderer::drawSmoothText(UiFont f, const char *str, int x, int y, textdatum_t datum, uint16_t fg, uint16_t bg, int padW) {
+    if (!_canvas || !str) return;
     useFont(f);
     _canvas->setTextDatum(datum);
     _canvas->setTextColor(fg, bg);
@@ -269,7 +273,7 @@ void DashboardRenderer::drawSmoothText(UiFont f, const char *str, int x, int y, 
 
 void DashboardRenderer::begin(DisplayDriver *display) {
     _display = display;
-    _canvas = display->getCanvas();
+    _canvas = display ? display->getCanvas() : nullptr;
     initSmoothFonts();
     _cache.invalidate();
     _screen_dirty = true;
@@ -328,7 +332,10 @@ void DashboardRenderer::flushDirtyToDisplay() {
         } else {
             for (uint8_t i = 0; i < _dirty_rect_count; i++) {
                 const DirtyRect &r = _dirty_rects[i];
-                _display->pushRect(r.x, r.y, r.w, r.h);
+                if (r.x >= 0 && r.y >= 0 && r.w > 0 && r.h > 0 &&
+                    (int32_t)r.x + r.w <= 800 && (int32_t)r.y + r.h <= 480) {
+                    _display->pushRect(r.x, r.y, r.w, r.h);
+                }
             }
         }
     }
@@ -340,11 +347,13 @@ void DashboardRenderer::flushDirtyToDisplay() {
 // Common Vector Primitives (Cards, Pill Toggles, Icons)
 // ==============================================================================
 void DashboardRenderer::drawCard(int x, int y, int w, int h, uint16_t bg, uint16_t border, int r) {
+    if (!_canvas) return;
     _canvas->fillRoundRect(x, y, w, h, r, bg);
     _canvas->drawRoundRect(x, y, w, h, r, border);
 }
 
 void DashboardRenderer::drawPillToggle(int x, int y, bool on, const ColorThemePalette &pal) {
+    if (!_canvas) return;
     const int w = 58;
     const int h = 30;
     const int r = 15;
@@ -572,6 +581,7 @@ void DashboardRenderer::triggerNeedleSweep() {
 // Top-Level Screen Dispatcher
 // ==============================================================================
 void DashboardRenderer::render(const DashTelemetry &telemetry) {
+    if (!_canvas) return;
     struct RenderScopeGuard {
         DashboardRenderer *r;
         LovyanGFX *c;

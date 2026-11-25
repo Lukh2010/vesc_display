@@ -214,8 +214,9 @@ void DashboardRenderer::initRaceTimerScreen(const DashTelemetry &telemetry) {
 
     drawSmoothText(UIF_BODY, label3, 550, 316, textdatum_t::top_left, pal.muted, pal.surface);
 
-    _last_race_g_force_x10 = (int)roundf(telemetry.g_force * 10.0f);
-    drawGForceBadge(telemetry.g_force, 50, 416, 27, pal);
+    float gf_init = (isnan(telemetry.g_force) || isinf(telemetry.g_force)) ? 0.0f : telemetry.g_force;
+    _last_race_g_force_x10 = (int)roundf(gf_init * 10.0f);
+    drawGForceBadge(gf_init, 50, 416, 27, pal);
 }
 
 void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
@@ -287,7 +288,8 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
 
     // 2. Speedometer Arc (Differential Update, 270° sweep: 135° to 405°)
     float spd = telemetry.speed_kmh;
-    if (spd < 0.8f) spd = 0.0f;
+    if (isnan(spd) || spd < 0.8f) spd = 0.0f;
+    if (isinf(spd)) spd = 100.0f;
     float frac = std::min(spd / 100.0f, 1.0f);
     float target_angle = (frac <= 0.005f) ? 135.0f : (135.0f + frac * 270.0f);
 
@@ -414,10 +416,11 @@ void DashboardRenderer::renderRaceTimerScreen(const DashTelemetry &telemetry) {
         drawSplit(348, telemetry.race_split_0_70, active_0_70);
     }
 
-    int cur_g10 = (int)roundf(telemetry.g_force * 10.0f);
+    float gf_live = (isnan(telemetry.g_force) || isinf(telemetry.g_force)) ? 0.0f : telemetry.g_force;
+    int cur_g10 = (int)roundf(gf_live * 10.0f);
     if (cur_g10 != _last_race_g_force_x10) {
         _last_race_g_force_x10 = cur_g10;
-        drawGForceBadge(telemetry.g_force, 50, 416, 27, pal);
+        drawGForceBadge(gf_live, 50, 416, 27, pal);
         addDirtyRect(22, 388, 56, 56);
     }
 }
@@ -495,11 +498,14 @@ void DashboardRenderer::drawRaceDynoModal(const DashTelemetry &telemetry) {
 
     // Determine Peak & Summary Statistics
     // Fall back to realistic scooter specs if no run has been recorded yet
-    float peak_w  = (telemetry.race_dyno.peak_watts > 100.0f) ? telemetry.race_dyno.peak_watts : 3520.0f;
+    float pw_raw = telemetry.race_dyno.peak_watts;
+    float peak_w  = (!isnan(pw_raw) && !isinf(pw_raw) && pw_raw > 100.0f) ? pw_raw : 3520.0f;
     float peak_kw = peak_w / 1000.0f;
     float peak_ps = peak_w * 0.00135962f;
-    float peak_g  = (telemetry.race_dyno.peak_g_force > 0.05f) ? telemetry.race_dyno.peak_g_force : 1.15f;
-    float peak_i  = (telemetry.race_dyno.peak_phase_amps > 5.0f) ? telemetry.race_dyno.peak_phase_amps : 85.0f;
+    float pg_raw  = telemetry.race_dyno.peak_g_force;
+    float peak_g  = (!isnan(pg_raw) && !isinf(pg_raw) && pg_raw > 0.05f) ? pg_raw : 1.15f;
+    float pi_raw  = telemetry.race_dyno.peak_phase_amps;
+    float peak_i  = (!isnan(pi_raw) && !isinf(pi_raw) && pi_raw > 5.0f) ? pi_raw : 85.0f;
     float t_70    = (telemetry.race_split_0_70 > 0.01f) ? telemetry.race_split_0_70 :
                     (telemetry.race_records.best_0_70_sec > 0.01f ? telemetry.race_records.best_0_70_sec : 4.25f);
 

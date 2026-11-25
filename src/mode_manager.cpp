@@ -306,6 +306,24 @@ void ModeManager::loadFromNvs() {
             _config.legal_modes[i].max_battery_amps = 20.0f;
             healed = true;
         }
+
+        // Validate & heal tuned modes against NaN / corrupted values
+        if (isnan(_config.tuned_modes[i].max_speed_kmh) || _config.tuned_modes[i].max_speed_kmh < 5.0f || _config.tuned_modes[i].max_speed_kmh > 150.0f) {
+            _config.tuned_modes[i].max_speed_kmh = (i == PROFILE_MODE_ECO) ? 35.0f : ((i == PROFILE_MODE_SPORT) ? 55.0f : 100.0f);
+            healed = true;
+        }
+        if (isnan(_config.tuned_modes[i].max_power_watts) || _config.tuned_modes[i].max_power_watts < 100.0f || _config.tuned_modes[i].max_power_watts > 35000.0f) {
+            _config.tuned_modes[i].max_power_watts = (i == PROFILE_MODE_ECO) ? 1500.0f : ((i == PROFILE_MODE_SPORT) ? 3500.0f : 15000.0f);
+            healed = true;
+        }
+        if (isnan(_config.tuned_modes[i].max_battery_amps) || _config.tuned_modes[i].max_battery_amps < 5.0f || _config.tuned_modes[i].max_battery_amps > 150.0f) {
+            _config.tuned_modes[i].max_battery_amps = (i == PROFILE_MODE_ECO) ? 30.0f : 60.0f;
+            healed = true;
+        }
+        if (isnan(_config.tuned_modes[i].max_phase_amps) || _config.tuned_modes[i].max_phase_amps < 10.0f || _config.tuned_modes[i].max_phase_amps > 300.0f) {
+            _config.tuned_modes[i].max_phase_amps = (i == PROFILE_MODE_ECO) ? 60.0f : ((i == PROFILE_MODE_SPORT) ? 120.0f : 140.0f);
+            healed = true;
+        }
     }
 
     if (read_bytes != sizeof(blob) || healed) {

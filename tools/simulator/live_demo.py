@@ -836,6 +836,18 @@ class WebDemoHandler(BaseHTTPRequestHandler):
         elif path == "/json/eff":
             self.send_cors_json(WLED_EFFECTS)
 
+        elif path == "/json/pal":
+            self.send_cors_json(["Default"])
+
+        elif path == "/json/si":
+            self.send_cors_json({
+                "state": build_wled_state_dict(),
+                "info": build_wled_info_dict(),
+            })
+
+        elif path == "/json/nodes":
+            self.send_cors_json({"nodes": []})
+
         elif path == "/json":
             self.send_cors_json({
                 "state": build_wled_state_dict(),

@@ -10,8 +10,8 @@
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
 #include "board_config.h"
 
-// Complete LGFX Device configuration for Waveshare ESP32-S3-Touch-LCD-4.3
-// ST7262 RGB panel (800x480) + Goodix GT911 Capacitive Touch
+// Complete LGFX Device configuration for Waveshare ESP32-S3-Touch-LCD-4.3 & 7.0
+// ST7262 RGB panel (800x480 @ 12 MHz) + Goodix GT911 Capacitive Touch
 class WaveshareLGFX : public lgfx::LGFX_Device {
     lgfx::Panel_RGB   _panel_instance;
     lgfx::Bus_RGB     _bus_instance;

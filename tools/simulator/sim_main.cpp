@@ -4272,6 +4272,331 @@ int main(int argc, char **argv) {
         printf("[PASS] Regression test: WLED 2-Segment Stealth-Underglow (Police Stealth vs Tuning Custom/Effects) (Test #13)\n");
     }
 
+    // -------------------------------------------------------------
+    // Regression Test 14: Robust Edge Cases (FaultManager Ring-Buffer, BatteryManager Extremes, SettingsManager Odo Monotony)
+    // -------------------------------------------------------------
+    {
+        // 1. FaultManager Ring-Buffer Overflow (> 7 distinct faults -> capped at MAX_FAULT_HISTORY)
+        FaultManager &fm = FaultManager::instance();
+        fm.clearFaults();
+        assert(fm.getFaultCount() == 0);
+        assert(fm.getActiveFault() == 0);
+
+        // Record 12 distinct faults with advancing timestamps (exceeds MAX_FAULT_HISTORY=10)
+        for (uint8_t code = 1; code <= 12; code++) {
+            fm.recordFault(code, 48.0f + (float)code, 10.0f + (float)code, 20.0f + (float)code, 35.0f, 40.0f, 100 + code * 10);
+        }
+        // Count must be capped at MAX_FAULT_HISTORY (10)
+        assert(fm.getFaultCount() == MAX_FAULT_HISTORY);
+        assert(fm.getActiveFault() == 12);
+
+        // Newest fault at index 0 must be code 12
+        FaultRecord newest = fm.getFault(0);
+        assert(newest.code == 12);
+        assert(fabsf(newest.voltage - 60.0f) < 0.1f);
+
+        // Oldest retained fault at index 9 must be code 3 (codes 1 & 2 evicted)
+        FaultRecord oldest = fm.getFault(9);
+        assert(oldest.code == 3);
+
+        // Index out of range returns empty record
+        FaultRecord out_of_bounds = fm.getFault(MAX_FAULT_HISTORY);
+        assert(out_of_bounds.code == 0);
+
+        // Clear resets count and active fault to 0
+        fm.clearFaults();
+        assert(fm.getFaultCount() == 0);
+        assert(fm.getActiveFault() == 0);
+
+        // 2. BatteryManager Extreme Voltages (0V, negative, >100V -> no NaN/Inf, safe SoC & stats)
+        BatteryManager bm;
+        bm.begin();
+
+        // 0V and negative pack voltage
+        assert(fabsf(bm.getOcvSoc(0.0f) - 0.0f) < 0.001f);
+        assert(fabsf(bm.getOcvSoc(-12.5f) - 0.0f) < 0.001f);
+        assert(fabsf(bm.getOcvSoc(15.0f) - 0.0f) < 0.001f);
+
+        // Over-voltage (> 100V)
+        assert(fabsf(bm.getOcvSoc(120.0f) - 100.0f) < 0.001f);
+
+        // Valid range (e.g. 52V pack / 14S -> ~3.71V/cell -> plausible SoC)
+        float soc52 = bm.getOcvSoc(52.0f);
+        assert(!isnan(soc52) && !isinf(soc52));
+        assert(soc52 >= 0.0f && soc52 <= 100.0f);
+
+        // Telemetry update with extreme voltage: should suppress battery stats safely (-1.0f)
+        DashTelemetry t_bat;
+        memset(&t_bat, 0, sizeof(t_bat));
+        t_bat.voltage = -5.0f;
+        t_bat.current_amps = 0.0f;
+        bm.update(t_bat, 0.1f);
+        assert(t_bat.battery_pct == -1.0f);
+        assert(t_bat.remaining_wh == -1.0f);
+
+        t_bat.voltage = 0.0f;
+        bm.update(t_bat, 0.1f);
+        assert(t_bat.battery_pct == -1.0f);
+
+        t_bat.voltage = 120.0f;
+        bm.update(t_bat, 0.1f);
+        assert(t_bat.battery_pct == -1.0f);
+
+        // 3. SettingsManager Odometer Monotony (Meter-Accumulation without Float Precision Loss)
+        Settings.setOdoMeters(25000000); // 25,000 km base
+        assert(Settings.getOdoMeters() == 25000000);
+        assert(fabsf(Settings.get().odo_km - 25000.0f) < 0.001f);
+
+        // Add 1000 sub-meter increments of 0.25m (= 250 meters total)
+        for (int i = 0; i < 1000; i++) {
+            Settings.addOdoMeters(0.25f);
+        }
+        assert(Settings.getOdoMeters() == 25000250);
+        assert(fabsf(Settings.get().odo_km - 25000.250f) < 0.002f);
+
+        // Invalid negative or NaN increments must be ignored
+        Settings.addOdoMeters(-10.0f);
+        Settings.addOdoMeters(NAN);
+        assert(Settings.getOdoMeters() == 25000250);
+
+        printf("[PASS] Regression test: Robust Edge Cases (FaultManager Ring-Buffer, BatteryManager Extremes, SettingsManager Odo Monotony) (Test #14)\n");
+    }
+
+    // -------------------------------------------------------------
+    // Regression Test 15: WLED NVS-Debounce & TAB_DASH Quick-Controls (Police vs Tuning)
+    // -------------------------------------------------------------
+    {
+        WledController &wled = WledController::instance();
+        wled.begin();
+
+        // Baseline telemetry for update calls
+        DashTelemetry st;
+        setBaseTelemetry(st);
+        st.tuning_mode = true;
+        uint32_t t_ms = 10000;
+        wled.update(st, t_ms); // clean initial state
+
+        // 1. Change parameters -> check isDirty() == true
+        wled.setEnabled(true);
+        wled.setBrightness(210);
+        wled.setEffect(WledController::EFFECT_SCANNER);
+        wled.setRearLedCount(14);
+        wled.setCustomColor(45, 120, 240);
+        wled.setUseThemeColor(false);
+        assert(wled.isDirty() == true);
+
+        // Update before debounce window (< 1500ms): must stay dirty
+        wled.update(st, t_ms + 500);
+        assert(wled.isDirty() == true);
+        wled.update(st, t_ms + 1400);
+        assert(wled.isDirty() == true);
+
+        // Update at/after debounce window (>= 1500ms): auto-saved to NVS, isDirty() == false
+        wled.update(st, t_ms + 1550);
+        assert(wled.isDirty() == false);
+
+        // Overwrite RAM values directly without saving
+        wled.setBrightness(10);
+        wled.setEffect(WledController::EFFECT_SOLID);
+        wled.setRearLedCount(8);
+        assert(wled.isDirty() == true);
+
+        // Call loadConfig(): must restore the persisted values from NVS
+        bool loaded = wled.loadConfig();
+        assert(loaded == true);
+        assert(wled.isDirty() == false);
+        assert(wled.isEnabled() == true);
+        assert(wled.getBrightness() == 210);
+        assert(wled.getEffect() == WledController::EFFECT_SCANNER);
+        assert(wled.getRearLedCount() == 14);
+        assert(wled.getColorR() == 45);
+        assert(wled.getColorG() == 120);
+        assert(wled.getColorB() == 240);
+
+        // 2. On-Screen WLED Quick-Controls in TAB_DASH
+        DashTelemetry t15;
+        setBaseTelemetry(t15);
+        t15.screen = SCREEN_SETTINGS_MENU;
+
+        // --- A. Police Mode (tuning_mode = false): 100% Stealth! ---
+        t15.tuning_mode = false;
+        Renderer.setSettingsTab(DashboardRenderer::TAB_DASH);
+        Renderer.invalidateCache();
+        Renderer.markScreenDirty();
+        Renderer.render(t15);
+
+        bool init_en = wled.isEnabled();
+        uint8_t init_fx = wled.getEffect();
+        uint8_t init_bri = wled.getBrightness();
+
+        // Taps on WLED control bar (x: 20..532, y: 370..446) must NOT modify WLED state in Police mode!
+        Renderer.handleSettingsTouch(95, 408, t15);  // [ WLED ]
+        assert(wled.isEnabled() == init_en);
+
+        Renderer.handleSettingsTouch(250, 408, t15); // [ FX ]
+        assert(wled.getEffect() == init_fx);
+
+        Renderer.handleSettingsTouch(362, 408, t15); // [ - ]
+        assert(wled.getBrightness() == init_bri);
+
+        Renderer.handleSettingsTouch(490, 408, t15); // [ + ]
+        assert(wled.getBrightness() == init_bri);
+
+        // --- B. Tuning Mode (tuning_mode = true): Active Quick-Controls ---
+        t15.tuning_mode = true;
+        Renderer.setSettingsTab(DashboardRenderer::TAB_DASH);
+        Renderer.invalidateCache();
+        Renderer.markScreenDirty();
+        Renderer.render(t15);
+
+        // Tap [ WLED ] toggle at (95, 408)
+        assert(Renderer.handleSettingsTouch(95, 408, t15) == true);
+        assert(wled.isEnabled() == !init_en);
+        assert(Renderer.handleSettingsTouch(95, 408, t15) == true);
+        assert(wled.isEnabled() == init_en);
+
+        // Tap [ FX ] cycle at (250, 408)
+        uint8_t cur_fx = wled.getEffect();
+        assert(Renderer.handleSettingsTouch(250, 408, t15) == true);
+        assert(wled.getEffect() == (uint8_t)((cur_fx + 1U) % (WledController::EFFECT_MAX + 1U)));
+
+        // Tap [ - ] brightness at (362, 408)
+        uint8_t cur_bri = wled.getBrightness();
+        assert(Renderer.handleSettingsTouch(362, 408, t15) == true);
+        assert(wled.getBrightness() == ((cur_bri > 25) ? (uint8_t)(cur_bri - 25) : 0));
+
+        // Tap [ + ] brightness at (490, 408)
+        cur_bri = wled.getBrightness();
+        assert(Renderer.handleSettingsTouch(490, 408, t15) == true);
+        assert(wled.getBrightness() == ((cur_bri <= 230) ? (uint8_t)(cur_bri + 25) : 255));
+
+        // 3. Restore clean defaults
+        wled.setEnabled(true);
+        wled.setBrightness(180);
+        wled.setEffect(WledController::EFFECT_SPEED_GLOW);
+        wled.setRearLedCount(WLED_REAR_LED_COUNT);
+        wled.setUseThemeColor(true);
+        wled.saveConfig();
+        Renderer.setSettingsTab(DashboardRenderer::TAB_DASH);
+        t15.screen = SCREEN_RIDE_DASH;
+        Renderer.invalidateCache();
+        Renderer.render(t15);
+
+        printf("[PASS] Regression test: WLED NVS-Debounce & TAB_DASH Quick-Controls (Police vs Tuning) (Test #15)\n");
+    }
+
+    // -------------------------------------------------------------
+    // Regression Test 16: SteeringButtons 5-Button Ladder & Noise Debounce & Long-Press
+    // -------------------------------------------------------------
+    {
+        SteeringButtons &sb = SteeringButtons::instance();
+        sb.begin(PIN_STEERING_ADC);
+        sb.reset();
+
+        // 1. Threshold window resolution check
+        assert(sb.resolveButton(500)  == SteeringBtn::BTN_UP);
+        assert(sb.resolveButton(1000) == SteeringBtn::BTN_DOWN);
+        assert(sb.resolveButton(1500) == SteeringBtn::BTN_MODE);
+        assert(sb.resolveButton(2000) == SteeringBtn::BTN_POWER_LIGHT);
+        assert(sb.resolveButton(2500) == SteeringBtn::BTN_CUSTOM);
+        assert(sb.resolveButton(150)  == SteeringBtn::NONE);
+        assert(sb.resolveButton(3300) == SteeringBtn::NONE);
+
+        // 2. Glitch/Noise rejection: glitch < 30ms returns to idle without event
+        uint32_t t = 10000;
+        sb.setSimMilliVolts(500); // UP voltage
+        assert(sb.poll(t) == SteeringBtnEvent::NONE);
+        assert(sb.poll(t + 15) == SteeringBtnEvent::NONE); // 15ms < 30ms debounce
+        sb.setSimMilliVolts(3300); // noise disappeared back to 3300mV
+        assert(sb.poll(t + 20) == SteeringBtnEvent::NONE);
+        assert(sb.poll(t + 60) == SteeringBtnEvent::NONE);
+        assert(sb.isButtonPressed() == false);
+
+        // 3. Short press test for all 5 buttons
+        struct BtnTestPair {
+            uint16_t mv;
+            SteeringBtn btn;
+            SteeringBtnEvent short_ev;
+            SteeringBtnEvent long_ev;
+        };
+        BtnTestPair test_pairs[5] = {
+            { 500,  SteeringBtn::BTN_UP,          SteeringBtnEvent::UP_SHORT,          SteeringBtnEvent::UP_LONG },
+            { 1000, SteeringBtn::BTN_DOWN,        SteeringBtnEvent::DOWN_SHORT,        SteeringBtnEvent::DOWN_LONG },
+            { 1500, SteeringBtn::BTN_MODE,        SteeringBtnEvent::MODE_SHORT,        SteeringBtnEvent::MODE_LONG },
+            { 2000, SteeringBtn::BTN_POWER_LIGHT, SteeringBtnEvent::POWER_LIGHT_SHORT, SteeringBtnEvent::POWER_LIGHT_LONG },
+            { 2500, SteeringBtn::BTN_CUSTOM,     SteeringBtnEvent::CUSTOM_SHORT,      SteeringBtnEvent::CUSTOM_LONG }
+        };
+
+        t = 20000;
+        for (int i = 0; i < 5; i++) {
+            // Press button
+            sb.setSimMilliVolts(test_pairs[i].mv);
+            assert(sb.poll(t) == SteeringBtnEvent::NONE);
+            t += 40; // > 30ms debounce
+            assert(sb.poll(t) == SteeringBtnEvent::NONE);
+            assert(sb.getActiveButton() == test_pairs[i].btn);
+            assert(sb.isButtonPressed() == true);
+
+            // Release button (< 450ms hold -> SHORT event on release)
+            t += 100;
+            sb.setSimMilliVolts(3300);
+            assert(sb.poll(t) == SteeringBtnEvent::NONE);
+            t += 40; // debounce release
+            assert(sb.poll(t) == test_pairs[i].short_ev);
+            assert(sb.isButtonPressed() == false);
+            t += 50;
+        }
+
+        // 4. Long press test (hold >= 450ms)
+        for (int i = 0; i < 5; i++) {
+            sb.setSimMilliVolts(test_pairs[i].mv);
+            assert(sb.poll(t) == SteeringBtnEvent::NONE);
+            t += 40; // debounce
+            assert(sb.poll(t) == SteeringBtnEvent::NONE);
+            assert(sb.getActiveButton() == test_pairs[i].btn);
+
+            // Advance time past LONG_PRESS_MS (450ms)
+            t += 460;
+            assert(sb.poll(t) == test_pairs[i].long_ev);
+
+            // After long event fired, sustained hold returns NONE
+            t += 100;
+            assert(sb.poll(t) == SteeringBtnEvent::NONE);
+
+            // Release must not trigger duplicate event
+            sb.setSimMilliVolts(3300);
+            assert(sb.poll(t) == SteeringBtnEvent::NONE);
+            t += 40;
+            assert(sb.poll(t) == SteeringBtnEvent::NONE);
+            assert(sb.isButtonPressed() == false);
+            t += 50;
+        }
+
+        // 5. Custom threshold table configuration & reset
+        SteeringBtnThreshold custom_tbl[2] = {
+            { SteeringBtn::BTN_CUSTOM, 100, 300 },
+            { SteeringBtn::BTN_MODE,   600, 900 }
+        };
+        sb.setThresholds(custom_tbl, 2);
+        assert(sb.resolveButton(200) == SteeringBtn::BTN_CUSTOM);
+        assert(sb.resolveButton(750) == SteeringBtn::BTN_MODE);
+        assert(sb.resolveButton(500) == SteeringBtn::NONE); // 500 no longer UP in custom table
+
+        // Restore default thresholds table & reset
+        static const SteeringBtnThreshold default_tbl[] = {
+            { SteeringBtn::BTN_UP,          300,  700 },
+            { SteeringBtn::BTN_DOWN,        800, 1200 },
+            { SteeringBtn::BTN_MODE,       1300, 1700 },
+            { SteeringBtn::BTN_POWER_LIGHT,1800, 2200 },
+            { SteeringBtn::BTN_CUSTOM,     2300, 2700 }
+        };
+        sb.setThresholds(default_tbl, 5);
+        sb.reset();
+        assert(sb.resolveButton(500) == SteeringBtn::BTN_UP);
+
+        printf("[PASS] Regression test: SteeringButtons 5-Button Ladder & Noise Debounce & Long-Press (Test #16)\n");
+    }
+
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");
     return 0;
 }

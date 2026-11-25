@@ -3,11 +3,33 @@
 #include <Arduino.h>
 #include "board_config.h"
 #include "dash_types.h"
+#if !defined(NATIVE_SIMULATOR)
+#include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#endif
+
+#define WLED_CFG_MAGIC   0x574C4544UL // "WLED"
+#define WLED_CFG_VERSION 1
 
 struct WledRgb {
     uint8_t r;
     uint8_t g;
     uint8_t b;
+};
+
+struct WledPersistConfig {
+    uint32_t magic;
+    uint16_t version;
+    uint8_t  enabled;
+    uint8_t  brightness;
+    uint8_t  effect;
+    uint8_t  rear_led_count;
+    uint8_t  use_theme_color;
+    uint8_t  custom_r;
+    uint8_t  custom_g;
+    uint8_t  custom_b;
+    uint8_t  reserved[2];
 };
 
 enum WledEffectMode : uint8_t {
@@ -27,12 +49,13 @@ enum WledEffectMode : uint8_t {
  */
 class WledController {
 public:
-    static constexpr uint8_t EFFECT_SOLID      = 0;
-    static constexpr uint8_t EFFECT_SPEED_GLOW = 1;
-    static constexpr uint8_t EFFECT_BREATHE    = 2;
-    static constexpr uint8_t EFFECT_RAINBOW    = 3;
-    static constexpr uint8_t EFFECT_SCANNER    = 4;
-    static constexpr uint8_t EFFECT_MAX        = 4;
+    static constexpr uint8_t  EFFECT_SOLID       = 0;
+    static constexpr uint8_t  EFFECT_SPEED_GLOW  = 1;
+    static constexpr uint8_t  EFFECT_BREATHE     = 2;
+    static constexpr uint8_t  EFFECT_RAINBOW     = 3;
+    static constexpr uint8_t  EFFECT_SCANNER     = 4;
+    static constexpr uint8_t  EFFECT_MAX         = 4;
+    static constexpr uint32_t NVS_DEBOUNCE_MS    = 1500;
 
     static WledController& instance();
 
@@ -59,6 +82,12 @@ public:
     void setRearLedCount(uint8_t count);
     uint8_t getRearLedCount() const;
 
+    bool saveConfig();
+    bool loadConfig();
+    bool isDirty() const;
+
+    static const char* getEffectName(uint8_t fx);
+
     WledRgb getLedRgb(int idx) const;
     WledEffectMode getActiveMode() const { return _active_mode; }
     int getLedCount() const { return WLED_LED_COUNT; }
@@ -70,6 +99,9 @@ private:
     static WledRgb scaleRgb(WledRgb c, uint8_t scale);
     static WledRgb colorWheel(uint8_t pos);
 
+    void applyDefaultsLocked();
+    void applyBlobLocked(const WledPersistConfig &blob);
+    void buildBlobLocked(WledPersistConfig &blob) const;
     void renderEffect(const DashTelemetry &telemetry, uint32_t now_ms, uint32_t dt_ms);
     void renderUnderglowSegment(uint8_t rear_count, uint8_t effect, WledRgb base, uint8_t brightness,
                                 const DashTelemetry &telemetry, uint32_t now_ms, uint32_t dt_ms);
@@ -87,7 +119,14 @@ private:
     uint8_t        _custom_b;
     uint8_t        _effect;
     uint8_t        _rear_led_count;
+    bool           _dirty;
+    uint32_t       _dirty_since_ms;
+    uint32_t       _last_now_ms;
     WledEffectMode _active_mode;
     uint32_t       _last_update_ms;
     uint32_t       _anim_phase;
+#if !defined(NATIVE_SIMULATOR)
+    Preferences       _prefs;
+    SemaphoreHandle_t _nvs_mutex;
+#endif
 };

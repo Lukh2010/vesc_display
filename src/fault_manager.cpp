@@ -132,6 +132,12 @@ void FaultManager::recordFault(uint8_t code, float v, float i, float phase_i, fl
         return;
     }
 
+    if (isnan(v) || isinf(v)) v = 0.0f;
+    if (isnan(i) || isinf(i)) i = 0.0f;
+    if (isnan(phase_i) || isinf(phase_i)) phase_i = 0.0f;
+    if (isnan(fet_temp) || isinf(fet_temp)) fet_temp = 0.0f;
+    if (isnan(mot_temp) || isinf(mot_temp)) mot_temp = 0.0f;
+
     _active_fault = code;
     uint32_t now = millis();
 

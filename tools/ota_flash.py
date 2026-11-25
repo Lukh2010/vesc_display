@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 VESC Hyper Display - Wireless OTA Flasher
-Uploads compiled firmware.bin to Waveshare ESP32-S3 over WiFi SoftAP or Local LAN.
+Uploads compiled firmware.bin to Waveshare ESP32-S3 (4.3" / 7.0") over WiFi SoftAP or Local LAN.
 
 Usage:
-    python3 tools/ota_flash.py [--ip 192.168.4.1] [--no-build] [--status]
+    python3 tools/ota_flash.py [--ip 192.168.4.1] [--board 43|70] [--no-build] [--status]
 """
 
 import sys
@@ -17,7 +17,28 @@ import json
 import subprocess
 
 DEFAULT_IP = "192.168.4.1"
-DEFAULT_BIN = ".pio/build/waveshare-esp32-s3-touch-lcd-43/firmware.bin"
+
+ENV_TARGETS = {
+    "43": "waveshare-esp32-s3-touch-lcd-43",
+    "4.3": "waveshare-esp32-s3-touch-lcd-43",
+    "70": "waveshare-esp32-s3-touch-lcd-7",
+    "7": "waveshare-esp32-s3-touch-lcd-7",
+    "7.0": "waveshare-esp32-s3-touch-lcd-7",
+    "waveshare-esp32-s3-touch-lcd-43": "waveshare-esp32-s3-touch-lcd-43",
+    "waveshare-esp32-s3-touch-lcd-7": "waveshare-esp32-s3-touch-lcd-7",
+}
+
+def resolve_target(board=None, env=None, bin_path=None):
+    chosen_env = "waveshare-esp32-s3-touch-lcd-43"
+    if env:
+        chosen_env = ENV_TARGETS.get(env.strip().lower(), env.strip())
+    elif board:
+        chosen_env = ENV_TARGETS.get(str(board).strip().lower(), "waveshare-esp32-s3-touch-lcd-43")
+
+    if not bin_path:
+        bin_path = f".pio/build/{chosen_env}/firmware.bin"
+
+    return chosen_env, bin_path
 
 def check_status(ip):
     url = f"http://{ip}/api/status"
@@ -30,18 +51,18 @@ def check_status(ip):
                 print(f"    - Free Heap: {data.get('free_heap', 0) // 1024} KB")
                 print(f"    - Status:    {data.get('status', 'online')}")
                 return True
-    except Exception as e:
+    except Exception:
         return False
     return False
 
-def build_firmware():
-    print("[*] Kompiliere PlatformIO Firmware...")
-    cmd = ["pio", "run", "-e", "waveshare-esp32-s3-touch-lcd-43"]
+def build_firmware(env_name="waveshare-esp32-s3-touch-lcd-43"):
+    print(f"[*] Kompiliere PlatformIO Firmware fuer Target: {env_name}...")
+    cmd = ["pio", "run", "-e", env_name]
     res = subprocess.run(cmd)
     if res.returncode != 0:
-        print("[!] Build fehlgeschlagen. Abbruch.")
+        print(f"[!] Build fuer {env_name} fehlgeschlagen. Abbruch.")
         sys.exit(1)
-    print("[✓] Firmware erfolgreich gebaut.")
+    print(f"[✓] Firmware ({env_name}) erfolgreich gebaut.")
 
 class MultipartStream:
     def __init__(self, filename, filepath):
@@ -65,9 +86,10 @@ class MultipartStream:
     def get_content_type(self):
         return f"multipart/form-data; boundary={self.boundary}"
 
-def upload_firmware(ip, bin_path):
+def upload_firmware(ip, bin_path, env_name="waveshare-esp32-s3-touch-lcd-43"):
     if not os.path.exists(bin_path):
         print(f"[!] Firmware-Datei nicht gefunden: {bin_path}")
+        print(f"    Tipp: Zuerst mit 'pio run -e {env_name}' kompilieren oder ohne '--no-build' aufrufen.")
         sys.exit(1)
 
     filesize = os.path.getsize(bin_path)
@@ -75,6 +97,7 @@ def upload_firmware(ip, bin_path):
     url = f"http://{ip}/update?size={filesize}"
 
     print(f"\n⚡ Starte kabellosen OTA-Flash: {filename} ({filesize / 1024:.1f} KB) -> {url}")
+    print(f"   Target Environment: {env_name}")
 
     mp = MultipartStream(filename, bin_path)
 
@@ -118,11 +141,15 @@ def upload_firmware(ip, bin_path):
 
 def main():
     parser = argparse.ArgumentParser(description="VESC Hyper Display Wireless OTA Flasher")
-    parser.add_argument("--ip", default=DEFAULT_IP, help=f"Display IP (Standard: {DEFAULT_IP})")
-    parser.add_argument("--bin", default=DEFAULT_BIN, help="Pfad zur firmware.bin")
+    parser.add_argument("--ip", default=DEFAULT_IP, help=f"Display IP oder Hostname (Standard: {DEFAULT_IP} oder vesc-dash.local)")
+    parser.add_argument("--board", choices=["43", "70", "4.3", "7", "7.0"], default="43", help="Display-Variante: 43 (4.3 Zoll) oder 70 (7.0 Zoll, Standard: 43)")
+    parser.add_argument("--env", default=None, help="Explizites PlatformIO Environment (z.B. waveshare-esp32-s3-touch-lcd-43 oder waveshare-esp32-s3-touch-lcd-7)")
+    parser.add_argument("--bin", default=None, help="Expliziter Pfad zur firmware.bin (Standard: .pio/build/<env>/firmware.bin)")
     parser.add_argument("--no-build", action="store_true", help="Build-Schritt ueberspringen")
     parser.add_argument("--status", action="store_true", help="Nur Status abfragen")
     args = parser.parse_args()
+
+    chosen_env, bin_path = resolve_target(args.board, args.env, args.bin)
 
     if args.status:
         if not check_status(args.ip):
@@ -131,17 +158,17 @@ def main():
         sys.exit(0)
 
     if not args.no_build:
-        build_firmware()
+        build_firmware(chosen_env)
 
     print(f"[*] Pruefe Verbindung zu {args.ip}...")
     if not check_status(args.ip):
         print(f"\n[!] Display unter http://{args.ip} nicht erreichbar!")
         print("    1. Verbinde dein Geraet mit dem WLAN: 'VESC-DASH-AP'")
         print("    2. Stelle sicher, dass auf dem Display der WiFi-Bridge Modus aktiv ist.")
-        print(f"    3. Alternativ die IP per --ip <IP> angeben.\n")
+        print(f"    3. Alternativ die IP per --ip <IP> angeben (oder vesc-dash.local).\n")
         sys.exit(1)
 
-    upload_firmware(args.ip, args.bin)
+    upload_firmware(args.ip, bin_path, chosen_env)
 
 if __name__ == "__main__":
     main()

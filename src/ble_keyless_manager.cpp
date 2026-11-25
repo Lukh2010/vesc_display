@@ -194,7 +194,8 @@ void BleKeylessManager::begin() {
         strncmp(Settings.get().ble_paired_addr, "99:64", 5) == 0) {
         Settings.get().ble_paired = false;
         Settings.get().ble_paired_addr[0] = '\0';
-        strncpy(Settings.get().ble_paired_name, "Smartphone", sizeof(Settings.get().ble_paired_name));
+        strncpy(Settings.get().ble_paired_name, "Smartphone", sizeof(Settings.get().ble_paired_name) - 1);
+        Settings.get().ble_paired_name[sizeof(Settings.get().ble_paired_name) - 1] = '\0';
         Settings.save();
         Serial.println("[BLE KEYLESS] Cleared test laptop pairing. Ready for smartphone.");
     }
@@ -301,7 +302,8 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
              bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
 
     if (!Settings.get().ble_paired || _pairing_active) {
-        strncpy(Settings.get().ble_paired_addr, addrStr, sizeof(Settings.get().ble_paired_addr));
+        strncpy(Settings.get().ble_paired_addr, addrStr, sizeof(Settings.get().ble_paired_addr) - 1);
+        Settings.get().ble_paired_addr[sizeof(Settings.get().ble_paired_addr) - 1] = '\0';
         Settings.get().ble_paired = true;
         _pairing_active = false;
         Settings.save();
@@ -342,12 +344,13 @@ bool BleKeylessManager::onClientConnect(const uint8_t *bda, uint16_t connId) {
         _last_telemetry->ble_rssi = _rssi;
         _last_telemetry->ble_signal_bars = getSignalBars();
         if (strlen(Settings.get().ble_paired_name) > 0 && strcmp(Settings.get().ble_paired_name, "Smartphone") != 0) {
-            strncpy(_last_telemetry->ble_device_name, Settings.get().ble_paired_name, sizeof(_last_telemetry->ble_device_name));
+            strncpy(_last_telemetry->ble_device_name, Settings.get().ble_paired_name, sizeof(_last_telemetry->ble_device_name) - 1);
         } else if (strlen(Settings.get().ble_paired_addr) > 0) {
-            strncpy(_last_telemetry->ble_device_name, Settings.get().ble_paired_addr, sizeof(_last_telemetry->ble_device_name));
+            strncpy(_last_telemetry->ble_device_name, Settings.get().ble_paired_addr, sizeof(_last_telemetry->ble_device_name) - 1);
         } else {
-            strncpy(_last_telemetry->ble_device_name, "Smartphone", sizeof(_last_telemetry->ble_device_name));
+            strncpy(_last_telemetry->ble_device_name, "Smartphone", sizeof(_last_telemetry->ble_device_name) - 1);
         }
+        _last_telemetry->ble_device_name[sizeof(_last_telemetry->ble_device_name) - 1] = '\0';
     }
     Renderer.markMenuDirty();
     Renderer.markScreenDirty();
@@ -408,7 +411,8 @@ void BleKeylessManager::cancelPairing() {
 void BleKeylessManager::unpair() {
     Settings.get().ble_paired = false;
     Settings.get().ble_paired_addr[0] = '\0';
-    strncpy(Settings.get().ble_paired_name, "Smartphone", sizeof(Settings.get().ble_paired_name));
+    strncpy(Settings.get().ble_paired_name, "Smartphone", sizeof(Settings.get().ble_paired_name) - 1);
+    Settings.get().ble_paired_name[sizeof(Settings.get().ble_paired_name) - 1] = '\0';
     Settings.save();
     _pairing_active = false;
 #if !defined(NATIVE_SIMULATOR) && ENABLE_BLE_KEYLESS
@@ -479,12 +483,13 @@ void BleKeylessManager::update(DashTelemetry &telemetry, uint32_t now_ms) {
 
     if (Settings.get().ble_paired) {
         if (strlen(Settings.get().ble_paired_name) > 0 && strcmp(Settings.get().ble_paired_name, "Smartphone") != 0) {
-            strncpy(telemetry.ble_device_name, Settings.get().ble_paired_name, sizeof(telemetry.ble_device_name));
+            strncpy(telemetry.ble_device_name, Settings.get().ble_paired_name, sizeof(telemetry.ble_device_name) - 1);
         } else if (strlen(Settings.get().ble_paired_addr) > 0) {
-            strncpy(telemetry.ble_device_name, Settings.get().ble_paired_addr, sizeof(telemetry.ble_device_name));
+            strncpy(telemetry.ble_device_name, Settings.get().ble_paired_addr, sizeof(telemetry.ble_device_name) - 1);
         } else {
-            strncpy(telemetry.ble_device_name, "Smartphone", sizeof(telemetry.ble_device_name));
+            strncpy(telemetry.ble_device_name, "Smartphone", sizeof(telemetry.ble_device_name) - 1);
         }
+        telemetry.ble_device_name[sizeof(telemetry.ble_device_name) - 1] = '\0';
     } else {
         telemetry.ble_device_name[0] = '\0';
     }

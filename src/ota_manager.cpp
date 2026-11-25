@@ -2,6 +2,7 @@
 #if !defined(NATIVE_SIMULATOR)
 #include "wled_controller.h"
 #include "wled_web_ui.h"
+#include "mode_manager.h"
 #include <ctype.h>
 #include <stdlib.h>
 #endif
@@ -17,7 +18,8 @@ OtaManager::OtaManager()
       _bytes_written(0),
       _total_bytes(0)
 #if !defined(NATIVE_SIMULATOR)
-      , _server(80)
+      , _mdns_running(false),
+      _server(80)
 #endif
 {
     strncpy(_status_text, "Bereit", sizeof(_status_text));
@@ -225,27 +227,46 @@ static const uint8_t OTA_HTML_PAGE_GZ[] PROGMEM = {
 };
 
 static const char* findJsonKey(const char* json, const char* key) {
-    char pat[24];
+    if (!json || !key || !*json || !*key) return nullptr;
+    char pat[32];
     snprintf(pat, sizeof(pat), "\"%s\"", key);
-    const char* p = strstr(json, pat);
-    if (!p) return nullptr;
-    p += strlen(pat);
-    while (*p && (*p == ' ' || *p == '\t' || *p == ':' || *p == '\r' || *p == '\n')) p++;
-    return p;
+    const char* p = json;
+    size_t pat_len = strlen(pat);
+    while ((p = strstr(p, pat)) != nullptr) {
+        p += pat_len;
+        // Skip whitespace before colon
+        while (*p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+        if (*p == ':') {
+            p++;
+            // Skip whitespace after colon
+            while (*p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+            return p;
+        }
+    }
+    return nullptr;
 }
 
 static bool parseJsonBool(const char* json, const char* key, bool& out) {
     const char* p = findJsonKey(json, key);
     if (!p) return false;
-    if (strncmp(p, "true", 4) == 0 || *p == '1') { out = true; return true; }
-    if (strncmp(p, "false", 5) == 0 || *p == '0') { out = false; return true; }
+    while (*p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+    if (strncmp(p, "true", 4) == 0) { out = true; return true; }
+    if (strncmp(p, "false", 5) == 0) { out = false; return true; }
+    if (*p == '1' && !isdigit((unsigned char)*(p + 1))) { out = true; return true; }
+    if (*p == '0' && !isdigit((unsigned char)*(p + 1))) { out = false; return true; }
     return false;
 }
 
 static bool parseJsonInt(const char* json, const char* key, int& out) {
     const char* p = findJsonKey(json, key);
-    if (!p || (!isdigit((unsigned char)*p) && *p != '-')) return false;
-    out = (int)strtol(p, nullptr, 10);
+    if (!p) return false;
+    while (*p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+    if (!isdigit((unsigned char)*p) && *p != '-') return false;
+    if (*p == '-' && !isdigit((unsigned char)*(p + 1))) return false;
+    char* end = nullptr;
+    long val = strtol(p, &end, 10);
+    if (end == p) return false;
+    out = (int)val;
     return true;
 }
 
@@ -264,6 +285,7 @@ static void applyWledStateJson(const char* body) {
     }
     if (parseJsonInt(body, "fx", ival)) {
         if (ival < 0) ival = 0;
+        if (ival > 4) ival = 4;
         w.setEffect((uint8_t)ival);
     }
     if (parseJsonInt(body, "rear", ival)) {
@@ -275,21 +297,32 @@ static void applyWledStateJson(const char* body) {
     bool has_theme = parseJsonBool(body, "theme", bval);
     if (has_theme) w.setUseThemeColor(bval);
 
-    // Parse WLED color array: "col":[[r,g,b]...]
+    // Parse WLED color array: "col":[[r,g,b]...] (with arbitrary whitespace before/after commas)
     const char* col = findJsonKey(body, "col");
     if (col && !(has_theme && bval)) {
         while (*col && *col != '[') col++;
-        while (*col == '[' || *col == ' ') col++;
-        if (isdigit((unsigned char)*col)) {
+        while (*col && (*col == '[' || *col == ' ' || *col == '\t' || *col == '\r' || *col == '\n')) col++;
+        if (isdigit((unsigned char)*col) || *col == '-') {
             char* end = nullptr;
             long r = strtol(col, &end, 10);
+            while (end && (*end == ' ' || *end == '\t')) end++;
             if (end && *end == ',') {
-                long g = strtol(end + 1, &end, 10);
-                if (end && *end == ',') {
-                    long b = strtol(end + 1, &end, 10);
-                    if (r < 0) r = 0; if (r > 255) r = 255;
-                    if (g < 0) g = 0; if (g > 255) g = 255;
-                    if (b < 0) b = 0; if (b > 255) b = 255;
+                end++;
+                while (*end && (*end == ' ' || *end == '\t')) end++;
+                char* end_g = nullptr;
+                long g = strtol(end, &end_g, 10);
+                while (end_g && (*end_g == ' ' || *end_g == '\t')) end_g++;
+                if (end_g && *end_g == ',') {
+                    end_g++;
+                    while (*end_g && (*end_g == ' ' || *end_g == '\t')) end_g++;
+                    char* end_b = nullptr;
+                    long b = strtol(end_g, &end_b, 10);
+                    if (r < 0) { r = 0; }
+                    if (r > 255) { r = 255; }
+                    if (g < 0) { g = 0; }
+                    if (g > 255) { g = 255; }
+                    if (b < 0) { b = 0; }
+                    if (b > 255) { b = 255; }
                     w.setCustomColor((uint8_t)r, (uint8_t)g, (uint8_t)b);
                 }
             }
@@ -299,9 +332,10 @@ static void applyWledStateJson(const char* body) {
 
 static size_t buildWledStateJson(char* out, size_t out_size) {
     WledController& w = WledController::instance();
+    bool tuning = ModeManager::instance().isTuningMode();
     int n = snprintf(out, out_size,
         "{\"on\":%s,\"bri\":%u,\"transition\":0,\"ps\":-1,\"pl\":-1,"
-        "\"rear\":%u,\"theme\":%s,"
+        "\"rear\":%u,\"theme\":%s,\"tuning\":%s,"
         "\"seg\":[{\"id\":0,\"start\":0,\"stop\":%d,\"len\":%d,"
         "\"on\":%s,\"bri\":%u,\"col\":[[%u,%u,%u],[0,0,0],[0,0,0]],"
         "\"fx\":%u,\"sx\":128,\"ix\":128,\"pal\":0}]}",
@@ -309,6 +343,7 @@ static size_t buildWledStateJson(char* out, size_t out_size) {
         (unsigned)w.getBrightness(),
         (unsigned)w.getRearLedCount(),
         w.isUsingThemeColor() ? "true" : "false",
+        tuning ? "true" : "false",
         WLED_LED_COUNT, WLED_LED_COUNT,
         w.isEnabled() ? "true" : "false",
         (unsigned)w.getBrightness(),
@@ -370,7 +405,7 @@ void OtaManager::setupRoutes() {
     });
 
     _server.on("/json/state", HTTP_GET, [this, sendCors]() {
-        char buf[384];
+        char buf[512];
         buildWledStateJson(buf, sizeof(buf));
         sendCors();
         _server.send(200, "application/json", buf);
@@ -382,10 +417,31 @@ void OtaManager::setupRoutes() {
             "[\"Solid\",\"Speed-Glow\",\"Breathe\",\"Rainbow\",\"Scanner\"]");
     });
 
-    _server.on("/json", HTTP_GET, [this, sendCors]() {
-        char st[384];
+    _server.on("/json/pal", HTTP_GET, [this, sendCors]() {
+        sendCors();
+        _server.send(200, "application/json", "[\"Default\"]");
+    });
+
+    _server.on("/json/nodes", HTTP_GET, [this, sendCors]() {
+        sendCors();
+        _server.send(200, "application/json", "{\"nodes\":[]}");
+    });
+
+    _server.on("/json/si", HTTP_GET, [this, sendCors]() {
+        char st[512];
         char inf[512];
         char full[1024];
+        buildWledStateJson(st, sizeof(st));
+        buildWledInfoJson(inf, sizeof(inf));
+        snprintf(full, sizeof(full), "{\"state\":%s,\"info\":%s}", st, inf);
+        sendCors();
+        _server.send(200, "application/json", full);
+    });
+
+    _server.on("/json", HTTP_GET, [this, sendCors]() {
+        char st[512];
+        char inf[512];
+        char full[1152];
         buildWledStateJson(st, sizeof(st));
         buildWledInfoJson(inf, sizeof(inf));
         snprintf(full, sizeof(full),
@@ -401,16 +457,37 @@ void OtaManager::setupRoutes() {
         if (_server.hasArg("plain")) {
             applyWledStateJson(_server.arg("plain").c_str());
         }
-        char buf[384];
+        char buf[512];
         buildWledStateJson(buf, sizeof(buf));
         sendCors();
         _server.send(200, "application/json", buf);
     };
 
     _server.on("/json/state", HTTP_POST, handleWledPost);
+    _server.on("/json/si", HTTP_POST, handleWledPost);
     _server.on("/json", HTTP_POST, handleWledPost);
 
+    _server.on("/json/info", HTTP_OPTIONS, [this, sendCors]() {
+        sendCors();
+        _server.send(204, "text/plain", "");
+    });
     _server.on("/json/state", HTTP_OPTIONS, [this, sendCors]() {
+        sendCors();
+        _server.send(204, "text/plain", "");
+    });
+    _server.on("/json/eff", HTTP_OPTIONS, [this, sendCors]() {
+        sendCors();
+        _server.send(204, "text/plain", "");
+    });
+    _server.on("/json/pal", HTTP_OPTIONS, [this, sendCors]() {
+        sendCors();
+        _server.send(204, "text/plain", "");
+    });
+    _server.on("/json/nodes", HTTP_OPTIONS, [this, sendCors]() {
+        sendCors();
+        _server.send(204, "text/plain", "");
+    });
+    _server.on("/json/si", HTTP_OPTIONS, [this, sendCors]() {
         sendCors();
         _server.send(204, "text/plain", "");
     });
@@ -503,6 +580,19 @@ void OtaManager::begin() {
     setupRoutes();
     _server.begin();
 
+    // Start mDNS responder for WLED App & browser auto-discovery
+    if (MDNS.begin("vesc-dash")) {
+        MDNS.addService("http", "tcp", 80);
+        MDNS.addService("wled", "tcp", 80);
+        uint8_t mac[6] = {0};
+        WiFi.macAddress(mac);
+        char mac_str[13];
+        snprintf(mac_str, sizeof(mac_str), "%02x%02x%02x%02x%02x%02x",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        MDNS.addServiceTxt("wled", "tcp", "mac", (const char*)mac_str);
+        _mdns_running = true;
+    }
+
     // Setup ArduinoOTA on Port 3232 for direct PlatformIO CLI upload
     ArduinoOTA.setPort(3232);
     ArduinoOTA.setHostname("vesc-hyper-display");
@@ -535,7 +625,7 @@ void OtaManager::begin() {
     });
 
     ArduinoOTA.begin();
-    Serial.println("[OTA] Web-Flasher (Port 80) und ArduinoOTA (Port 3232) aktiv!");
+    Serial.println("[OTA] Web-Flasher (Port 80), WLED-App (mDNS) und ArduinoOTA (Port 3232) aktiv!");
 #endif
 
     _running = true;
@@ -556,6 +646,10 @@ void OtaManager::stop() {
     if (!_running) return;
 
 #if !defined(NATIVE_SIMULATOR)
+    if (_mdns_running) {
+        MDNS.end();
+        _mdns_running = false;
+    }
     _server.stop();
     ArduinoOTA.end();
 #endif

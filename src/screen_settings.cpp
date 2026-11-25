@@ -1,4 +1,5 @@
 #include "dash_renderer_internal.h"
+#include "wled_controller.h"
 
 // ==============================================================================
 // SCREEN 3: MODERN AUTOMOTIVE SETTINGS (5 Tabs Tuning / 3 Legal Stealth Tabs)
@@ -16,6 +17,7 @@ void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
     }
     _pin_modal_open = false;
     _fault_modal_open = false;
+    _last_wled_sig = 0xFFFFFFFFUL;
     _settings_inited = false;
     _last_rendered_tab = 255;
     _settings_last_tuning_mode = telemetry.tuning_mode ? 1 : 0;
@@ -53,6 +55,17 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
             _settings_inited = false;
             _last_rendered_tab = 255;
             markFullDirty();
+            _menu_dirty = true;
+        }
+    }
+
+    if (telemetry.tuning_mode && _settings_tab_idx == TAB_DASH) {
+        WledController &wled = WledController::instance();
+        uint32_t wled_sig = ((uint32_t)(wled.isEnabled() ? 1U : 0U) << 16) |
+                            ((uint32_t)wled.getEffect() << 8) |
+                            (uint32_t)wled.getBrightness();
+        if (wled_sig != _last_wled_sig) {
+            _last_wled_sig = wled_sig;
             _menu_dirty = true;
         }
     }
@@ -303,11 +316,58 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
             drawSmoothText(UIF_BODY, bmLabels[b], bx + 47, 324, textdatum_t::middle_center, bFg, bBg);
         }
 
-        // Card 4: FOC TURBINE SOUND (y: 370..446, h: 76)
-        drawCard(20, 370, 760, 76, pal.surface, pal.border, 12);
-        drawSmoothText(UIF_HEADING, "FOC TURBINE SOUND", 38, 382, textdatum_t::top_left, pal.text, pal.surface);
-        drawSmoothText(UIF_SMALL, "Synthetischer E-Antriebs-Sound über Motorphasen beim Fahren", 38, 412, textdatum_t::top_left, pal.muted, pal.surface);
-        drawPillToggle(706, 393, Settings.get().turbine_sound_enabled, pal);
+        if (telemetry.tuning_mode) {
+            // Card 4a (left, x: 20..532): Compact WLED Tuning-Only Quick Controls (100% hidden in Police Mode)
+            WledController &wled = WledController::instance();
+            bool w_en = wled.isEnabled();
+            uint8_t w_fx = wled.getEffect();
+            uint8_t w_bri = wled.getBrightness();
+            _last_wled_sig = ((uint32_t)(w_en ? 1U : 0U) << 16) | ((uint32_t)w_fx << 8) | (uint32_t)w_bri;
+
+            drawCard(20, 370, 512, 76, pal.surface, pal.border, 12);
+
+            // [ WLED: AN / AUS ] (x: 30..162, y: 384..432)
+            uint16_t onBg = w_en ? blendRgb565(pal.surface_alt, pal.primary, pal.is_light ? 34 : 28) : pal.surface_alt;
+            uint16_t onBd = w_en ? pal.primary : pal.border;
+            uint16_t onFg = w_en ? pal.primary : (pal.is_light ? pal.text : pal.muted);
+            _canvas->fillRoundRect(30, 384, 132, 48, 12, onBg);
+            _canvas->drawRoundRect(30, 384, 132, 48, 12, onBd);
+            drawSmoothText(UIF_BODY, w_en ? "WLED: AN" : "WLED: AUS", 96, 408,
+                           textdatum_t::middle_center, onFg, onBg);
+
+            // [ FX: <NAME> ] (x: 170..330, y: 384..432)
+            char fxBuf[24];
+            snprintf(fxBuf, sizeof(fxBuf), "FX: %s", WledController::getEffectName(w_fx));
+            _canvas->fillRoundRect(170, 384, 160, 48, 12, pal.surface_alt);
+            _canvas->drawRoundRect(170, 384, 160, 48, 12, pal.border);
+            drawSmoothText(UIF_BODY, fxBuf, 250, 408, textdatum_t::middle_center, pal.text, pal.surface_alt);
+
+            // Brightness [ - ] <Pct> [ + ] (x: 338..522, y: 384..432)
+            _canvas->fillRoundRect(338, 384, 48, 48, 12, pal.surface_alt);
+            _canvas->drawRoundRect(338, 384, 48, 48, 12, pal.border);
+            drawSmoothText(UIF_HEADING, "-", 362, 408, textdatum_t::middle_center, pal.text, pal.surface_alt);
+
+            drawSmoothText(UIF_SMALL, "HELL", 427, 389, textdatum_t::top_center, pal.muted, pal.surface);
+            char briBuf[16];
+            snprintf(briBuf, sizeof(briBuf), "%u%%", (unsigned)(((uint32_t)w_bri * 100U + 127U) / 255U));
+            drawSmoothText(UIF_BODY, briBuf, 427, 417, textdatum_t::middle_center, pal.primary, pal.surface);
+
+            _canvas->fillRoundRect(468, 384, 48, 48, 12, pal.surface_alt);
+            _canvas->drawRoundRect(468, 384, 48, 48, 12, pal.border);
+            drawSmoothText(UIF_HEADING, "+", 492, 408, textdatum_t::middle_center, pal.text, pal.surface_alt);
+
+            // Card 4b (right, x: 540..780): FOC TURBINE (preserves exact pill toggle position 706, 393)
+            drawCard(540, 370, 240, 76, pal.surface, pal.border, 12);
+            drawSmoothText(UIF_BODY, "FOC TURBINE", 556, 386, textdatum_t::top_left, pal.text, pal.surface);
+            drawSmoothText(UIF_SMALL, "Motor-Sound", 556, 414, textdatum_t::top_left, pal.muted, pal.surface);
+            drawPillToggle(706, 393, Settings.get().turbine_sound_enabled, pal);
+        } else {
+            // Card 4 (Police / Stealth Mode): Full-width FOC TURBINE SOUND, WLED strictly hidden
+            drawCard(20, 370, 760, 76, pal.surface, pal.border, 12);
+            drawSmoothText(UIF_HEADING, "FOC TURBINE SOUND", 38, 382, textdatum_t::top_left, pal.text, pal.surface);
+            drawSmoothText(UIF_SMALL, "Synthetischer E-Antriebs-Sound über Motorphasen beim Fahren", 38, 412, textdatum_t::top_left, pal.muted, pal.surface);
+            drawPillToggle(706, 393, Settings.get().turbine_sound_enabled, pal);
+        }
 
         drawSmoothText(UIF_SMALL, "Design & Cockpit-Anzeigen  •  Nachtmodus dimmt Display per Software",
                        400, 462, textdatum_t::middle_center, pal.muted, pal.bg);
@@ -983,12 +1043,40 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             }
         }
 
-        // Card 4: FOC Turbine Sound Pill Toggle (y: 370..446)
-        if (ty >= 370 && ty <= 446 && tx >= 580 && tx <= 780) {
-            Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
-            Settings.save();
-            _menu_dirty = true;
-            return true;
+        // Card 4: WLED Quick Controls (Tuning-only, x: 20..532) + FOC Turbine Sound (x: 580..780)
+        if (ty >= 370 && ty <= 446) {
+            if (tx >= 580 && tx <= 780) {
+                Settings.get().turbine_sound_enabled = !Settings.get().turbine_sound_enabled;
+                Settings.save();
+                _menu_dirty = true;
+                return true;
+            }
+            if (telemetry.tuning_mode && tx >= 20 && tx <= 532) {
+                WledController &wled = WledController::instance();
+                if (tx >= 24 && tx < 166) {
+                    wled.setEnabled(!wled.isEnabled());
+                    _menu_dirty = true;
+                    return true;
+                }
+                if (tx >= 166 && tx < 334) {
+                    uint8_t next_fx = (uint8_t)((wled.getEffect() + 1U) % (WledController::EFFECT_MAX + 1U));
+                    wled.setEffect(next_fx);
+                    _menu_dirty = true;
+                    return true;
+                }
+                if (tx >= 334 && tx < 420) {
+                    uint8_t cur_bri = wled.getBrightness();
+                    wled.setBrightness((cur_bri > 25) ? (uint8_t)(cur_bri - 25) : 0);
+                    _menu_dirty = true;
+                    return true;
+                }
+                if (tx >= 450 && tx <= 528) {
+                    uint8_t cur_bri = wled.getBrightness();
+                    wled.setBrightness((cur_bri <= 230) ? (uint8_t)(cur_bri + 25) : 255);
+                    _menu_dirty = true;
+                    return true;
+                }
+            }
         }
         return false;
     }

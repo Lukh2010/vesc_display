@@ -3,14 +3,16 @@
 #include <string.h>
 
 #if !defined(NATIVE_SIMULATOR)
-#include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
+#include "ota_manager.h"
 static portMUX_TYPE s_wled_cfg_mux = portMUX_INITIALIZER_UNLOCKED;
 #define WLED_CFG_ENTER() portENTER_CRITICAL(&s_wled_cfg_mux)
 #define WLED_CFG_EXIT()  portEXIT_CRITICAL(&s_wled_cfg_mux)
 #else
 #define WLED_CFG_ENTER() do {} while (0)
 #define WLED_CFG_EXIT()  do {} while (0)
+static bool s_sim_wled_blob_valid = false;
+static WledPersistConfig s_sim_wled_blob{};
 #endif
 
 #if !defined(NATIVE_SIMULATOR) && ENABLE_WLED
@@ -59,10 +61,64 @@ WledController::WledController()
       _custom_b(248),
       _effect(EFFECT_SPEED_GLOW),
       _rear_led_count((WLED_REAR_LED_COUNT > WLED_LED_COUNT) ? WLED_LED_COUNT : WLED_REAR_LED_COUNT),
+      _dirty(false),
+      _dirty_since_ms(0),
+      _last_now_ms(0),
       _active_mode(WLED_MODE_OFF),
       _last_update_ms(0),
-      _anim_phase(0) {
+      _anim_phase(0)
+#if !defined(NATIVE_SIMULATOR)
+    , _nvs_mutex(xSemaphoreCreateMutex())
+#endif
+{
     memset(_leds, 0, sizeof(_leds));
+}
+
+void WledController::applyDefaultsLocked() {
+    _enabled         = true;
+    _brightness      = 180;
+    _use_theme_color = true;
+    _custom_r        = 56;
+    _custom_g        = 189;
+    _custom_b        = 248;
+    _effect          = EFFECT_SPEED_GLOW;
+    _rear_led_count  = (WLED_REAR_LED_COUNT > WLED_LED_COUNT) ? WLED_LED_COUNT : WLED_REAR_LED_COUNT;
+}
+
+void WledController::applyBlobLocked(const WledPersistConfig &blob) {
+    _enabled         = (blob.enabled != 0);
+    _brightness      = blob.brightness;
+    _effect          = (blob.effect <= EFFECT_MAX) ? blob.effect : EFFECT_SPEED_GLOW;
+    _rear_led_count  = (blob.rear_led_count <= WLED_LED_COUNT) ? blob.rear_led_count : WLED_REAR_LED_COUNT;
+    _use_theme_color = (blob.use_theme_color != 0);
+    _custom_r        = blob.custom_r;
+    _custom_g        = blob.custom_g;
+    _custom_b        = blob.custom_b;
+}
+
+void WledController::buildBlobLocked(WledPersistConfig &blob) const {
+    memset(&blob, 0, sizeof(blob));
+    blob.magic           = WLED_CFG_MAGIC;
+    blob.version         = WLED_CFG_VERSION;
+    blob.enabled         = _enabled ? 1 : 0;
+    blob.brightness      = _brightness;
+    blob.effect          = (_effect <= EFFECT_MAX) ? _effect : EFFECT_SPEED_GLOW;
+    blob.rear_led_count  = (_rear_led_count <= WLED_LED_COUNT) ? _rear_led_count : WLED_REAR_LED_COUNT;
+    blob.use_theme_color = _use_theme_color ? 1 : 0;
+    blob.custom_r        = _custom_r;
+    blob.custom_g        = _custom_g;
+    blob.custom_b        = _custom_b;
+}
+
+const char* WledController::getEffectName(uint8_t fx) {
+    switch (fx) {
+        case EFFECT_SOLID:      return "SOLID";
+        case EFFECT_SPEED_GLOW: return "SPEED";
+        case EFFECT_BREATHE:    return "ATMEN";
+        case EFFECT_RAINBOW:    return "RAINB";
+        case EFFECT_SCANNER:    return "SCAN";
+        default:                return "SPEED";
+    }
 }
 
 WledRgb WledController::themePrimaryRgb(uint8_t color_theme) {
@@ -98,12 +154,86 @@ WledRgb WledController::colorWheel(uint8_t pos) {
     return { (uint8_t)(pos * 3U), (uint8_t)(255U - pos * 3U), 0U };
 }
 
+bool WledController::loadConfig() {
+    WledPersistConfig blob;
+    memset(&blob, 0, sizeof(blob));
+    bool valid = false;
+
+#if !defined(NATIVE_SIMULATOR)
+    if (!_nvs_mutex || xSemaphoreTake(_nvs_mutex, portMAX_DELAY) == pdTRUE) {
+        if (_prefs.begin("vesc_wled", false)) {
+            size_t read_bytes = _prefs.getBytes("wled_cfg_v1", &blob, sizeof(blob));
+            _prefs.end();
+            valid = (read_bytes == sizeof(blob) &&
+                     blob.magic == WLED_CFG_MAGIC &&
+                     blob.version == WLED_CFG_VERSION);
+        }
+        if (_nvs_mutex) xSemaphoreGive(_nvs_mutex);
+    }
+#else
+    if (s_sim_wled_blob_valid &&
+        s_sim_wled_blob.magic == WLED_CFG_MAGIC &&
+        s_sim_wled_blob.version == WLED_CFG_VERSION) {
+        blob = s_sim_wled_blob;
+        valid = true;
+    }
+#endif
+
+    WLED_CFG_ENTER();
+    if (valid) {
+        applyBlobLocked(blob);
+    }
+    _dirty = false;
+    WLED_CFG_EXIT();
+    return valid;
+}
+
+bool WledController::saveConfig() {
+#if !defined(NATIVE_SIMULATOR)
+    if (OtaManager::instance().isUpdating()) {
+        return false;
+    }
+#endif
+    WledPersistConfig blob;
+    WLED_CFG_ENTER();
+    buildBlobLocked(blob);
+    _dirty = false;
+    WLED_CFG_EXIT();
+
+#if !defined(NATIVE_SIMULATOR)
+    bool ok = false;
+    if (!_nvs_mutex || xSemaphoreTake(_nvs_mutex, portMAX_DELAY) == pdTRUE) {
+        if (_prefs.begin("vesc_wled", false)) {
+            size_t written = _prefs.putBytes("wled_cfg_v1", &blob, sizeof(blob));
+            _prefs.end();
+            ok = (written == sizeof(blob));
+        }
+        if (_nvs_mutex) xSemaphoreGive(_nvs_mutex);
+    }
+    return ok;
+#else
+    s_sim_wled_blob = blob;
+    s_sim_wled_blob_valid = true;
+    return true;
+#endif
+}
+
+bool WledController::isDirty() const {
+    WLED_CFG_ENTER();
+    bool d = _dirty;
+    WLED_CFG_EXIT();
+    return d;
+}
+
 void WledController::begin() {
     memset(_leds, 0, sizeof(_leds));
     _active_mode = WLED_MODE_OFF;
     _has_updated = false;
     _last_update_ms = 0;
+    _last_now_ms = (uint32_t)millis();
     _anim_phase = 0;
+
+    loadConfig();
     _initialized = true;
 
 #if !defined(NATIVE_SIMULATOR) && ENABLE_WLED && (PIN_WLED_DATA >= 0)
@@ -113,8 +243,8 @@ void WledController::begin() {
         flushHardware();
         Serial.printf("[WLED] Hardware RMT initialized on GPIO %d (%d LEDs: Rear=%u, Underglow=%u @ 800 kHz).\n",
                       PIN_WLED_DATA, WLED_LED_COUNT,
-                      (unsigned)_rear_led_count,
-                      (unsigned)(WLED_LED_COUNT - _rear_led_count));
+                      (unsigned)getRearLedCount(),
+                      (unsigned)(WLED_LED_COUNT - getRearLedCount()));
     } else {
         Serial.printf("[WLED] WARN: rmtInit failed on GPIO %d.\n", PIN_WLED_DATA);
     }
@@ -124,8 +254,13 @@ void WledController::begin() {
 }
 
 void WledController::setEnabled(bool en) {
+    uint32_t ts = (uint32_t)millis();
     WLED_CFG_ENTER();
-    _enabled = en;
+    if (_enabled != en) {
+        _enabled = en;
+        _dirty = true;
+        _dirty_since_ms = _has_updated ? _last_now_ms : ts;
+    }
     WLED_CFG_EXIT();
     if (!en) {
         memset(_leds, 0, sizeof(_leds));
@@ -142,8 +277,13 @@ bool WledController::isEnabled() const {
 }
 
 void WledController::setBrightness(uint8_t bri) {
+    uint32_t ts = (uint32_t)millis();
     WLED_CFG_ENTER();
-    _brightness = bri;
+    if (_brightness != bri) {
+        _brightness = bri;
+        _dirty = true;
+        _dirty_since_ms = _has_updated ? _last_now_ms : ts;
+    }
     WLED_CFG_EXIT();
     if (bri == 0) {
         memset(_leds, 0, sizeof(_leds));
@@ -159,17 +299,27 @@ uint8_t WledController::getBrightness() const {
 }
 
 void WledController::setCustomColor(uint8_t r, uint8_t g, uint8_t b) {
+    uint32_t ts = (uint32_t)millis();
     WLED_CFG_ENTER();
-    _use_theme_color = false;
-    _custom_r = r;
-    _custom_g = g;
-    _custom_b = b;
+    if (_use_theme_color || _custom_r != r || _custom_g != g || _custom_b != b) {
+        _use_theme_color = false;
+        _custom_r = r;
+        _custom_g = g;
+        _custom_b = b;
+        _dirty = true;
+        _dirty_since_ms = _has_updated ? _last_now_ms : ts;
+    }
     WLED_CFG_EXIT();
 }
 
 void WledController::setUseThemeColor(bool use_theme) {
+    uint32_t ts = (uint32_t)millis();
     WLED_CFG_ENTER();
-    _use_theme_color = use_theme;
+    if (_use_theme_color != use_theme) {
+        _use_theme_color = use_theme;
+        _dirty = true;
+        _dirty_since_ms = _has_updated ? _last_now_ms : ts;
+    }
     WLED_CFG_EXIT();
 }
 
@@ -203,8 +353,13 @@ uint8_t WledController::getColorB() const {
 
 void WledController::setEffect(uint8_t fx) {
     if (fx > EFFECT_MAX) fx = EFFECT_MAX;
+    uint32_t ts = (uint32_t)millis();
     WLED_CFG_ENTER();
-    _effect = fx;
+    if (_effect != fx) {
+        _effect = fx;
+        _dirty = true;
+        _dirty_since_ms = _has_updated ? _last_now_ms : ts;
+    }
     WLED_CFG_EXIT();
 }
 
@@ -217,8 +372,13 @@ uint8_t WledController::getEffect() const {
 
 void WledController::setRearLedCount(uint8_t count) {
     if (count > WLED_LED_COUNT) count = WLED_LED_COUNT;
+    uint32_t ts = (uint32_t)millis();
     WLED_CFG_ENTER();
-    _rear_led_count = count;
+    if (_rear_led_count != count) {
+        _rear_led_count = count;
+        _dirty = true;
+        _dirty_since_ms = _has_updated ? _last_now_ms : ts;
+    }
     WLED_CFG_EXIT();
 }
 
@@ -248,6 +408,27 @@ void WledController::update(const DashTelemetry &telemetry, uint32_t now_ms) {
         begin();
     }
 
+    // Check debounced NVS persistence outside any critical section (defer while OTA active)
+    bool should_save = false;
+#if !defined(NATIVE_SIMULATOR)
+    bool ota_active = OtaManager::instance().isUpdating();
+#else
+    bool ota_active = false;
+#endif
+    WLED_CFG_ENTER();
+    _last_now_ms = now_ms;
+    if (_dirty) {
+        if (ota_active) {
+            _dirty_since_ms = now_ms;
+        } else if ((uint32_t)(now_ms - _dirty_since_ms) >= NVS_DEBOUNCE_MS) {
+            should_save = true;
+        }
+    }
+    WLED_CFG_EXIT();
+    if (should_save) {
+        saveConfig();
+    }
+
     if (_has_updated && (uint32_t)(now_ms - _last_update_ms) < WLED_UPDATE_INTERVAL_MS) {
         return;
     }
@@ -263,7 +444,7 @@ void WledController::update(const DashTelemetry &telemetry, uint32_t now_ms) {
 }
 
 void WledController::renderEffect(const DashTelemetry &telemetry, uint32_t now_ms, uint32_t dt_ms) {
-    // Atomic snapshot of runtime configuration (Core 1 HTTP /json/state <-> Core 0 render)
+    // Atomic snapshot of runtime configuration (Core 1 HTTP /json/state & UI <-> Core 0 render)
     WLED_CFG_ENTER();
     bool enabled         = _enabled;
     uint8_t brightness   = _brightness;
@@ -283,8 +464,6 @@ void WledController::renderEffect(const DashTelemetry &telemetry, uint32_t now_m
 
     if (brightness == 0) {
         memset(_leds, 0, sizeof(_leds));
-        // Still classify active mode logically if helpful, or OFF? Keep mode classification clean below or 0 LEDs:
-        // All LEDs are strictly (0,0,0) when brightness == 0.
         if (telemetry.theft_alarm_active) _active_mode = WLED_MODE_THEFT_STROBE;
         else if (telemetry.g_force < -0.65f) _active_mode = WLED_MODE_BRAKE_EMERGENCY;
         else if (telemetry.current_amps < -2.0f || telemetry.g_force < -0.45f) _active_mode = WLED_MODE_BRAKE_SOLID;
@@ -310,7 +489,6 @@ void WledController::renderEffect(const DashTelemetry &telemetry, uint32_t now_m
     const WledRgb theme_rgb = themePrimaryRgb(telemetry.color_theme);
 
     // Priority 2: Locked / Parked (without alarm)
-    // Segment 0: subtle low-power breathing; Segment 1: strictly OFF
     if (telemetry.is_locked) {
         _active_mode = WLED_MODE_LOCKED_BREATHE;
         float phase_rad = ((float)(now_ms % 4000U) / 4000.0f) * 6.2831853f;
@@ -326,10 +504,7 @@ void WledController::renderEffect(const DashTelemetry &telemetry, uint32_t now_m
         return;
     }
 
-    // -------------------------------------------------------------------------
-    // Active Riding (Police Mode !tuning_mode OR Tuning Mode tuning_mode)
     // Segment 0 (0 .. rear_count - 1): Legal Rear Tail & Adaptive Brake Light
-    // -------------------------------------------------------------------------
     WledRgb rear_color;
     if (emergency_brake) {
         _active_mode = WLED_MODE_BRAKE_EMERGENCY;
@@ -340,18 +515,15 @@ void WledController::renderEffect(const DashTelemetry &telemetry, uint32_t now_m
         rear_color = scaleRgb({ 255, 0, 0 }, brightness);
     } else {
         _active_mode = WLED_MODE_SPEED_GLOW;
-        rear_color = scaleRgb({ 90, 0, 0 }, brightness); // Subtle legal tail-light red
+        rear_color = scaleRgb({ 90, 0, 0 }, brightness);
     }
 
     for (int i = 0; i < rear_count; i++) {
         _leds[i] = rear_color;
     }
 
-    // -------------------------------------------------------------------------
     // Segment 1 (rear_count .. WLED_LED_COUNT - 1): Underglow (STRICTLY Tuning Only!)
-    // -------------------------------------------------------------------------
     if (!telemetry.tuning_mode) {
-        // Police / Legal Mode: 100% Stealth — underglow strip ALWAYS strictly OFF
         for (int i = rear_count; i < WLED_LED_COUNT; i++) {
             _leds[i] = { 0, 0, 0 };
         }
@@ -378,7 +550,7 @@ void WledController::renderUnderglowSegment(uint8_t rear_count, uint8_t effect, 
 
         case EFFECT_BREATHE: {
             float phase_rad = ((float)(now_ms % 3200U) / 3200.0f) * 6.2831853f;
-            float wave = 0.5f - 0.5f * cosf(phase_rad); // 0.0 -> 1.0 -> 0.0
+            float wave = 0.5f - 0.5f * cosf(phase_rad);
             uint8_t sc = (uint8_t)(38.0f + wave * 217.0f);
             WledRgb out = scaleRgb(scaleRgb(base, sc), brightness);
             for (int i = rear_count; i < WLED_LED_COUNT; i++) {
@@ -397,20 +569,18 @@ void WledController::renderUnderglowSegment(uint8_t rear_count, uint8_t effect, 
         }
 
         case EFFECT_SCANNER: {
-            // Larson / Knight-Rider ping-pong comet with soft tail
             int span = (seg_len > 1) ? (seg_len - 1) : 1;
             uint32_t period_steps = (uint32_t)span * 2U;
             uint32_t step = (now_ms / 30U) % period_steps;
             int head = (step <= (uint32_t)span) ? (int)step : (int)(period_steps - step);
             for (int k = 0; k < seg_len; k++) {
                 int dist = (k >= head) ? (k - head) : (head - k);
-                uint8_t sc = 0;
+                uint8_t sc = 8;
                 if (dist == 0) sc = 255;
                 else if (dist == 1) sc = 170;
                 else if (dist == 2) sc = 96;
                 else if (dist == 3) sc = 48;
                 else if (dist == 4) sc = 20;
-                else sc = 8; // Very dim background floor
                 _leds[rear_count + k] = scaleRgb(scaleRgb(base, sc), brightness);
             }
             break;

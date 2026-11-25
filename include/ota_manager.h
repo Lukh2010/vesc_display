@@ -7,6 +7,7 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <ArduinoOTA.h>
+#include <ESPmDNS.h>
 #endif
 
 class OtaManager {
@@ -38,6 +39,7 @@ private:
     char _status_text[64];
 
 #if !defined(NATIVE_SIMULATOR)
+    bool _mdns_running;
     WebServer _server;
     void setupRoutes();
 #endif

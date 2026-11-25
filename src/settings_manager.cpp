@@ -134,6 +134,7 @@ void SettingsManager::begin() {
         _settings.throttle_adc_channel   = _prefs.getUChar("adc_ch", 0);
         _settings.pin_lock_enabled       = _prefs.getBool("pin_en", true);
         _prefs.getString("pin_code", _settings.pin_code, sizeof(_settings.pin_code));
+        _settings.pin_code[sizeof(_settings.pin_code) - 1] = '\0';
         if (strlen(_settings.pin_code) != 4) {
             strncpy(_settings.pin_code, "1234", sizeof(_settings.pin_code));
             _settings.pin_code[sizeof(_settings.pin_code) - 1] = '\0';
@@ -173,7 +174,9 @@ void SettingsManager::begin() {
         _settings.ble_autolock_enabled   = _prefs.getBool("ble_alock", true);
         _settings.ble_paired             = _prefs.getBool("ble_pair", false);
         _prefs.getString("ble_addr", _settings.ble_paired_addr, sizeof(_settings.ble_paired_addr));
+        _settings.ble_paired_addr[sizeof(_settings.ble_paired_addr) - 1] = '\0';
         _prefs.getString("ble_name", _settings.ble_paired_name, sizeof(_settings.ble_paired_name));
+        _settings.ble_paired_name[sizeof(_settings.ble_paired_name) - 1] = '\0';
         if (strlen(_settings.ble_paired_name) == 0) {
             strncpy(_settings.ble_paired_name, "Smartphone", sizeof(_settings.ble_paired_name));
             _settings.ble_paired_name[sizeof(_settings.ble_paired_name) - 1] = '\0';
@@ -391,7 +394,7 @@ void SettingsManager::setOdoMeters(uint32_t m) {
 }
 
 void SettingsManager::addOdoMeters(float delta_m) {
-    if (isnan(delta_m) || delta_m <= 0.0f) return;
+    if (isnan(delta_m) || isinf(delta_m) || delta_m <= 0.0f) return;
     SETTINGS_LOCK();
     _odo_accum_fraction_m += delta_m;
     uint32_t full_m = (uint32_t)_odo_accum_fraction_m;

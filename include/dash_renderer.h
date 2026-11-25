@@ -390,6 +390,7 @@ private:
 
     // Fault Blackbox Modal State (in Settings)
     bool     _fault_modal_open;
+    uint32_t _last_wled_sig;
 
     // Wizard State
     uint8_t  _wizard_step;       // 0=Welcome, 1=PIN, 2=Hardware

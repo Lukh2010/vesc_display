@@ -289,6 +289,7 @@ void GpsTracker::update(DashTelemetry &telemetry) {
         s_last_clock_h = (int8_t)cur_h;
         s_last_clock_m = (int8_t)cur_m;
         snprintf(telemetry.clock_str, sizeof(telemetry.clock_str), "%02d:%02d", cur_h, cur_m);
+        telemetry.clock_str[sizeof(telemetry.clock_str) - 1] = '\0';
     }
 
     // --------------------------------------------------------------------------

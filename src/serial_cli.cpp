@@ -10,6 +10,7 @@
 #include "mode_manager.h"
 #include "buttons.h"
 #include "dash_log.h"
+#include "wled_controller.h"
 
 #ifndef PIN_STEERING_BTN_ADC
 #define PIN_STEERING_BTN_ADC 6
@@ -211,6 +212,7 @@ void handleSerialCli(DashTelemetry &telemetry, uint32_t now) {
                         Serial.println("  r         : PIN auf 1234 resetten & entsperren");
                         Serial.println("  status    : System Telemetrie anzeigen");
                         Serial.println("  theme     : Farb-Theme umschalten");
+                        Serial.println("  wled      : WLED Diagnose (status/on/off/bri/fx/rear/save)");
                         Serial.println("  btn-cal   : Segway-Tasten ADC 10x messen (Min/Max/Avg)");
                         Serial.println("  unlock    : Direkt per Textbefehl entsperren");
                         Serial.println("===============================");
@@ -413,8 +415,79 @@ void handleSerialCli(DashTelemetry &telemetry, uint32_t now) {
                         uint32_t avg_mv = sum_mv / 10;
                         Serial.printf("[ADC-CAL] Result -> Min: %u mV | Max: %u mV | Avg: %u mV\n",
                                       (unsigned int)min_mv, (unsigned int)max_mv, (unsigned int)avg_mv);
+                    } else if (strcasecmp(cmd, "wled") == 0 || strncasecmp(cmd, "wled ", 5) == 0) {
+                        WledController &wled = WledController::instance();
+                        const char *arg = (strlen(cmd) > 4) ? (cmd + 5) : "";
+                        while (*arg == ' ' || *arg == '\t') arg++;
+
+                        if (*arg == '\0' || strcasecmp(arg, "status") == 0) {
+                            Serial.printf("[WLED] %s | Bri: %u | FX: %u (%s) | Rear: %u | Color: %s (%u,%u,%u) | Dirty: %s\n",
+                                          wled.isEnabled() ? "ON" : "OFF",
+                                          (unsigned)wled.getBrightness(),
+                                          (unsigned)wled.getEffect(),
+                                          WledController::getEffectName(wled.getEffect()),
+                                          (unsigned)wled.getRearLedCount(),
+                                          wled.isUsingThemeColor() ? "THEME" : "CUSTOM",
+                                          (unsigned)wled.getColorR(), (unsigned)wled.getColorG(), (unsigned)wled.getColorB(),
+                                          wled.isDirty() ? "YES" : "NO");
+                        } else if (strcasecmp(arg, "on") == 0) {
+                            wled.setEnabled(true);
+                            Renderer.markScreenDirty();
+                            Serial.println("[WLED] Enabled -> ON");
+                        } else if (strcasecmp(arg, "off") == 0) {
+                            wled.setEnabled(false);
+                            Renderer.markScreenDirty();
+                            Serial.println("[WLED] Disabled -> OFF");
+                        } else if (strncasecmp(arg, "bri ", 4) == 0) {
+                            const char *p = arg + 4;
+                            while (*p == ' ' || *p == '\t') p++;
+                            char *endptr = nullptr;
+                            long val = strtol(p, &endptr, 10);
+                            if (p == endptr) {
+                                Serial.println("[WLED] Usage: wled bri <0..255>");
+                            } else {
+                                if (val < 0) val = 0;
+                                if (val > 255) val = 255;
+                                wled.setBrightness((uint8_t)val);
+                                Renderer.markScreenDirty();
+                                Serial.printf("[WLED] Brightness -> %ld\n", val);
+                            }
+                        } else if (strncasecmp(arg, "fx ", 3) == 0) {
+                            const char *p = arg + 3;
+                            while (*p == ' ' || *p == '\t') p++;
+                            char *endptr = nullptr;
+                            long val = strtol(p, &endptr, 10);
+                            if (p == endptr) {
+                                Serial.println("[WLED] Usage: wled fx <0..4>");
+                            } else {
+                                if (val < 0) val = 0;
+                                if (val > 4) val = 4;
+                                wled.setEffect((uint8_t)val);
+                                Renderer.markScreenDirty();
+                                Serial.printf("[WLED] Effect -> %ld (%s)\n", val, WledController::getEffectName((uint8_t)val));
+                            }
+                        } else if (strncasecmp(arg, "rear ", 5) == 0) {
+                            const char *p = arg + 5;
+                            while (*p == ' ' || *p == '\t') p++;
+                            char *endptr = nullptr;
+                            long val = strtol(p, &endptr, 10);
+                            if (p == endptr) {
+                                Serial.println("[WLED] Usage: wled rear <0..30>");
+                            } else {
+                                if (val < 0) val = 0;
+                                if (val > 30) val = 30;
+                                wled.setRearLedCount((uint8_t)val);
+                                Renderer.markScreenDirty();
+                                Serial.printf("[WLED] Rear LEDs -> %ld\n", val);
+                            }
+                        } else if (strcasecmp(arg, "save") == 0) {
+                            bool ok = wled.saveConfig();
+                            Serial.printf("[WLED] Config save -> %s\n", ok ? "OK" : "FAILED");
+                        } else {
+                            Serial.println("[WLED] Usage: wled [status|on|off|bri <0..255>|fx <0..4>|rear <0..30>|save]");
+                        }
                     } else if (strcasecmp(cmd, "help") == 0) {
-                        Serial.println("Befehle: unlock, lock, gas <A>, duty <%>, stop, status, theme, btn-cal, help");
+                        Serial.println("Befehle: unlock, lock, gas <A>, duty <%>, stop, status, theme, wled, btn-cal, help");
                     }
                 }
                 s_cmd_line[0] = '\0';

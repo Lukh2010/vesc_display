@@ -124,6 +124,34 @@ Das Dashboard nutzt das extrem performante 16-Bit RGB565 Parallel-Interface mit 
   - **Lauter & höher desto schneller:** Tonhöhe (280 Hz bis 3200 Hz) und Lautstärke (1.2V bis 6.5V) skalieren fließend mit der Geschwindigkeit.
   - **Strikte Null-Interferenz:** Die akustische Schwingung erzeugt kein Nettodrehmoment – Fahrphysik, Gasannahme, Rekuperation und Schutzlimits bleiben zu 100% unberührt! Im Stillstand sofort lautlos.
 
+- 💡 **2-Segment Stealth-WLED Engine (StVO-Rücklicht & Tuning-Unterbodenbeleuchtung):**
+  - **Echtes 2-Segment Dual-Lighting (`GPIO 15` WS2812B/SK6812):** Segment 0 (12 LEDs) fungiert als dauerhaft StVO-konformes rotes Rücklicht mit aktivem Bremslicht-Strobe bei Rekuperation (`current_amps < -2A`) und pulsierendem Notbrems-Signal (`g_force < -0.5g`).
+  - **Stealth-Unterbodenlicht:** Segment 1 (z. B. 48 LEDs) bleibt im Standard- & Polizei-Modus (`tuning_mode == false`) **strikt dunkel (0,0,0)**. Erst bei freigeschaltetem Tuning-Modus erwachen Custom-RGB-Farben, Rainbow, Color-Cycle, Scanner oder Speed-Glow (Farbe skaliert mit der Geschwindigkeit).
+  - **Theme-Sync & Atem-Effekt:** Automatische Farbübernahme aus dem gewählten Dashboard-Theme sowie sanfter Puls-Effekt (`Locked-Breathe`) bei aktivierter Wegfahrsperre.
+
+- 🌐 **Offizielle WLED-App JSON-API & Gzip Web-UI:**
+  - **WLED-Ökosystem-Kompatibilität:** Vollständige Implementierung der offiziellen WLED-JSON-Schnittstelle (`/json`, `/json/info`, `/json/state`), sodass jede native WLED-Smartphone-App im WLAN das Fahrzeug als vollwertiges Beleuchtungs-Device erkennt und steuert.
+  - **Integrierte Gzip Web-Oberfläche:** Leichtgewichtiges Web-UI unter `http://192.168.4.1/wled` (im AP-Modus) bzw. im Simulator unter `http://localhost:8080/wled` für interaktive Farb- und Effektwahl im Browser.
+
+- 📟 **On-Screen Fault-Blackbox Modal (System-Diagnose):**
+  - **Integrierte Fehler-Blackbox:** Im Einstellungsmenü unter Tab `[ SYSTEM ]` visualisiert die Schaltfläche `[ FAULT LOG (x) ]` alle aufgezeichneten VESC-Fehler (Spannung, Phasenstrom, MOSFET/Motor-Temperatur und System-Uptime).
+  - **Touch-Modal & Löschfunktion:** Detailansicht mit komfortablem Scrollen, Klartext-Fehlerbezeichnungen und `[ LOG LOESCHEN ]`-Button mit NVS-Synchronisation.
+
+- 🎮 **Segway G3 Max 5-Tasten ADC-Treiber & Kalibrier-CLI:**
+  - **Ein-Draht ADC-Lenkertasten:** Liest bis zu 5 Lenkertasten über einen einzigen ADC-Pin (`ADC1_CH2` / `GPIO 3`) mit Hysterese und automatischer Spannungsfenster-Erkennung aus (Power, Mode, Blinker Links/Rechts, Hupe/Boost).
+  - **`btn-cal` CLI:** Interaktive Kalibrierung über das USB-Terminal zum Einlernen individueller Widerstands-Werte mit direkter Speicherung im NVS.
+
+- 💻 **Serielle USB-Diagnose, WLED-CLI & ESPmDNS:**
+  - **Umfangreiche Serial-CLI:** USB-Diagnosekonsole (`help`, `status`, `reboot`, `factory-reset`, `btn-cal`) erweitert um dedizierte WLED-Befehle:
+    * `wled status`: Zeigt Betriebsmodus, RGB, Helligkeit, aktiven Effekt und NVS-Status an.
+    * `wled on` / `wled off`: Manuelles Ein- und Ausschalten.
+    * `wled bri <0..255>`: Helligkeit einstellen.
+    * `wled fx <0..4>`: Effekt umschalten (`0`=Solid, `1`=Speed-Glow, `2`=Atmen, `3`=Rainbow, `4`=Scanner).
+    * `wled rear <1..60>`: LED-Anzahl des StVO-Rücklicht-Segments konfigurieren.
+    * `wled save`: Sofortige NVS-Speicherung erzwingen.
+  - **ESPmDNS Auto-Discovery:** Im WLAN-Bridge-Modus ist das Display unter `http://vesc-dash.local` sowie `http://vesc-dash.local/wled` im Netzwerk direkt erreichbar.
+  - **Entprellte NVS-Persistenz & TAB_DASH Quick-Controls:** LED-Änderungen werden mit 1500 ms Hysterese materialschonend in den Flash geschrieben. Im Einstellungsmenü (`TAB_DASH`) stehen im Tuning-Modus On-Screen Touch-Buttons (`[ WLED ]`, `[ FX ]`, `[-]`/`[+]`) zur Verfügung; im Polizei-Modus bleiben diese zu 100% verborgen und gesperrt (Stealth).
+
 ---
 
 ## 👆 Touch-Gesten & Bedienung
@@ -216,19 +244,26 @@ Nutzt den integrierten TJA1051 CAN-Transceiver des Displays:
 
 ## 💻 Simulator, Regressionstests & OTA
 
-Das Repository enthält einen nativen Desktop-Simulator mit integriertem VESC-Protokoll-Emulator und **9 automatischen Regressionstests**:
+Das Repository enthält einen nativen Desktop-Simulator mit integriertem VESC-Protokoll-Emulator und **16 automatischen Regressionstests**:
 
 ```bash
+# Umfassende Qualitäts- & Syntaxprüfung aller Module ausführen:
+./tools/check_all.sh
+
 # Live-Demo mit grafischem Fenster & Web-Stream starten
 DISPLAY=:0 python3 tools/simulator/live_demo.py
 
-# Simulator neu bauen + alle UI-Szenarien & 9 Regressionstests ausführen
+# Simulator neu bauen + alle UI-Szenarien & 16 Regressionstests ausführen
 ./tools/simulator/build_and_run.sh
 
-# Drahtloses OTA-Update über WLAN (mit exakter 0–100% Fortschrittsanzeige)
-python3 tools/ota_flash.py
+# Drahtloses OTA-Update über WLAN (Standard: 4.3" Display):
+python3 tools/ota_flash.py --board 43
+
+# Drahtloses OTA-Update für Waveshare 7.0" Display:
+python3 tools/ota_flash.py --board 70
 ```
 - **Web-Interface:** [http://localhost:8080](http://localhost:8080) (interaktiver Stream mit Touch-Unterstützung).
+- **WLED Web-Preview:** [http://localhost:8080/wled](http://localhost:8080/wled) (interaktive LED-Steuerung im Browser).
 - **VESC Tool TCP Server:** TCP-Port `6510` zum direkten Testen mit dem offiziellen VESC Tool.
 
 ---
@@ -269,11 +304,14 @@ sudo chmod 666 /dev/ttyACM*
 *(Nach dem Gruppen-Befehl einmal ab- und wieder anmelden)*
 
 ### 4. Kompilieren & Flashen
-Verbinde das Board per USB-C mit dem PC und starte den Build & Flash-Prozess:
+Verbinde das Board per USB-C mit dem PC und starte den Build & Flash-Prozess für deine Display-Größe:
 
 ```bash
-# Firmware kompilieren und direkt auf den ESP32-S3 übertragen:
-pio run -t upload
+# Waveshare ESP32-S3-Touch-LCD-4.3 (4.3" Referenz-Display):
+pio run -e waveshare-esp32-s3-touch-lcd-43 -t upload
+
+# Waveshare ESP32-S3-Touch-LCD-7 (7.0" Display):
+pio run -e waveshare-esp32-s3-touch-lcd-7 -t upload
 ```
 
 > [!TIP]
@@ -282,7 +320,7 @@ pio run -t upload
 > 1. Die **BOOT-Taste** auf dem Board gedrückt halten.
 > 2. Die **RESET-Taste** kurz drücken.
 > 3. Die **BOOT-Taste** loslassen.
-> 4. `pio run -t upload` erneut ausführen.
+> 4. `pio run -e <env> -t upload` erneut ausführen.
 
 ### 5. Serieller Monitor & Erster Start
 Starte nach dem Flashen den seriellen Monitor, um Telemetrie- und VESC-Logs einzusehen:

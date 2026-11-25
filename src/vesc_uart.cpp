@@ -82,9 +82,9 @@ VescHandler::VescHandler()
 
 void VescHandler::updateWheelFactors() {
     float diam_in = Settings.get().wheel_diameter_in;
-    if (diam_in < 1.0f) diam_in = 11.0f;
+    if (!isfinite(diam_in) || diam_in < 1.0f) diam_in = 11.0f;
     float gear_ratio = Settings.get().gear_ratio;
-    if (gear_ratio < 0.1f) gear_ratio = 1.0f;
+    if (!isfinite(gear_ratio) || gear_ratio < 0.1f) gear_ratio = 1.0f;
     int pole_pairs = Settings.get().motor_pole_pairs;
     if (pole_pairs < 2) pole_pairs = 15;
 

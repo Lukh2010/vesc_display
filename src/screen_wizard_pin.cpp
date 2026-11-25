@@ -76,7 +76,8 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
                            textdatum_t::middle_center, onPrimaryFg(pal), pal.accent_danger);
 
             char moveBuf[80];
-            snprintf(moveBuf, sizeof(moveBuf), "BEWEGUNG ERKANNT (%.1f m) — FOC MOTOR-SIRENE AKTIV", telemetry.locked_moved_meters);
+            float moved_m = (isnan(telemetry.locked_moved_meters) || isinf(telemetry.locked_moved_meters)) ? 0.0f : telemetry.locked_moved_meters;
+            snprintf(moveBuf, sizeof(moveBuf), "BEWEGUNG ERKANNT (%.1f m) — FOC MOTOR-SIRENE AKTIV", moved_m);
             drawSmoothText(UIF_BODY, moveBuf, 400, 76, textdatum_t::middle_center, pal.accent_danger, pal.bg);
         } else {
             // Sleek Automotive Header: Lock Icon + "PIN-SPERRE" centered
@@ -96,7 +97,9 @@ void DashboardRenderer::renderPinLockScreen(const DashTelemetry &telemetry) {
 
     // Compact Battery Status Pill in top-right header (visible before unlocking!)
     if (!alarm) {
-        bool valid_bat = (telemetry.voltage > 10.0f && telemetry.battery_pct >= 0.0f);
+        bool valid_bat = (!isnan(telemetry.voltage) && !isinf(telemetry.voltage) &&
+                          !isnan(telemetry.battery_pct) && !isinf(telemetry.battery_pct) &&
+                          telemetry.voltage > 10.0f && telemetry.battery_pct >= 0.0f);
         int cur_bp = valid_bat ? (int)(telemetry.battery_pct + 0.5f) : -1;
         int cur_vx10 = valid_bat ? (int)(telemetry.voltage * 10.0f + 0.5f) : -1;
         int8_t cur_vc = valid_bat ? 1 : 0;

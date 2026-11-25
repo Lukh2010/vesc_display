@@ -3,31 +3,58 @@
 #include <Arduino.h>
 
 // ==============================================================================
-// Waveshare ESP32-S3-Touch-LCD-4.3 Board Configuration & Pin Mapping
+// Waveshare ESP32-S3-Touch-LCD-4.3 & 7.0 Dual-Target Board Configuration
 // ==============================================================================
 // Hardware: ESP32-S3 (16MB Flash, 8MB Octal PSRAM - qio_opi)
-// Display:  ST7262 RGB Parallel Interface (800x480 landscape)
+// Display:  ST7262 RGB Parallel Interface (800x480 landscape, harmonized 12 MHz)
 // Touch:    Goodix GT911 Capacitive Touch Controller (I2C)
 // IO Exp.:  CH422G I2C Expander (Backlight on EXIO2, Touch RST on EXIO1)
 
+#if defined(WAVESHARE_LCD_7_0) && WAVESHARE_LCD_7_0
+#define BOARD_DISPLAY_NAME "Waveshare ESP32-S3-Touch-LCD-7.0"
+#else
+#ifndef WAVESHARE_LCD_4_3
+#define WAVESHARE_LCD_4_3 1
+#endif
+#define BOARD_DISPLAY_NAME "Waveshare ESP32-S3-Touch-LCD-4.3"
+#endif
+
 // Display Dimensions
+#ifndef LCD_WIDTH
 #define LCD_WIDTH   800
+#endif
+#ifndef LCD_HEIGHT
 #define LCD_HEIGHT  480
+#endif
 
 // ST7262 RGB Parallel Timing & Clock (Harmonized for Waveshare 4.3" & 7.0" 800x480)
 #define LCD_PIN_HSYNC   46
 #define LCD_PIN_VSYNC   3
 #define LCD_PIN_DE      5
 #define LCD_PIN_PCLK    7
-#define LCD_FREQ_HZ     12000000 // 12 MHz (exact 240MHz/20 integer divisor, zero jitter on 4.3" & 7")
+#ifndef LCD_FREQ_HZ
+#define LCD_FREQ_HZ     12000000 // 12 MHz (exact 240MHz/20 integer divisor, zero jitter on 4.3" & 7.0")
+#endif
 
 // ST7262 RGB Timing Parameters (Conservative blanking porches for 4.3" & 7.0" stability)
+#ifndef LCD_HPW
 #define LCD_HPW         8
+#endif
+#ifndef LCD_HBP
 #define LCD_HBP         16
+#endif
+#ifndef LCD_HFP
 #define LCD_HFP         20
+#endif
+#ifndef LCD_VPW
 #define LCD_VPW         4
+#endif
+#ifndef LCD_VBP
 #define LCD_VBP         12
+#endif
+#ifndef LCD_VFP
 #define LCD_VFP         12
+#endif
 
 // ST7262 RGB Bus Data Pins (16-bit RGB565)
 // Blue: B0 - B4 (D0 - D4)

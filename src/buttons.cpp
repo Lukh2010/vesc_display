@@ -417,15 +417,16 @@ void ButtonHandler::processTouch(uint32_t now) {
                             _pending_action = NAV_SCREEN_STATS;
                         } else if (UiLayout::DASH_SETTINGS_TAP_HIT.contains(_last_tap_x, _last_tap_y)) {
                             _pending_action = NAV_BTN1_LONG;
-                        } else if (Settings.get().show_light_btn != 0 && ({
+                        } else if ([this]() -> bool {
+                            if (Settings.get().show_light_btn == 0) return false;
                             bool both_gf_inc = Settings.get().incline_gforce_enabled &&
                                                (Settings.get().show_gforce != 0) &&
                                                (Settings.get().show_incline != 0);
                             int target_ly = both_gf_inc ? UiLayout::DASH_LIGHT_Y_TOP : UiLayout::DASH_LIGHT_Y_BOT;
                             int dx = (int)_last_tap_x - UiLayout::DASH_LIGHT_CX;
                             int dy = (int)_last_tap_y - target_ly;
-                            (dx * dx + dy * dy <= UiLayout::DASH_LIGHT_HIT_RAD * UiLayout::DASH_LIGHT_HIT_RAD);
-                        })) {
+                            return (dx * dx + dy * dy <= UiLayout::DASH_LIGHT_HIT_RAD * UiLayout::DASH_LIGHT_HIT_RAD);
+                        }()) {
                             _pending_action = NAV_LIGHT_TOGGLE;
                         } else if (UiLayout::DASH_ACTION_ROW_HIT.contains(_last_tap_x, _last_tap_y)) {
                             _pending_action = (_last_tap_x <= UiLayout::DASH_ACTION_SPLIT_X) ? NAV_BOOST_TOGGLE : NAV_MODE_CYCLE;

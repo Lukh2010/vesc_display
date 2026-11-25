@@ -172,12 +172,12 @@ static void stepRealtimeSubsystem(DashTelemetry &rt_tel, uint32_t now) {
 #if !defined(NATIVE_SIMULATOR)
 static void realtimeTask(void *pvParameters) {
     (void)pvParameters;
-    DashTelemetry rt_tel;
+    static DashTelemetry s_rt_tel;
     if (s_telem_mutex && xSemaphoreTake(s_telem_mutex, portMAX_DELAY) == pdTRUE) {
-        rt_tel = s_shared_telem;
+        s_rt_tel = s_shared_telem;
         xSemaphoreGive(s_telem_mutex);
     } else {
-        rt_tel = telemetry;
+        s_rt_tel = telemetry;
     }
 
     uint32_t applied_trip_gen = s_trip_reset_req_gen;
@@ -191,7 +191,7 @@ static void realtimeTask(void *pvParameters) {
         uint32_t req_gen = applied_trip_gen;
         int8_t req_bat_profile = -1;
         if (s_telem_mutex && xSemaphoreTake(s_telem_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-            copyUiControlState(rt_tel, s_shared_telem);
+            copyUiControlState(s_rt_tel, s_shared_telem);
             req_gen = s_trip_reset_req_gen;
             req_bat_profile = s_pending_bat_profile;
             s_pending_bat_profile = -1;
@@ -203,17 +203,17 @@ static void realtimeTask(void *pvParameters) {
         }
         if (req_gen != applied_trip_gen) {
             applied_trip_gen = req_gen;
-            rt_tel.trip_km = 0.0f;
-            rt_tel.stats.reset();
+            s_rt_tel.trip_km = 0.0f;
+            s_rt_tel.stats.reset();
             Battery.resetTrip();
             Vesc.resetTripOdometer();
         }
 
-        stepRealtimeSubsystem(rt_tel, millis());
+        stepRealtimeSubsystem(s_rt_tel, millis());
 
         if (s_telem_mutex && xSemaphoreTake(s_telem_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
             if (s_trip_reset_req_gen == applied_trip_gen) {
-                copyLiveTelemetry(s_shared_telem, rt_tel);
+                copyLiveTelemetry(s_shared_telem, s_rt_tel);
             }
             xSemaphoreGive(s_telem_mutex);
         }

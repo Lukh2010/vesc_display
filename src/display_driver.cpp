@@ -48,7 +48,7 @@ WaveshareLGFX::WaveshareLGFX() {
         cfg.pin_vsync   = LCD_PIN_VSYNC; // 3
         cfg.pin_hsync   = LCD_PIN_HSYNC; // 46
         cfg.pin_pclk    = LCD_PIN_PCLK;  // 7
-        cfg.freq_write  = LCD_FREQ_HZ;   // 14 MHz
+        cfg.freq_write  = LCD_FREQ_HZ;   // 12 MHz (harmonized for 4.3" & 7.0")
 
         cfg.hsync_polarity    = 0;
         cfg.hsync_front_porch = LCD_HFP; // 20
@@ -82,7 +82,7 @@ WaveshareLGFX::WaveshareLGFX() {
         cfg.pin_sda         = TOUCH_I2C_SDA;
         cfg.pin_scl         = TOUCH_I2C_SCL;
         cfg.freq            = 400000;
-        cfg.i2c_addr        = 0x5D; // GT911 primary address on Waveshare 4.3 (confirmed by scan)
+        cfg.i2c_addr        = TOUCH_I2C_ADDR; // GT911 primary address on Waveshare 4.3" & 7.0"
         _touch_instance.config(cfg);
         _panel_instance.setTouch(&_touch_instance);
     }
@@ -173,7 +173,8 @@ bool DisplayDriver::init() {
         Serial.println("[DISPLAY WARN] PSRAM Backbuffer allocation failed; falling back to direct &_lcd!");
     }
 
-    Serial.printf("[DISPLAY OK] Resolution: %d x %d\n", (int)_lcd.width(), (int)_lcd.height());
+    Serial.printf("[DISPLAY OK] Target: %s | Resolution: %d x %d @ %u MHz\n",
+                  BOARD_DISPLAY_NAME, (int)_lcd.width(), (int)_lcd.height(), (unsigned)(LCD_FREQ_HZ / 1000000UL));
     Serial.printf("[DISPLAY OK] Free Heap: %lu bytes, Free PSRAM: %lu bytes\n", (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getFreePsram());
     return true;
 }
