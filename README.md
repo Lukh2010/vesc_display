@@ -230,6 +230,7 @@ python3 tools/simulator/live_demo.py --web
 
 ---
 
-## 📄 Lizenz
+## 📄 Lizenz & Credits
 
-MIT License — frei nutzbar für private und kommerzielle Projekte.
+MIT License — frei nutzbar für private und kommerzielle Projekte.<br>
+*Ursprünglich inspiriert von [aerosock/vesc-wide-display](https://github.com/aerosock/vesc-wide-display), vollständig neu für Waveshare 4.3" & 7.0" (800×480 RGB) entwickelt.*
