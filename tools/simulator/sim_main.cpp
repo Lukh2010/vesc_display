@@ -4597,6 +4597,93 @@ int main(int argc, char **argv) {
         printf("[PASS] Regression test: SteeringButtons 5-Button Ladder & Noise Debounce & Long-Press (Test #16)\n");
     }
 
+    // -------------------------------------------------------------
+    // Regression Test 17: WLED Safety & Priority Invariance (Alarm Strobe, Emergency Brake, Lock Breathe)
+    // -------------------------------------------------------------
+    {
+        WledController &wled = WledController::instance();
+        wled.begin();
+        wled.setEnabled(true);
+        wled.setBrightness(255);
+        wled.setRearLedCount(WLED_REAR_LED_COUNT); // 12
+        assert(wled.getRearLedCount() == 12);
+
+        DashTelemetry t17;
+        setBaseTelemetry(t17);
+
+        // 1. Diebstahl-Alarm Override in Police Mode (!tuning_mode)
+        t17.tuning_mode = false;
+        t17.is_locked = true;
+        t17.theft_alarm_active = true;
+
+        // At t=10000 ms (even -> RED phase): BOTH segments must be RED
+        wled.update(t17, 10000);
+        assert(wled.getActiveMode() == WLED_MODE_THEFT_STROBE);
+        assert(wled.getLedRgb(0).r == 255 && wled.getLedRgb(0).g == 0 && wled.getLedRgb(0).b == 0);
+        assert(wled.getLedRgb(20).r == 255 && wled.getLedRgb(20).g == 0 && wled.getLedRgb(20).b == 0);
+
+        // At t=10100 ms (odd -> BLUE phase): BOTH segments must be BLUE
+        wled.update(t17, 10100);
+        assert(wled.getActiveMode() == WLED_MODE_THEFT_STROBE);
+        assert(wled.getLedRgb(0).r == 0 && wled.getLedRgb(0).g == 0 && wled.getLedRgb(0).b == 255);
+        assert(wled.getLedRgb(20).r == 0 && wled.getLedRgb(20).g == 0 && wled.getLedRgb(20).b == 255);
+
+        // Alarm deactivates in Police Mode: Segment 1 must IMMEDIATELY return to strictly (0, 0, 0)!
+        t17.theft_alarm_active = false;
+        t17.is_locked = false;
+        t17.speed_kmh = 20.0f;
+        wled.update(t17, 10200);
+        assert(wled.getActiveMode() != WLED_MODE_THEFT_STROBE);
+        for (int i = wled.getRearLedCount(); i < wled.getLedCount(); i++) {
+            WledRgb c = wled.getLedRgb(i);
+            assert(c.r == 0 && c.g == 0 && c.b == 0);
+        }
+
+        // 2. Notbrems-Pulsieren (g_force < -0.65f) in Police Mode
+        t17.theft_alarm_active = false;
+        t17.is_locked = false;
+        t17.tuning_mode = false;
+        t17.g_force = -0.75f;
+
+        // Even phase @ 60ms: pulse high (255, 0, 0)
+        wled.update(t17, 12000);
+        assert(wled.getActiveMode() == WLED_MODE_BRAKE_EMERGENCY);
+        assert(wled.getLedRgb(0).r == 255 && wled.getLedRgb(0).g == 0 && wled.getLedRgb(0).b == 0);
+        assert(wled.getLedRgb(20).r == 0 && wled.getLedRgb(20).g == 0 && wled.getLedRgb(20).b == 0);
+
+        // Odd phase @ 60ms: pulse low (64, 0, 0)
+        wled.update(t17, 12060);
+        assert(wled.getActiveMode() == WLED_MODE_BRAKE_EMERGENCY);
+        assert(wled.getLedRgb(0).r == 64 && wled.getLedRgb(0).g == 0 && wled.getLedRgb(0).b == 0);
+        assert(wled.getLedRgb(20).r == 0 && wled.getLedRgb(20).g == 0 && wled.getLedRgb(20).b == 0);
+
+        // 3. System-Lock (is_locked == true without alarm, even with tuning_mode == true)
+        t17.theft_alarm_active = false;
+        t17.g_force = 0.0f;
+        t17.current_amps = 0.0f;
+        t17.tuning_mode = true; // tuning mode on
+        t17.is_locked = true;   // but parked/locked
+        t17.color_theme = THEME_OBSIDIAN_DARK;
+
+        wled.update(t17, 13000);
+        assert(wled.getActiveMode() == WLED_MODE_LOCKED_BREATHE);
+        assert(wled.getLedRgb(0).r > 0 || wled.getLedRgb(0).g > 0 || wled.getLedRgb(0).b > 0);
+        for (int i = wled.getRearLedCount(); i < wled.getLedCount(); i++) {
+            WledRgb c = wled.getLedRgb(i);
+            assert(c.r == 0 && c.g == 0 && c.b == 0);
+        }
+
+        // Restore clean defaults
+        wled.setEnabled(true);
+        wled.setBrightness(180);
+        wled.setEffect(WledController::EFFECT_SPEED_GLOW);
+        wled.setRearLedCount(WLED_REAR_LED_COUNT);
+        wled.setUseThemeColor(true);
+        wled.saveConfig();
+
+        printf("[PASS] Regression test: WLED Safety & Priority Invariance (Alarm Strobe, Emergency Brake, Lock Breathe) (Test #17)\n");
+    }
+
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");
     return 0;
 }

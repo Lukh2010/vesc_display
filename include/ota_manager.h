@@ -20,6 +20,7 @@ public:
 
     bool isRunning() const { return _running; }
     bool isUpdating() const { return _is_updating; }
+    bool isUploadRejected() const { return _upload_rejected; }
     int  getProgressPct() const;
     size_t getBytesWritten() const { return _bytes_written; }
     size_t getTotalBytes() const { return _total_bytes; }
@@ -37,6 +38,8 @@ private:
     size_t _bytes_written;
     size_t _total_bytes;
     char _status_text[64];
+    bool _header_validated;
+    bool _upload_rejected;
 
 #if !defined(NATIVE_SIMULATOR)
     bool _mdns_running;

@@ -16,7 +16,9 @@ OtaManager::OtaManager()
     : _running(false),
       _is_updating(false),
       _bytes_written(0),
-      _total_bytes(0)
+      _total_bytes(0),
+      _header_validated(false),
+      _upload_rejected(false)
 #if !defined(NATIVE_SIMULATOR)
       , _mdns_running(false),
       _server(80)
@@ -38,10 +40,14 @@ void OtaManager::setSimProgress(bool updating, int pct) {
     if (updating) {
         _total_bytes = 1000000;
         _bytes_written = (_total_bytes * pct) / 100;
+        _header_validated = true;
+        _upload_rejected = false;
         snprintf(_status_text, sizeof(_status_text), "Flashe %d%%...", pct);
     } else {
         _total_bytes = 0;
         _bytes_written = 0;
+        _header_validated = false;
+        _upload_rejected = false;
         strncpy(_status_text, "Bereit", sizeof(_status_text));
     }
 }
@@ -512,7 +518,11 @@ void OtaManager::setupRoutes() {
     // 4. Multipart Firmware Upload Handler (Web UI & curl compatible)
     _server.on("/update", HTTP_POST, [this]() {
         _server.sendHeader("Connection", "close");
-        if (Update.hasError()) {
+        if (_upload_rejected) {
+            char err[128];
+            snprintf(err, sizeof(err), "FLASH FEHLER: %s", _status_text);
+            _server.send(400, "text/plain", err);
+        } else if (Update.hasError()) {
             _server.send(500, "text/plain", "FLASH FEHLER: Update fehlgeschlagen!");
         } else {
             _server.send(200, "text/plain", "OK - Flash erfolgreich! Display startet neu...");
@@ -522,16 +532,37 @@ void OtaManager::setupRoutes() {
     }, [this]() {
         HTTPUpload& upload = _server.upload();
         if (upload.status == UPLOAD_FILE_START) {
+            _header_validated = false;
+            _upload_rejected = false;
             _is_updating = true;
             _total_bytes = 1200000;
+            bool size_known = false;
             if (_server.hasArg("size")) {
                 uint32_t s = (uint32_t)_server.arg("size").toInt();
-                if (s > 10000) _total_bytes = s;
+                if (s > 10000) {
+                    _total_bytes = s;
+                    size_known = true;
+                }
             } else if (_server.hasHeader("Content-Length")) {
                 uint32_t cl = (uint32_t)_server.header("Content-Length").toInt();
-                if (cl > 10000) _total_bytes = cl;
+                if (cl > 10000) {
+                    _total_bytes = cl;
+                    size_known = true;
+                }
             }
             _bytes_written = 0;
+
+            // Free Sketch Space Check
+            uint32_t free_sketch = ESP.getFreeSketchSpace();
+            if (size_known && _total_bytes > free_sketch) {
+                _upload_rejected = true;
+                _is_updating = false;
+                strncpy(_status_text, "Nicht genug Flash-Speicher!", sizeof(_status_text));
+                Serial.printf("[OTA] ABGELEHNT: Datei (%u Bytes) groesser als freier Sketch-Speicher (%u Bytes)!\n",
+                              (unsigned int)_total_bytes, (unsigned int)free_sketch);
+                return;
+            }
+
             strncpy(_status_text, "Starte OTA Flash...", sizeof(_status_text));
             Serial.printf("[OTA] Firmware Upload gestartet: %s (Erwartete Groesse: %u Bytes)\n",
                           upload.filename.c_str(), (unsigned int)_total_bytes);
@@ -542,7 +573,21 @@ void OtaManager::setupRoutes() {
                 _is_updating = false;
             }
         } else if (upload.status == UPLOAD_FILE_WRITE) {
-            if (!_is_updating || Update.hasError()) return;
+            if (_upload_rejected || !_is_updating || Update.hasError()) return;
+
+            // ESP32 Application Image Magic Byte validation (0xE9)
+            if (!_header_validated && upload.currentSize > 0) {
+                if (upload.buf[0] != 0xE9) {
+                    Update.abort();
+                    _is_updating = false;
+                    _upload_rejected = true;
+                    strncpy(_status_text, "Ungueltige .bin Datei!", sizeof(_status_text));
+                    Serial.printf("[OTA] ABGELEHNT: Magic Byte 0x%02X ungueltig (erwartet 0xE9)!\n", upload.buf[0]);
+                    return;
+                }
+                _header_validated = true;
+            }
+
             if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
                 Update.printError(Serial);
                 snprintf(_status_text, sizeof(_status_text), "Schreibfehler");
@@ -552,6 +597,7 @@ void OtaManager::setupRoutes() {
             int pct = getProgressPct();
             snprintf(_status_text, sizeof(_status_text), "Flashe %d%%...", pct);
         } else if (upload.status == UPLOAD_FILE_END) {
+            if (_upload_rejected) return;
             _total_bytes = upload.totalSize;
             _bytes_written = upload.totalSize;
             if (Update.end(true)) {
@@ -563,10 +609,12 @@ void OtaManager::setupRoutes() {
             }
             _is_updating = false;
         } else if (upload.status == UPLOAD_FILE_ABORTED) {
-            Update.end();
-            _is_updating = false;
-            strncpy(_status_text, "Upload abgebrochen", sizeof(_status_text));
-            Serial.println("[OTA] Upload abgebrochen!");
+            if (!_upload_rejected) {
+                Update.end();
+                _is_updating = false;
+                strncpy(_status_text, "Upload abgebrochen", sizeof(_status_text));
+                Serial.println("[OTA] Upload abgebrochen!");
+            }
         }
     });
 }
@@ -630,6 +678,8 @@ void OtaManager::begin() {
 
     _running = true;
     _is_updating = false;
+    _header_validated = false;
+    _upload_rejected = false;
     strncpy(_status_text, "Bereit", sizeof(_status_text));
 }
 
@@ -656,5 +706,7 @@ void OtaManager::stop() {
 
     _running = false;
     _is_updating = false;
+    _header_validated = false;
+    _upload_rejected = false;
     strncpy(_status_text, "Gestoppt", sizeof(_status_text));
 }

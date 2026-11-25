@@ -221,6 +221,11 @@ static void realtimeTask(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
+
+uint32_t getRealtimeTaskStackHighWaterMark() {
+    if (!s_rt_task_handle) return 0;
+    return (uint32_t)(uxTaskGetStackHighWaterMark(s_rt_task_handle) * sizeof(StackType_t));
+}
 #endif
 
 // Safe cleanup helper whenever leaving SCREEN_RACE_TIMER via any navigation or safety path

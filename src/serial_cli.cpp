@@ -11,6 +11,8 @@
 #include "buttons.h"
 #include "dash_log.h"
 #include "wled_controller.h"
+#include "fault_manager.h"
+#include "battery_manager.h"
 
 #ifndef PIN_STEERING_BTN_ADC
 #define PIN_STEERING_BTN_ADC 6
@@ -211,8 +213,9 @@ void handleSerialCli(DashTelemetry &telemetry, uint32_t now) {
                         Serial.println("  p / lock  : Sperren / Entsperren toggeln");
                         Serial.println("  r         : PIN auf 1234 resetten & entsperren");
                         Serial.println("  status    : System Telemetrie anzeigen");
+                        Serial.println("  diag      : Hardware-Diagnose (Board, Heap/PSRAM, Core0 Stack, VESC, WLED)");
                         Serial.println("  theme     : Farb-Theme umschalten");
-                        Serial.println("  wled      : WLED Diagnose (status/on/off/bri/fx/rear/save)");
+                        Serial.println("  wled      : WLED Diagnose (status/on/off/bri/fx/rear/color/theme/save)");
                         Serial.println("  btn-cal   : Segway-Tasten ADC 10x messen (Min/Max/Avg)");
                         Serial.println("  unlock    : Direkt per Textbefehl entsperren");
                         Serial.println("===============================");
@@ -480,14 +483,78 @@ void handleSerialCli(DashTelemetry &telemetry, uint32_t now) {
                                 Renderer.markScreenDirty();
                                 Serial.printf("[WLED] Rear LEDs -> %ld\n", val);
                             }
+                        } else if (strcasecmp(arg, "theme") == 0) {
+                            wled.setUseThemeColor(true);
+                            Renderer.markScreenDirty();
+                            Serial.println("[WLED] Color Mode -> THEME");
+                        } else if (strncasecmp(arg, "color ", 6) == 0) {
+                            const char *p = arg + 6;
+                            long rgb[3] = { 0, 0, 0 };
+                            bool ok = true;
+                            for (int i = 0; i < 3; i++) {
+                                while (*p == ' ' || *p == '\t') p++;
+                                char *endptr = nullptr;
+                                long val = strtol(p, &endptr, 10);
+                                if (p == endptr) {
+                                    ok = false;
+                                    break;
+                                }
+                                if (val < 0) val = 0;
+                                if (val > 255) val = 255;
+                                rgb[i] = val;
+                                p = endptr;
+                            }
+                            if (!ok) {
+                                Serial.println("[WLED] Usage: wled color <r> <g> <b>");
+                            } else {
+                                wled.setCustomColor((uint8_t)rgb[0], (uint8_t)rgb[1], (uint8_t)rgb[2]);
+                                Renderer.markScreenDirty();
+                                Serial.printf("[WLED] Custom Color -> RGB(%ld, %ld, %ld)\n", rgb[0], rgb[1], rgb[2]);
+                            }
                         } else if (strcasecmp(arg, "save") == 0) {
                             bool ok = wled.saveConfig();
                             Serial.printf("[WLED] Config save -> %s\n", ok ? "OK" : "FAILED");
                         } else {
-                            Serial.println("[WLED] Usage: wled [status|on|off|bri <0..255>|fx <0..4>|rear <0..30>|save]");
+                            Serial.println("[WLED] Usage: wled [status|on|off|bri <0..255>|fx <0..4>|rear <0..30>|color <r> <g> <b>|theme|save]");
                         }
+                    } else if (strcasecmp(cmd, "diag") == 0) {
+                        WledController &wled = WledController::instance();
+                        const BatteryProfile &bp = Battery.getProfile(Battery.getActiveProfileIndex());
+                        Serial.println("=== HARDWARE & SYSTEM DIAG ===");
+                        Serial.printf("  Board   : %s | LCD: %ux%u @ %lu MHz | Uptime: %lus\n",
+                                      BOARD_DISPLAY_NAME, (unsigned)LCD_WIDTH, (unsigned)LCD_HEIGHT,
+                                      (unsigned long)(LCD_FREQ_HZ / 1000000UL), (unsigned long)telemetry.uptime_sec);
+#if !defined(NATIVE_SIMULATOR)
+                        Serial.printf("  Memory  : FreeHeap=%lu B | MinHeap=%lu B | FreePSRAM=%lu B | Core0 StackHWM=%lu B\n",
+                                      (unsigned long)ESP.getFreeHeap(),
+                                      (unsigned long)ESP.getMinFreeHeap(),
+                                      (unsigned long)ESP.getFreePsram(),
+                                      (unsigned long)getRealtimeTaskStackHighWaterMark());
+#else
+                        Serial.printf("  Memory  : NATIVE_SIMULATOR | Core0 StackHWM=%lu B\n",
+                                      (unsigned long)getRealtimeTaskStackHighWaterMark());
+#endif
+                        Serial.printf("  VESC    : %s | Mode: %s | Tuning: %s | Lock: %s\n",
+                                      telemetry.vesc_connected ? "CONNECTED" : "OFFLINE",
+                                      ModeManager::instance().getActiveModeName(),
+                                      telemetry.tuning_mode ? "ON" : "OFF",
+                                      telemetry.is_locked ? "ON" : "OFF");
+                        Serial.printf("  Battery : %.1fV | SoC: %.1f%% | %uS | SOH: %.1f%%\n",
+                                      telemetry.voltage, telemetry.battery_pct,
+                                      (unsigned)Settings.get().battery_cells, bp.health_soh_pct);
+                        Serial.printf("  Odo/Flt : %lu m (%.2f km) | Faults: %u\n",
+                                      (unsigned long)Settings.getOdoMeters(), telemetry.odo_km,
+                                      (unsigned)FaultManager::instance().getFaultCount());
+                        Serial.printf("  WLED    : %s | Bri: %u | FX: %u (%s) | Rear: %u | Dirty: %s\n",
+                                      wled.isEnabled() ? "ON" : "OFF",
+                                      (unsigned)wled.getBrightness(),
+                                      (unsigned)wled.getEffect(),
+                                      WledController::getEffectName(wled.getEffect()),
+                                      (unsigned)wled.getRearLedCount(),
+                                      wled.isDirty() ? "YES" : "NO");
+                        Serial.println("==============================");
                     } else if (strcasecmp(cmd, "help") == 0) {
-                        Serial.println("Befehle: unlock, lock, gas <A>, duty <%>, stop, status, theme, wled, btn-cal, help");
+                        Serial.println("Befehle: unlock, lock, gas <A>, duty <%>, stop, status, diag, theme, wled, btn-cal, help");
                     }
                 }
                 s_cmd_line[0] = '\0';
