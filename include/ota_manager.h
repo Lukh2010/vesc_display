@@ -34,7 +34,7 @@ private:
     ~OtaManager() = default;
 
     bool _running;
-    bool _is_updating;
+    volatile bool _is_updating;
     size_t _bytes_written;
     size_t _total_bytes;
     char _status_text[64];

@@ -323,13 +323,15 @@ static void applyWledStateJson(const char* body) {
                     while (*end_g && (*end_g == ' ' || *end_g == '\t')) end_g++;
                     char* end_b = nullptr;
                     long b = strtol(end_g, &end_b, 10);
-                    if (r < 0) { r = 0; }
-                    if (r > 255) { r = 255; }
-                    if (g < 0) { g = 0; }
-                    if (g > 255) { g = 255; }
-                    if (b < 0) { b = 0; }
-                    if (b > 255) { b = 255; }
-                    w.setCustomColor((uint8_t)r, (uint8_t)g, (uint8_t)b);
+                    if (end_b && end_b != end_g) {
+                        if (r < 0) { r = 0; }
+                        if (r > 255) { r = 255; }
+                        if (g < 0) { g = 0; }
+                        if (g > 255) { g = 255; }
+                        if (b < 0) { b = 0; }
+                        if (b > 255) { b = 255; }
+                        w.setCustomColor((uint8_t)r, (uint8_t)g, (uint8_t)b);
+                    }
                 }
             }
         }
@@ -434,9 +436,9 @@ void OtaManager::setupRoutes() {
     });
 
     _server.on("/json/si", HTTP_GET, [this, sendCors]() {
-        char st[512];
+        char st[384];
         char inf[512];
-        char full[1024];
+        char full[1280];
         buildWledStateJson(st, sizeof(st));
         buildWledInfoJson(inf, sizeof(inf));
         snprintf(full, sizeof(full), "{\"state\":%s,\"info\":%s}", st, inf);
@@ -445,9 +447,9 @@ void OtaManager::setupRoutes() {
     });
 
     _server.on("/json", HTTP_GET, [this, sendCors]() {
-        char st[512];
+        char st[384];
         char inf[512];
-        char full[1152];
+        char full[1280];
         buildWledStateJson(st, sizeof(st));
         buildWledInfoJson(inf, sizeof(inf));
         snprintf(full, sizeof(full),
@@ -571,6 +573,7 @@ void OtaManager::setupRoutes() {
                 Update.printError(Serial);
                 snprintf(_status_text, sizeof(_status_text), "Update.begin Fehler");
                 _is_updating = false;
+                _upload_rejected = true;
             }
         } else if (upload.status == UPLOAD_FILE_WRITE) {
             if (_upload_rejected || !_is_updating || Update.hasError()) return;

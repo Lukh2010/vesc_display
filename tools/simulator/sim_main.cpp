@@ -35,6 +35,8 @@ MockSerial Serial;
 DisplayDriver Display;
 extern DashboardRenderer Renderer;
 extern ButtonHandler Buttons;
+#include "serial_cli.h"
+#include "../../src/serial_cli.cpp"
 
 void setBaseTelemetry(DashTelemetry &t) {
     memset(&t, 0, sizeof(t));
@@ -4682,6 +4684,67 @@ int main(int argc, char **argv) {
         wled.saveConfig();
 
         printf("[PASS] Regression test: WLED Safety & Priority Invariance (Alarm Strobe, Emergency Brake, Lock Breathe) (Test #17)\n");
+    }
+
+    // -------------------------------------------------------------
+    // Regression Test 18: SerialCli Diagnostics & WLED CLI Controls
+    // -------------------------------------------------------------
+    {
+        DashTelemetry t18;
+        setBaseTelemetry(t18);
+        t18.vesc_connected = true;
+        t18.speed_kmh = 0.0f;
+        t18.is_locked = false;
+        t18.theft_alarm_active = false;
+
+        WledController &wled = WledController::instance();
+        wled.begin();
+
+        // 1. "diag" command runs cleanly without crashing
+        Serial.feed("diag\n");
+        handleSerialCli(t18, 20000);
+
+        // 2. "wled color 12 34 300" sets Custom-RGB to (12, 34, 255) (Clamping!) & isUsingThemeColor() == false
+        Serial.feed("wled color 12 34 300\n");
+        handleSerialCli(t18, 20010);
+        assert(wled.isUsingThemeColor() == false);
+        assert(wled.getColorR() == 12);
+        assert(wled.getColorG() == 34);
+        assert(wled.getColorB() == 255);
+
+        // 3. "wled theme" restores isUsingThemeColor() == true
+        Serial.feed("wled theme\n");
+        handleSerialCli(t18, 20020);
+        assert(wled.isUsingThemeColor() == true);
+
+        // 4. "wled bri 120", "wled fx 2", "wled rear 10", "wled save" update WledController and clear dirty flag
+        Serial.feed("wled bri 120\n");
+        handleSerialCli(t18, 20030);
+        assert(wled.getBrightness() == 120);
+
+        Serial.feed("wled fx 2\n");
+        handleSerialCli(t18, 20040);
+        assert(wled.getEffect() == 2);
+
+        Serial.feed("wled rear 10\n");
+        handleSerialCli(t18, 20050);
+        assert(wled.getRearLedCount() == 10);
+        assert(wled.isDirty() == true);
+
+        Serial.feed("wled save\n");
+        handleSerialCli(t18, 20060);
+        assert(wled.isDirty() == false);
+
+        // 5. Restore clean defaults
+        wled.setEnabled(true);
+        wled.setBrightness(180);
+        wled.setEffect(WledController::EFFECT_SPEED_GLOW);
+        wled.setRearLedCount(WLED_REAR_LED_COUNT);
+        wled.setUseThemeColor(true);
+        wled.saveConfig();
+        Serial.clearRx();
+
+        printf("[PASS] Regression test: SerialCli Diagnostics & WLED CLI Controls (Test #18)\n");
     }
 
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");

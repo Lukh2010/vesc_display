@@ -105,6 +105,7 @@ Das Dashboard nutzt das extrem performante 16-Bit RGB565 Parallel-Interface mit 
 
 - 📶 **Kabellose VESC Wi-Fi Bridge & Gzip-OTA Web-Flasher:**
   - Startet per Knopfdruck einen lokalen WLAN-Hotspot (`VESC-DASH-AP`, Port `6510` für VESC Tool, Port `80` für das gzip-komprimierte HTML5-OTA-Interface mit exakter 0–100%-Fortschrittsanzeige, sowie ArduinoOTA auf Port `3232`).
+  - **Integrierter Flash- & Firmware-Schutz:** Automatische Überprüfung des `0xE9` ESP32-Image-Magic-Bytes beim ersten Datenpaket verhindert das Flashen fehlerhafter oder inkompatibler Binaries; kontinuierliche Prüfung des freien Sketch-Speichers (`Update.begin(maxSketchSpace)`) schützt zuverlässig vor Flash-Überläufen.
 
 - 🧙 **Ersteinrichtungs-Assistent & PIN-Wegfahrsperre:**
   - Automatischer 3-Schritte-Setup-Wizard beim Erststart.
@@ -141,13 +142,16 @@ Das Dashboard nutzt das extrem performante 16-Bit RGB565 Parallel-Interface mit 
   - **Ein-Draht ADC-Lenkertasten:** Liest bis zu 5 Lenkertasten über einen einzigen ADC-Pin (`ADC1_CH2` / `GPIO 3`) mit Hysterese und automatischer Spannungsfenster-Erkennung aus (Power, Mode, Blinker Links/Rechts, Hupe/Boost).
   - **`btn-cal` CLI:** Interaktive Kalibrierung über das USB-Terminal zum Einlernen individueller Widerstands-Werte mit direkter Speicherung im NVS.
 
-- 💻 **Serielle USB-Diagnose, WLED-CLI & ESPmDNS:**
-  - **Umfangreiche Serial-CLI:** USB-Diagnosekonsole (`help`, `status`, `reboot`, `factory-reset`, `btn-cal`) erweitert um dedizierte WLED-Befehle:
+- 💻 **Serielle USB-Diagnose, Hardware-`diag`, WLED-CLI & ESPmDNS:**
+  - **Hardware-Diagnose (`diag`):** Umfassender Echtzeit-System-Check über USB (Board-Name, LCD-Auflösung, Free-Heap, Min-Heap, freier PSRAM, FreeRTOS Core-0 Echtzeittask Stack-High-Water-Mark, VESC-Status, Fahrmodus, Batterie-SoC/SOH, Odometer und WLED-Status).
+  - **Umfangreiche Serial-CLI:** USB-Diagnosekonsole (`help`, `status`, `reboot`, `factory-reset`, `btn-cal`, `diag`) erweitert um dedizierte WLED-Befehle:
     * `wled status`: Zeigt Betriebsmodus, RGB, Helligkeit, aktiven Effekt und NVS-Status an.
     * `wled on` / `wled off`: Manuelles Ein- und Ausschalten.
     * `wled bri <0..255>`: Helligkeit einstellen.
     * `wled fx <0..4>`: Effekt umschalten (`0`=Solid, `1`=Speed-Glow, `2`=Atmen, `3`=Rainbow, `4`=Scanner).
-    * `wled rear <1..60>`: LED-Anzahl des StVO-Rücklicht-Segments konfigurieren.
+    * `wled rear <0..30>`: LED-Anzahl des StVO-Rücklicht-Segments konfigurieren.
+    * `wled color <r> <g> <b>`: Manuelle Custom-RGB-Farbe einstellen (mit Wertebegrenzung 0–255; schaltet Theme-Sync automatisch ab).
+    * `wled theme`: Theme-Sync wieder aktivieren (Farbe folgt automatisch dem Dashboard-Farbset).
     * `wled save`: Sofortige NVS-Speicherung erzwingen.
   - **ESPmDNS Auto-Discovery:** Im WLAN-Bridge-Modus ist das Display unter `http://vesc-dash.local` sowie `http://vesc-dash.local/wled` im Netzwerk direkt erreichbar.
   - **Entprellte NVS-Persistenz & TAB_DASH Quick-Controls:** LED-Änderungen werden mit 1500 ms Hysterese materialschonend in den Flash geschrieben. Im Einstellungsmenü (`TAB_DASH`) stehen im Tuning-Modus On-Screen Touch-Buttons (`[ WLED ]`, `[ FX ]`, `[-]`/`[+]`) zur Verfügung; im Polizei-Modus bleiben diese zu 100% verborgen und gesperrt (Stealth).
@@ -244,7 +248,7 @@ Nutzt den integrierten TJA1051 CAN-Transceiver des Displays:
 
 ## 💻 Simulator, Regressionstests & OTA
 
-Das Repository enthält einen nativen Desktop-Simulator mit integriertem VESC-Protokoll-Emulator und **16 automatischen Regressionstests**:
+Das Repository enthält einen nativen Desktop-Simulator mit integriertem VESC-Protokoll-Emulator und **18 automatischen Regressionstests**:
 
 ```bash
 # Umfassende Qualitäts- & Syntaxprüfung aller Module ausführen:
@@ -253,7 +257,7 @@ Das Repository enthält einen nativen Desktop-Simulator mit integriertem VESC-Pr
 # Live-Demo mit grafischem Fenster & Web-Stream starten
 DISPLAY=:0 python3 tools/simulator/live_demo.py
 
-# Simulator neu bauen + alle UI-Szenarien & 16 Regressionstests ausführen
+# Simulator neu bauen + alle UI-Szenarien & 18 Regressionstests ausführen
 ./tools/simulator/build_and_run.sh
 
 # Drahtloses OTA-Update über WLAN (Standard: 4.3" Display):
