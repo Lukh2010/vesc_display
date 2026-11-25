@@ -208,6 +208,7 @@ latest_jpeg_lock = threading.Lock()
 latest_pil_image = None
 latest_pil_lock = threading.Lock()
 sim_running = True
+web_enabled = False
 
 def step_simulation(elapsed_ms=33):
     global latest_jpeg_frame, latest_pil_image
@@ -215,13 +216,15 @@ def step_simulation(elapsed_ms=33):
         sim_lib.sim_step(elapsed_ms)
         sim_lib.sim_get_frame_rgb24(c_rgb_buf)
         sim_lib.sim_get_telemetry(ctypes.byref(current_telemetry))
-        img = Image.frombytes("RGB", (LCD_W, LCD_H), bytes(rgb_buf))
+        raw_frame = bytes(rgb_buf)
+    img = Image.frombytes("RGB", (LCD_W, LCD_H), raw_frame)
+    with latest_pil_lock:
+        latest_pil_image = img
+    if web_enabled:
         bio = io.BytesIO()
-        img.save(bio, format="JPEG", quality=98, subsampling=0)
+        img.save(bio, format="JPEG", quality=85)
         with latest_jpeg_lock:
             latest_jpeg_frame = bio.getvalue()
-        with latest_pil_lock:
-            latest_pil_image = img
     return img
 
 def sim_worker_loop():
@@ -1581,9 +1584,12 @@ class DesktopDemoApp:
 # Main Execution
 # -------------------------------------------------------------
 def main():
+    global sim_running, web_enabled
+    web_enabled = "--web" in sys.argv
+
     print("=" * 70)
     print(" VESC 4.3\" Touch Display Simulator (800x480)")
-    print(" Pure Display Mode (No external buttons)")
+    print(" Pure Desktop Mode (Browser-Demo deaktiviert; optional --web)")
     print("=" * 70)
 
     sim_thread = threading.Thread(target=sim_worker_loop, daemon=True)
@@ -1594,13 +1600,14 @@ def main():
         with sim_lock:
             sim_lib.sim_reset_setup_wizard()
 
-    web_thread = threading.Thread(target=start_web_server, daemon=True)
-    web_thread.start()
-    print("[SERVER] Web Display Stream active at http://localhost:8080")
+    if web_enabled:
+        web_thread = threading.Thread(target=start_web_server, daemon=True)
+        web_thread.start()
+        print("[SERVER] Web Display Stream active at http://localhost:8080")
 
-    portal_thread = threading.Thread(target=start_portal_server, daemon=True)
-    portal_thread.start()
-    print("[SERVER] Captive Portal Web UI active at http://localhost:8081 and http://localhost:8080/portal")
+        portal_thread = threading.Thread(target=start_portal_server, daemon=True)
+        portal_thread.start()
+        print("[SERVER] Captive Portal Web UI active at http://localhost:8081 and http://localhost:8080/portal")
 
     display_env = os.environ.get("DISPLAY")
     if display_env and "--no-gui" not in sys.argv:
@@ -1612,12 +1619,16 @@ def main():
         except Exception as e:
             print(f"[GUI] Desktop window ended: {e}")
 
-    print("[SERVER] Running background web stream on http://localhost:8080...")
-    try:
-        while True:
-            time.sleep(1.0)
-    except KeyboardInterrupt:
-        print("\n[STOP] Shutting down simulator.")
+    if web_enabled:
+        print("[SERVER] Running background web stream on http://localhost:8080...")
+        try:
+            while True:
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            print("\n[STOP] Shutting down simulator.")
+    else:
+        sim_running = False
+        print("[STOP] Simulator beendet.")
 
 if __name__ == "__main__":
     main()
