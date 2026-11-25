@@ -50,6 +50,7 @@ ModeManager::ModeManager()
     , _mutex(xSemaphoreCreateRecursiveMutex())
 #endif
 {
+    memset(&_config, 0, sizeof(_config));
     memset(&_last_saved_config, 0, sizeof(_last_saved_config));
     setFactoryDefaults();
 }
@@ -121,26 +122,11 @@ void ModeManager::begin() {
     _limits_dirty = false;
 
     _prefs.begin("vesc_modes", false);
-    if (!_prefs.isKey("cfg_48v_v4")) {
-        setFactoryDefaults();
-        uint8_t s_cells = Settings.get().battery_cells;
-        if (s_cells < 10 || s_cells > 24) s_cells = 13;
-        _config.battery_cells        = s_cells;
-        _config.battery_cutoff_start = roundf((float)s_cells * 3.3f * 10.0f) / 10.0f;
-        _config.battery_cutoff_end   = roundf((float)s_cells * 3.0f * 10.0f) / 10.0f;
-        Settings.get().battery_cells = s_cells;
-        saveToNvs();
-        _prefs.putBool("cfg_48v_v4", true);
-        _prefs.putBool("cfg_v3", true);
-        Serial.println("[MODE_MGR] Initialized/Migrated 48V (13S) vehicle & mode profiles in NVS.");
-    } else {
-        loadFromNvs();
-        if (_config.battery_cells < 10 || _config.battery_cells > 24) {
-            _config.battery_cells = 13;
-        }
-        Settings.get().battery_cells = _config.battery_cells;
-        Serial.println("[MODE_MGR] Loaded vehicle & mode configurations from NVS.");
+    loadFromNvs();
+    if (_config.battery_cells < 10 || _config.battery_cells > 24) {
+        _config.battery_cells = 13;
     }
+    Settings.get().battery_cells = _config.battery_cells;
 
     // Release ModeManager mutex before acquiring VescHandler UartLock inside applyLimitsToVesc()
     mode_lock.unlock();
@@ -233,49 +219,68 @@ void ModeManager::setBatteryCells(uint8_t cells) {
 
 void ModeManager::loadFromNvs() {
     MODE_LOCK();
-    const char *leg_prefixes[PROFILE_MODE_COUNT] = { "l0", "l1", "l2" };
-    const char *tun_prefixes[PROFILE_MODE_COUNT] = { "t0", "t1", "t2" };
-    char key[16];
+    VehicleModeConfigBlob blob;
+    size_t read_bytes = _prefs.getBytes("cfg_blob_v5", &blob, sizeof(blob));
+    if (read_bytes == sizeof(blob) && blob.magic == MODE_CONFIG_BLOB_MAGIC && blob.version == MODE_CONFIG_BLOB_VERSION) {
+        _config = blob.config;
+    } else {
+        // Fallback / One-time migration from legacy individual keys
+        bool has_legacy = _prefs.isKey("l0_spd") || _prefs.isKey("b_cells");
+        if (has_legacy) {
+            const char *leg_prefixes[PROFILE_MODE_COUNT] = { "l0", "l1", "l2" };
+            const char *tun_prefixes[PROFILE_MODE_COUNT] = { "t0", "t1", "t2" };
+            char key[16];
 
-    for (int i = 0; i < PROFILE_MODE_COUNT; i++) {
-        // Legal profiles
-        snprintf(key, sizeof(key), "%s_spd", leg_prefixes[i]);
-        _config.legal_modes[i].max_speed_kmh = _prefs.getFloat(key, _config.legal_modes[i].max_speed_kmh);
+            for (int i = 0; i < PROFILE_MODE_COUNT; i++) {
+                // Legal profiles
+                snprintf(key, sizeof(key), "%s_spd", leg_prefixes[i]);
+                _config.legal_modes[i].max_speed_kmh = _prefs.getFloat(key, _config.legal_modes[i].max_speed_kmh);
 
-        snprintf(key, sizeof(key), "%s_pwr", leg_prefixes[i]);
-        _config.legal_modes[i].max_power_watts = _prefs.getFloat(key, _config.legal_modes[i].max_power_watts);
+                snprintf(key, sizeof(key), "%s_pwr", leg_prefixes[i]);
+                _config.legal_modes[i].max_power_watts = _prefs.getFloat(key, _config.legal_modes[i].max_power_watts);
 
-        snprintf(key, sizeof(key), "%s_pul", leg_prefixes[i]);
-        _config.legal_modes[i].max_pull_watts = _prefs.getFloat(key, _config.legal_modes[i].max_pull_watts);
+                snprintf(key, sizeof(key), "%s_pul", leg_prefixes[i]);
+                _config.legal_modes[i].max_pull_watts = _prefs.getFloat(key, _config.legal_modes[i].max_pull_watts);
 
-        snprintf(key, sizeof(key), "%s_bat", leg_prefixes[i]);
-        _config.legal_modes[i].max_battery_amps = _prefs.getFloat(key, _config.legal_modes[i].max_battery_amps);
+                snprintf(key, sizeof(key), "%s_bat", leg_prefixes[i]);
+                _config.legal_modes[i].max_battery_amps = _prefs.getFloat(key, _config.legal_modes[i].max_battery_amps);
 
-        snprintf(key, sizeof(key), "%s_pha", leg_prefixes[i]);
-        _config.legal_modes[i].max_phase_amps = _prefs.getFloat(key, _config.legal_modes[i].max_phase_amps);
+                snprintf(key, sizeof(key), "%s_pha", leg_prefixes[i]);
+                _config.legal_modes[i].max_phase_amps = _prefs.getFloat(key, _config.legal_modes[i].max_phase_amps);
 
-        // Tuned profiles
-        snprintf(key, sizeof(key), "%s_spd", tun_prefixes[i]);
-        _config.tuned_modes[i].max_speed_kmh = _prefs.getFloat(key, _config.tuned_modes[i].max_speed_kmh);
+                // Tuned profiles
+                snprintf(key, sizeof(key), "%s_spd", tun_prefixes[i]);
+                _config.tuned_modes[i].max_speed_kmh = _prefs.getFloat(key, _config.tuned_modes[i].max_speed_kmh);
 
-        snprintf(key, sizeof(key), "%s_pwr", tun_prefixes[i]);
-        _config.tuned_modes[i].max_power_watts = _prefs.getFloat(key, _config.tuned_modes[i].max_power_watts);
+                snprintf(key, sizeof(key), "%s_pwr", tun_prefixes[i]);
+                _config.tuned_modes[i].max_power_watts = _prefs.getFloat(key, _config.tuned_modes[i].max_power_watts);
 
-        snprintf(key, sizeof(key), "%s_pul", tun_prefixes[i]);
-        _config.tuned_modes[i].max_pull_watts = _prefs.getFloat(key, _config.tuned_modes[i].max_pull_watts);
+                snprintf(key, sizeof(key), "%s_pul", tun_prefixes[i]);
+                _config.tuned_modes[i].max_pull_watts = _prefs.getFloat(key, _config.tuned_modes[i].max_pull_watts);
 
-        snprintf(key, sizeof(key), "%s_bat", tun_prefixes[i]);
-        _config.tuned_modes[i].max_battery_amps = _prefs.getFloat(key, _config.tuned_modes[i].max_battery_amps);
+                snprintf(key, sizeof(key), "%s_bat", tun_prefixes[i]);
+                _config.tuned_modes[i].max_battery_amps = _prefs.getFloat(key, _config.tuned_modes[i].max_battery_amps);
 
-        snprintf(key, sizeof(key), "%s_pha", tun_prefixes[i]);
-        _config.tuned_modes[i].max_phase_amps = _prefs.getFloat(key, _config.tuned_modes[i].max_phase_amps);
+                snprintf(key, sizeof(key), "%s_pha", tun_prefixes[i]);
+                _config.tuned_modes[i].max_phase_amps = _prefs.getFloat(key, _config.tuned_modes[i].max_phase_amps);
+            }
+
+            _config.throttle_curve       = (int8_t)_prefs.getUChar("t_curve", (uint8_t)_config.throttle_curve);
+            _config.battery_cells        = _prefs.getUChar("b_cells", _config.battery_cells);
+            _config.battery_cutoff_start = _prefs.getFloat("b_cut_s", _config.battery_cutoff_start);
+            _config.battery_cutoff_end   = _prefs.getFloat("b_cut_e", _config.battery_cutoff_end);
+        } else {
+            setFactoryDefaults();
+            uint8_t cells = Settings.get().battery_cells;
+            if (cells >= 10 && cells <= 24) {
+                _config.battery_cells = cells;
+                _config.battery_cutoff_start = roundf((float)cells * 3.3f * 10.0f) / 10.0f;
+                _config.battery_cutoff_end   = roundf((float)cells * 3.0f * 10.0f) / 10.0f;
+            }
+        }
     }
 
-    _config.throttle_curve       = (int8_t)_prefs.getUChar("t_curve", (uint8_t)_config.throttle_curve);
-    _config.battery_cells        = _prefs.getUChar("b_cells", _config.battery_cells);
     if (_config.battery_cells < 10 || _config.battery_cells > 24) _config.battery_cells = 13;
-    _config.battery_cutoff_start = _prefs.getFloat("b_cut_s", _config.battery_cutoff_start);
-    _config.battery_cutoff_end   = _prefs.getFloat("b_cut_e", _config.battery_cutoff_end);
 
     // Strictly guarantee and heal legal street limits (eKFV: max 20 km/h + 10% tol = 22 km/h)
     // Ensures existing flashed devices with corrupted/NaN NVS recover legal limits immediately on boot!
@@ -302,10 +307,12 @@ void ModeManager::loadFromNvs() {
             healed = true;
         }
     }
-    _last_saved_config = _config;
-    _has_saved_snapshot = true;
-    if (healed) {
+
+    if (read_bytes != sizeof(blob) || healed) {
         saveToNvs();
+    } else {
+        _last_saved_config = _config;
+        _has_saved_snapshot = true;
     }
 }
 
@@ -315,55 +322,22 @@ void ModeManager::saveToNvs() {
         return;
     }
 
-    const char *leg_prefixes[PROFILE_MODE_COUNT] = { "l0", "l1", "l2" };
-    const char *tun_prefixes[PROFILE_MODE_COUNT] = { "t0", "t1", "t2" };
-    char key[16];
-
-    for (int i = 0; i < PROFILE_MODE_COUNT; i++) {
-        // Legal profiles
-        snprintf(key, sizeof(key), "%s_spd", leg_prefixes[i]);
-        _prefs.putFloat(key, _config.legal_modes[i].max_speed_kmh);
-
-        snprintf(key, sizeof(key), "%s_pwr", leg_prefixes[i]);
-        _prefs.putFloat(key, _config.legal_modes[i].max_power_watts);
-
-        snprintf(key, sizeof(key), "%s_pul", leg_prefixes[i]);
-        _prefs.putFloat(key, _config.legal_modes[i].max_pull_watts);
-
-        snprintf(key, sizeof(key), "%s_bat", leg_prefixes[i]);
-        _prefs.putFloat(key, _config.legal_modes[i].max_battery_amps);
-
-        snprintf(key, sizeof(key), "%s_pha", leg_prefixes[i]);
-        _prefs.putFloat(key, _config.legal_modes[i].max_phase_amps);
-
-        // Tuned profiles
-        snprintf(key, sizeof(key), "%s_spd", tun_prefixes[i]);
-        _prefs.putFloat(key, _config.tuned_modes[i].max_speed_kmh);
-
-        snprintf(key, sizeof(key), "%s_pwr", tun_prefixes[i]);
-        _prefs.putFloat(key, _config.tuned_modes[i].max_power_watts);
-
-        snprintf(key, sizeof(key), "%s_pul", tun_prefixes[i]);
-        _prefs.putFloat(key, _config.tuned_modes[i].max_pull_watts);
-
-        snprintf(key, sizeof(key), "%s_bat", tun_prefixes[i]);
-        _prefs.putFloat(key, _config.tuned_modes[i].max_battery_amps);
-
-        snprintf(key, sizeof(key), "%s_pha", tun_prefixes[i]);
-        _prefs.putFloat(key, _config.tuned_modes[i].max_phase_amps);
-    }
-
     if (_config.battery_cells < 10) _config.battery_cells = 10;
     if (_config.battery_cells > 24) _config.battery_cells = 24;
     Settings.get().battery_cells = _config.battery_cells;
 
-    _prefs.putUChar("t_curve", (uint8_t)_config.throttle_curve);
-    _prefs.putUChar("b_cells", _config.battery_cells);
-    _prefs.putFloat("b_cut_s", _config.battery_cutoff_start);
-    _prefs.putFloat("b_cut_e", _config.battery_cutoff_end);
+    VehicleModeConfigBlob blob;
+    memset(&blob, 0, sizeof(blob));
+    blob.magic = MODE_CONFIG_BLOB_MAGIC;
+    blob.version = MODE_CONFIG_BLOB_VERSION;
+    blob.reserved = 0;
+    blob.config = _config;
+
+    _prefs.putBytes("cfg_blob_v5", &blob, sizeof(blob));
+
     _last_saved_config = _config;
     _has_saved_snapshot = true;
-    Serial.println("[MODE_MGR] Saved vehicle & mode configurations (v2) to NVS flash.");
+    Serial.println("[MODE_MGR] Saved vehicle & mode configurations (v5 blob) to NVS flash.");
 }
 
 void ModeManager::resetDefaults() {

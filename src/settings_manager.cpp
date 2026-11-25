@@ -2,13 +2,48 @@
 #include <math.h>
 #include <string.h>
 
+namespace {
+struct SettingsLockGuard {
+#if !defined(NATIVE_SIMULATOR)
+    SemaphoreHandle_t m;
+    bool locked;
+    explicit SettingsLockGuard(SemaphoreHandle_t &mutex) : m(nullptr), locked(false) {
+        if (!mutex) {
+            mutex = xSemaphoreCreateRecursiveMutex();
+        }
+        m = mutex;
+        if (m) {
+            locked = (xSemaphoreTakeRecursive(m, portMAX_DELAY) == pdTRUE);
+        }
+    }
+    ~SettingsLockGuard() {
+        if (m && locked) {
+            xSemaphoreGiveRecursive(m);
+        }
+    }
+#else
+    explicit SettingsLockGuard(int = 0) {}
+#endif
+};
+} // namespace
+
+#if !defined(NATIVE_SIMULATOR)
+#define SETTINGS_LOCK() SettingsLockGuard settings_lock(_mutex)
+#else
+#define SETTINGS_LOCK() SettingsLockGuard settings_lock(0)
+#endif
+
 SettingsManager Settings;
 
 SettingsManager::SettingsManager()
     : _odo_meters(0),
       _last_saved_odo_m(0),
       _odo_accum_fraction_m(0.0f),
-      _has_saved_snapshot(false) {
+      _has_saved_snapshot(false)
+#if !defined(NATIVE_SIMULATOR)
+    , _mutex(nullptr)
+#endif
+{
     loadDefaults();
     _last_saved = _settings;
     _last_saved_race = _race_records;
@@ -61,6 +96,12 @@ void SettingsManager::loadDefaults() {
 }
 
 void SettingsManager::begin() {
+#if !defined(NATIVE_SIMULATOR)
+    if (!_mutex) {
+        _mutex = xSemaphoreCreateRecursiveMutex();
+    }
+#endif
+    SETTINGS_LOCK();
     _prefs.begin("ebike_cfg", false);
 
     if (!_prefs.isKey("cfg_init")) {
@@ -195,7 +236,22 @@ static inline bool floatChanged(float a, float b) {
     return fabsf(a - b) > 1e-5f;
 }
 
+static uint32_t s_last_odo_save_ms = 0;
+
+static inline bool isOdoSaveDue(bool force, uint32_t current_m, uint32_t last_saved_m) {
+    if (force) return true;
+    uint32_t diff = (current_m >= last_saved_m) ? (current_m - last_saved_m) : (last_saved_m - current_m);
+    if (diff < 100) return false;
+    uint32_t now = millis();
+    if (s_last_odo_save_ms != 0 && (uint32_t)(now - s_last_odo_save_ms) < 30000) {
+        return false;
+    }
+    s_last_odo_save_ms = now;
+    return true;
+}
+
 void SettingsManager::saveInternal(bool force) {
+    SETTINGS_LOCK();
     if (!_has_saved_snapshot) {
         force = true;
     }
@@ -288,7 +344,7 @@ void SettingsManager::saveInternal(bool force) {
         _prefs.putString("ble_name", _settings.ble_paired_name);
 
     bool odo_written = false;
-    if (force || abs((int32_t)(_odo_meters - _last_saved_odo_m)) >= 100) {
+    if (isOdoSaveDue(force, _odo_meters, _last_saved_odo_m)) {
         _prefs.putUInt("odo_m", _odo_meters);
         _prefs.putFloat("odo_km", _settings.odo_km);
         _last_saved_odo_m = _odo_meters;
@@ -318,13 +374,15 @@ void SettingsManager::saveInternal(bool force) {
 }
 
 void SettingsManager::save() {
+    SETTINGS_LOCK();
     saveInternal(false);
 }
 
 void SettingsManager::setOdoMeters(uint32_t m) {
+    SETTINGS_LOCK();
     _odo_meters = m;
     _settings.odo_km = (float)_odo_meters / 1000.0f;
-    if (!_has_saved_snapshot || abs((int32_t)(_odo_meters - _last_saved_odo_m)) >= 100) {
+    if (!_has_saved_snapshot || isOdoSaveDue(false, _odo_meters, _last_saved_odo_m)) {
         _prefs.putUInt("odo_m", _odo_meters);
         _prefs.putFloat("odo_km", _settings.odo_km);
         _last_saved_odo_m = _odo_meters;
@@ -334,6 +392,7 @@ void SettingsManager::setOdoMeters(uint32_t m) {
 
 void SettingsManager::addOdoMeters(float delta_m) {
     if (isnan(delta_m) || delta_m <= 0.0f) return;
+    SETTINGS_LOCK();
     _odo_accum_fraction_m += delta_m;
     uint32_t full_m = (uint32_t)_odo_accum_fraction_m;
     if (full_m > 0) {
@@ -341,7 +400,7 @@ void SettingsManager::addOdoMeters(float delta_m) {
         _odo_meters += full_m;
         _settings.odo_km = (float)_odo_meters / 1000.0f;
 
-        if (!_has_saved_snapshot || abs((int32_t)(_odo_meters - _last_saved_odo_m)) >= 100) {
+        if (!_has_saved_snapshot || isOdoSaveDue(false, _odo_meters, _last_saved_odo_m)) {
             _prefs.putUInt("odo_m", _odo_meters);
             _prefs.putFloat("odo_km", _settings.odo_km);
             _last_saved_odo_m = _odo_meters;
@@ -352,10 +411,12 @@ void SettingsManager::addOdoMeters(float delta_m) {
 
 void SettingsManager::saveOdo(float odo_km) {
     if (isnan(odo_km) || odo_km < 0.0f || odo_km > 999999.0f) return;
+    SETTINGS_LOCK();
     setOdoMeters((uint32_t)roundf(odo_km * 1000.0f));
 }
 
 void SettingsManager::saveRaceRecords(const RaceRecords &records) {
+    SETTINGS_LOCK();
     _race_records = records;
     if (!_has_saved_snapshot || floatChanged(_race_records.best_0_22_sec, _last_saved_race.best_0_22_sec)) {
         _prefs.putFloat("rc_best22", _race_records.best_0_22_sec);
@@ -372,11 +433,13 @@ void SettingsManager::saveRaceRecords(const RaceRecords &records) {
 }
 
 void SettingsManager::resetRaceRecords() {
+    SETTINGS_LOCK();
     _race_records.reset();
     saveRaceRecords(_race_records);
 }
 
 void SettingsManager::resetToDefaults() {
+    SETTINGS_LOCK();
     loadDefaults();
     saveInternal(true);
 }

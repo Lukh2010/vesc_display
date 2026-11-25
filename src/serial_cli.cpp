@@ -11,6 +11,10 @@
 #include "buttons.h"
 #include "dash_log.h"
 
+#ifndef PIN_STEERING_BTN_ADC
+#define PIN_STEERING_BTN_ADC 6
+#endif
+
 void handleSerialCli(DashTelemetry &telemetry, uint32_t now) {
     // Interactive Serial Command Console via USB (115200 Baud)
     // Active both in SIMULATION_MODE and on real hardware (when USB bridge is inactive)
@@ -207,6 +211,7 @@ void handleSerialCli(DashTelemetry &telemetry, uint32_t now) {
                         Serial.println("  r         : PIN auf 1234 resetten & entsperren");
                         Serial.println("  status    : System Telemetrie anzeigen");
                         Serial.println("  theme     : Farb-Theme umschalten");
+                        Serial.println("  btn-cal   : Segway-Tasten ADC 10x messen (Min/Max/Avg)");
                         Serial.println("  unlock    : Direkt per Textbefehl entsperren");
                         Serial.println("===============================");
                     } else if (strcasecmp(cmd, "unlock") == 0 || strcmp(cmd, Settings.get().pin_code) == 0) {
@@ -387,12 +392,35 @@ void handleSerialCli(DashTelemetry &telemetry, uint32_t now) {
                         Renderer.invalidateCache();
                         Renderer.markScreenDirty();
                         Serial.printf("[SERIAL] Farb-Theme gewechselt auf: %s\n", DashboardRenderer::getThemePalette(th).name);
+                    } else if (strcasecmp(cmd, "btn-cal") == 0) {
+                        Serial.printf("[ADC-CAL] Starting 10-sample ADC calibration on GPIO %d (PIN_STEERING_BTN_ADC)...\n",
+                                      PIN_STEERING_BTN_ADC);
+                        uint32_t min_mv = 0xFFFFFFFF;
+                        uint32_t max_mv = 0;
+                        uint32_t sum_mv = 0;
+                        for (int i = 0; i < 10; i++) {
+#if !defined(NATIVE_SIMULATOR)
+                            uint32_t mv = (uint32_t)analogReadMilliVolts(PIN_STEERING_BTN_ADC);
+#else
+                            uint32_t mv = 3300; // Simulated 3.3V idle
+#endif
+                            if (mv < min_mv) min_mv = mv;
+                            if (mv > max_mv) max_mv = mv;
+                            sum_mv += mv;
+                            Serial.printf("  Sample %2d/10: %u mV\n", i + 1, (unsigned int)mv);
+                            delay(100);
+                        }
+                        uint32_t avg_mv = sum_mv / 10;
+                        Serial.printf("[ADC-CAL] Result -> Min: %u mV | Max: %u mV | Avg: %u mV\n",
+                                      (unsigned int)min_mv, (unsigned int)max_mv, (unsigned int)avg_mv);
                     } else if (strcasecmp(cmd, "help") == 0) {
-                        Serial.println("Befehle: unlock, lock, gas <A>, duty <%>, stop, status, theme, help");
+                        Serial.println("Befehle: unlock, lock, gas <A>, duty <%>, stop, status, theme, btn-cal, help");
                     }
                 }
                 s_cmd_line[0] = '\0';
                 s_cmd_len = 0;
+            } else if ((c == '\b' || c == 127) && s_cmd_len > 0) {
+                s_cmd_line[--s_cmd_len] = '\0';
             } else if (c >= 32 && c <= 126) {
                 if (s_cmd_len < sizeof(s_cmd_line) - 1) {
                     s_cmd_line[s_cmd_len++] = c;

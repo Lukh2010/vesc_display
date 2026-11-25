@@ -171,6 +171,7 @@ DashboardRenderer::DashboardRenderer()
       _pin_modal_open(false),
       _pin_modal_success(false),
       _pin_modal_success_ms(0),
+      _fault_modal_open(false),
       _wizard_step(0),
       _wizard_inited(false),
       _wizard_pin_warn(false),
@@ -629,7 +630,11 @@ void DashboardRenderer::render(const DashTelemetry &telemetry) {
 
     // 0b. First-Time Setup Wizard / OTA / PIN Lockscreen priority
     if (!OtaManager::instance().isUpdating()) {
-        _ota_inited = false;
+        if (_ota_inited) {
+            _ota_inited = false;
+            invalidateCache();
+            markScreenDirty();
+        }
     }
     if (!telemetry.setup_completed && telemetry.screen == SCREEN_SETUP_WIZARD) {
         // Fall through to screen dispatch

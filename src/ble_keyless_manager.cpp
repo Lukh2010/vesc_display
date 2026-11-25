@@ -372,10 +372,6 @@ void BleKeylessManager::onClientDisconnect() {
 void BleKeylessManager::updateRssi(int8_t rssi) {
     if (_connected) {
         _rssi = (int8_t)(0.7f * _rssi + 0.3f * rssi);
-        if (_last_telemetry) {
-            _last_telemetry->ble_rssi = _rssi;
-            _last_telemetry->ble_signal_bars = getSignalBars();
-        }
     }
 }
 

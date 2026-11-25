@@ -33,6 +33,16 @@ struct VehicleModeConfig {
     float      battery_cutoff_end;              // V (e.g. 39.0V for 13S)
 };
 
+static constexpr uint32_t MODE_CONFIG_BLOB_MAGIC = 0x564D4342; // "VMCB" (Vehicle Mode Config Blob)
+static constexpr uint16_t MODE_CONFIG_BLOB_VERSION = 5;
+
+struct VehicleModeConfigBlob {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t reserved;
+    VehicleModeConfig config;
+};
+
 class ModeManager {
 public:
     static ModeManager& instance();

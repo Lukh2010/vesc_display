@@ -15,6 +15,8 @@
 #include "tcs_tpms_manager.h"
 #include "dash_log.h"
 #include "serial_cli.h"
+#include "wled_controller.h"
+#include "steering_buttons.h"
 #if !defined(NATIVE_SIMULATOR)
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -91,6 +93,8 @@ static void copyLiveTelemetry(DashTelemetry &dst, const DashTelemetry &src) {
 
 static void copyUiControlState(DashTelemetry &dst, const DashTelemetry &src) {
     dst.is_locked              = src.is_locked;
+    dst.theft_alarm_active     = src.theft_alarm_active;
+    dst.color_theme            = src.color_theme;
     dst.ride_mode              = src.ride_mode;
     dst.saved_ride_mode        = src.saved_ride_mode;
     dst.tuning_mode            = src.tuning_mode;
@@ -112,6 +116,7 @@ static void stepRealtimeSubsystem(DashTelemetry &rt_tel, uint32_t now) {
     }
 
     GpsTracker::instance().update(rt_tel);
+    WledController::instance().update(rt_tel, now);
 
     static uint32_t s_last_tcs_update_ms = millis();
     float tcs_dt = (now - s_last_tcs_update_ms) / 1000.0f;
@@ -394,6 +399,14 @@ void setup() {
 
     // 10. Initialize ATGM336H GPS+BDS Satellite Tracker on GPIO 44 (RX)
     GpsTracker::instance().init();
+
+    // 10a. Initialize Core-0 Hardware-RMT WLED Controller on GPIO 15
+    WledController::instance().begin();
+
+#if ENABLE_STEERING_BUTTONS
+    // 10b. Initialize Segway G3 Max 5-Button ADC Handlebar Ladder (optional, default disabled)
+    SteeringButtons::instance().begin();
+#endif
 
     // 10b. Initialize 12V Headlight MOSFET Trigger Switch on GPIO 43
 #if defined(PIN_HEADLIGHT_MOSFET) && (PIN_HEADLIGHT_MOSFET >= 0)
@@ -826,6 +839,88 @@ void loop() {
         nav = NAV_NONE;
     }
 
+#if ENABLE_STEERING_BUTTONS
+    {
+        static bool s_steer_horn_active = false;
+        SteeringBtnEvent sb_ev = SteeringButtons::instance().poll(now);
+
+        // Sustain FOC horn while BTN_CUSTOM stays held, silence immediately on release
+        if (s_steer_horn_active) {
+            if (SteeringButtons::instance().getActiveButton() == SteeringBtn::BTN_CUSTOM) {
+                Vesc.triggerFocHorn(true);
+            } else {
+                s_steer_horn_active = false;
+                Vesc.triggerFocHorn(false);
+            }
+        }
+
+        if (sb_ev != SteeringBtnEvent::NONE && !telemetry.is_locked && !Renderer.isBootAnimActive() && !Vesc.isBridgeActive()) {
+            switch (sb_ev) {
+                case SteeringBtnEvent::CUSTOM_SHORT:
+                    // Police Throttle Lock works from any screen (even inside Settings)
+                    if (telemetry.screen == SCREEN_SETTINGS_MENU) {
+                        telemetry.screen = SCREEN_RIDE_DASH;
+                        Renderer.invalidateCache();
+                    }
+                    nav = NAV_TUNING_DISABLE;
+                    break;
+
+                case SteeringBtnEvent::CUSTOM_LONG:
+                    s_steer_horn_active = true;
+                    Vesc.triggerFocHorn(true);
+                    break;
+
+                case SteeringBtnEvent::POWER_LIGHT_SHORT:
+                    nav = NAV_LIGHT_TOGGLE;
+                    break;
+
+                case SteeringBtnEvent::POWER_LIGHT_LONG:
+                    // Lock scooter only while stationary (< 1.5 km/h)
+                    if (telemetry.speed_kmh < 1.5f && fabsf(telemetry.vesc_motor_speed) < 1.5f) {
+                        if (telemetry.screen == SCREEN_RACE_TIMER) {
+                            exitRaceScreenCleanup(telemetry);
+                        }
+                        telemetry.is_locked = true;
+                        telemetry.theft_alarm_active = false;
+                        telemetry.boost_active = false;
+                        telemetry.pin_entry[0] = '\0';
+                        telemetry.pin_error = false;
+                        ModeManager::instance().setBoostActive(false);
+                        ModeManager::instance().setLocked(true);
+                        Buttons.setLocked(true);
+                        telemetry.screen = SCREEN_RIDE_DASH;
+                        Renderer.markScreenDirty();
+                        Renderer.invalidateCache();
+                        Serial.println("[STEERING] BTN_POWER_LIGHT LONG -> System gesperrt!");
+                    }
+                    break;
+
+                case SteeringBtnEvent::MODE_SHORT:
+                    nav = NAV_MODE_CYCLE;
+                    break;
+
+                case SteeringBtnEvent::UP_SHORT:
+                    if (telemetry.tuning_mode) {
+                        nav = NAV_BOOST_TOGGLE;
+                    }
+                    break;
+
+                case SteeringBtnEvent::DOWN_SHORT:
+                    if (telemetry.screen == SCREEN_RACE_TIMER) {
+                        exitRaceScreenCleanup(telemetry);
+                    }
+                    telemetry.screen = (telemetry.screen == SCREEN_RT_GRAPHS) ? SCREEN_RIDE_DASH : SCREEN_RT_GRAPHS;
+                    Renderer.markScreenDirty();
+                    Renderer.invalidateCache();
+                    break;
+
+                default:
+                    break;
+            }
+        }
+    }
+#endif
+
     if (nav != NAV_NONE) {
         if (nav == NAV_PIN_EMERGENCY_RESET) {
             strncpy(Settings.get().pin_code, "1234", sizeof(Settings.get().pin_code));
@@ -1013,7 +1108,7 @@ void loop() {
                     if (s_rt_task_handle && s_telem_mutex && xSemaphoreTake(s_telem_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
                         s_shared_telem.trip_km = 0.0f;
                         s_shared_telem.stats.reset();
-                        s_trip_reset_req_gen++;
+                        s_trip_reset_req_gen = s_trip_reset_req_gen + 1;
                         xSemaphoreGive(s_telem_mutex);
                     } else {
                         Battery.resetTrip();

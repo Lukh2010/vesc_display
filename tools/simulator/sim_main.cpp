@@ -23,6 +23,8 @@
 #include "ble_keyless_manager.h"
 #include "ota_manager.h"
 #include "tcs_tpms_manager.h"
+#include "steering_buttons.h"
+#include "wled_controller.h"
 #include "virtual_vesc/virtual_vesc.h"
 #include "virtual_vesc/vesc_tcp_server.h"
 
@@ -3978,6 +3980,222 @@ int main(int argc, char **argv) {
         }
 
         printf("[PASS] Regression test: GpsTracker NMEA Checksumme (corrupted *FF rejected, valid sentence parsed)\n");
+    }
+
+    // -------------------------------------------------------------
+    // Regression Test 10: ModeManager Legal-Mode Boost-Sperre, Modus-Zyklus & SteeringButtons
+    // -------------------------------------------------------------
+    {
+        // 1. Legal-Mode Boost-Sperre (tuning_mode = false, boost_active = true -> aktive Limits bleiben strikt auf <=22A / <=22 km/h)
+        ModeManager::instance().setTuningMode(false);
+        ModeManager::instance().setBoostActive(true);
+        ModeLimits leg_lim = ModeManager::instance().getActiveLimits();
+        if (leg_lim.max_speed_kmh > 22.0f || leg_lim.max_battery_amps > 22.0f) {
+            fprintf(stderr, "[FAIL] ModeManager allowed boost exceeding legal limits in legal mode: speed=%.1f bat=%.1f\n",
+                    leg_lim.max_speed_kmh, leg_lim.max_battery_amps);
+            return 1;
+        }
+
+        // 2. Modus-Wechsel (setRideMode, cycleMode) & Persistenz-Check
+        ModeManager::instance().setRideMode(MODE_ECO);
+        if (ModeManager::instance().getRideMode() != MODE_ECO) {
+            fprintf(stderr, "[FAIL] ModeManager setRideMode(MODE_ECO) failed\n");
+            return 1;
+        }
+        ModeManager::instance().cycleMode();
+        if (ModeManager::instance().getRideMode() != MODE_SPORT) {
+            fprintf(stderr, "[FAIL] ModeManager cycleMode() ECO -> SPORT failed\n");
+            return 1;
+        }
+        ModeManager::instance().cycleMode();
+        if (ModeManager::instance().getRideMode() != MODE_RACE) {
+            fprintf(stderr, "[FAIL] ModeManager cycleMode() SPORT -> RACE failed\n");
+            return 1;
+        }
+        ModeManager::instance().cycleMode();
+        if (ModeManager::instance().getRideMode() != MODE_ECO) {
+            fprintf(stderr, "[FAIL] ModeManager cycleMode() RACE -> ECO failed\n");
+            return 1;
+        }
+
+        // 3. Tuning Mode Boost Check (Tuning ON + Boost ON -> open limits >= 70A / >= 140A)
+        ModeManager::instance().setTuningMode(true);
+        ModeManager::instance().setBoostActive(true);
+        ModeLimits tun_lim = ModeManager::instance().getActiveLimits();
+        if (tun_lim.max_battery_amps < 70.0f || tun_lim.max_phase_amps < 140.0f) {
+            fprintf(stderr, "[FAIL] ModeManager boost in tuning mode failed: bat=%.1f pha=%.1f\n",
+                    tun_lim.max_battery_amps, tun_lim.max_phase_amps);
+            return 1;
+        }
+
+        // Restore legal defaults and save to NVS
+        ModeManager::instance().setBoostActive(false);
+        ModeManager::instance().setTuningMode(false);
+        ModeManager::instance().setRideMode(MODE_SPORT);
+        ModeManager::instance().saveToNvs();
+
+        // 4. SteeringButtons Unit Check: Short press & Long press via setSimMilliVolts
+        SteeringButtons& sb = SteeringButtons::instance();
+        sb.reset();
+
+        // Simulate BTN_UP (~500 mV) short press:
+        // Hold for 40ms (>30ms debounce, <450ms long press) then release (3300 mV) for 40ms
+        uint32_t sim_t = 1000;
+        sb.setSimMilliVolts(500); // BTN_UP
+        sb.poll(sim_t);
+        sim_t += 40; // 1040ms (debounce satisfied, pressed)
+        SteeringBtnEvent ev_press = sb.poll(sim_t);
+        assert(ev_press == SteeringBtnEvent::NONE);
+        assert(sb.isButtonPressed() == true);
+        assert(sb.getActiveButton() == SteeringBtn::BTN_UP);
+
+        // Release to 3300mV
+        sb.setSimMilliVolts(3300);
+        sim_t += 10; // 1050ms
+        sb.poll(sim_t);
+        sim_t += 35; // 1085ms (debounce release satisfied)
+        SteeringBtnEvent ev_rel = sb.poll(sim_t);
+        if (ev_rel != SteeringBtnEvent::UP_SHORT) {
+            fprintf(stderr, "[FAIL] SteeringButtons expected UP_SHORT, got %s\n", SteeringButtons::getEventName(ev_rel));
+            return 1;
+        }
+        assert(sb.isButtonPressed() == false);
+
+        // Simulate BTN_MODE (~1500 mV) long press:
+        sim_t += 100;
+        sb.setSimMilliVolts(1500); // BTN_MODE
+        sb.poll(sim_t);
+        sim_t += 35; // Debounce passed
+        sb.poll(sim_t);
+        assert(sb.getActiveButton() == SteeringBtn::BTN_MODE);
+
+        sim_t += 460; // Total hold time > 450ms
+        SteeringBtnEvent ev_long = sb.poll(sim_t);
+        if (ev_long != SteeringBtnEvent::MODE_LONG) {
+            fprintf(stderr, "[FAIL] SteeringButtons expected MODE_LONG, got %s\n", SteeringButtons::getEventName(ev_long));
+            return 1;
+        }
+
+        // Release after long press -> must NOT trigger MODE_SHORT
+        sb.setSimMilliVolts(3300);
+        sim_t += 40;
+        SteeringBtnEvent ev_after_long = sb.poll(sim_t);
+        if (ev_after_long != SteeringBtnEvent::NONE) {
+            fprintf(stderr, "[FAIL] SteeringButtons fired event on release after long press: %s\n",
+                    SteeringButtons::getEventName(ev_after_long));
+            return 1;
+        }
+
+        printf("[PASS] Regression test: ModeManager Legal-Mode Boost-Sperre & Modus-Zyklus & SteeringButtons (Test #10)\n");
+    }
+
+    // -------------------------------------------------------------
+    // Regression Test 11: WLED Hardware-RMT Engine Modes & Brightness
+    // -------------------------------------------------------------
+    {
+        WledController &wled = WledController::instance();
+        wled.begin();
+        wled.setEnabled(true);
+        wled.setBrightness(255);
+
+        DashTelemetry wt;
+        setBaseTelemetry(wt);
+        uint32_t wtime = 5000;
+
+        // 1. Theft Strobe (theft_alarm_active -> 100ms Red/Blue strobe)
+        wt.theft_alarm_active = true;
+        wt.is_locked = true;
+        wt.current_amps = -10.0f;
+        wled.update(wt, wtime); // t=5000 (even 100ms slot -> Red)
+        assert(wled.getActiveMode() == WLED_MODE_THEFT_STROBE);
+        assert(wled.getLedRgb(0).r == 255 && wled.getLedRgb(0).b == 0);
+        wtime += 100;
+        wled.update(wt, wtime); // t=5100 (odd 100ms slot -> Blue)
+        assert(wled.getLedRgb(0).r == 0 && wled.getLedRgb(0).b == 255);
+
+        // 2. Adaptive Brake Light (current_amps = -10A -> solid Brake Red)
+        wt.theft_alarm_active = false;
+        wt.is_locked = false;
+        wt.current_amps = -10.0f;
+        wt.g_force = -0.1f;
+        wtime += 50;
+        wled.update(wt, wtime);
+        assert(wled.getActiveMode() == WLED_MODE_BRAKE_SOLID);
+        assert(wled.getLedRgb(0).r == 255 && wled.getLedRgb(0).g == 0 && wled.getLedRgb(0).b == 0);
+
+        // 3. Emergency Brake (g_force = -0.8 -> pulsing Brake Red)
+        wt.current_amps = 0.0f;
+        wt.g_force = -0.8f;
+        wled.update(wt, 6000); // 6000/60 = 100 (even -> 255)
+        assert(wled.getActiveMode() == WLED_MODE_BRAKE_EMERGENCY);
+        assert(wled.getLedRgb(0).r == 255);
+        wled.update(wt, 6060); // 6060/60 = 101 (odd -> 64)
+        assert(wled.getLedRgb(0).r < 255 && wled.getLedRgb(0).r > 0);
+
+        // 4. Locked Breathe (parked, no alarm, no brake)
+        wt.g_force = 0.0f;
+        wt.is_locked = true;
+        wt.color_theme = THEME_OBSIDIAN_DARK;
+        wled.update(wt, 6200);
+        assert(wled.getActiveMode() == WLED_MODE_LOCKED_BREATHE);
+        assert(wled.getLedRgb(0).b > 0 && wled.getLedRgb(0).b < 60);
+
+        // 5. Speed-Glow & Brightness 0 = Black
+        wt.is_locked = false;
+        wt.speed_kmh = 45.0f;
+        wled.update(wt, 6300);
+        assert(wled.getActiveMode() == WLED_MODE_SPEED_GLOW);
+        WledRgb sg = wled.getLedRgb(0);
+        assert(sg.r > 0 || sg.g > 0 || sg.b > 0);
+
+        wled.setBrightness(0);
+        wled.update(wt, 6400);
+        assert(wled.getLedRgb(0).r == 0 && wled.getLedRgb(0).g == 0 && wled.getLedRgb(0).b == 0);
+
+        wled.setEnabled(false);
+        assert(wled.getActiveMode() == WLED_MODE_OFF);
+        printf("[PASS] Regression test: WLED Engine (Strobe, Regen-Brake, Emergency-Brake, Locked-Breathe, Speed-Glow, Brightness 0) (Test #11)\n");
+    }
+
+    // -------------------------------------------------------------
+    // Regression Test 12: Fault-Blackbox Modal in Settings (TAB_SYSTEM)
+    // -------------------------------------------------------------
+    {
+        FaultManager::instance().clearFaults();
+        FaultManager::instance().recordFault(FAULT_ABS_OVER_CURRENT, 52.4f, 115.0f, 180.0f, 55.0f, 68.0f, 42);
+        assert(FaultManager::instance().getFaultCount() == 1);
+
+        DashTelemetry t12;
+        setBaseTelemetry(t12);
+        t12.tuning_mode = true;
+        t12.screen = SCREEN_SETTINGS_MENU;
+
+        Renderer.invalidateCache();
+        Renderer.markScreenDirty();
+        Renderer.render(t12);
+
+        // Tap SYSTEM tab (tuning_mode: i=3 -> x=20+3*154+72 = 554, y=81)
+        assert(Renderer.handleSettingsTouch(554, 81, t12) == true);
+        assert(Renderer.getSettingsTab() == DashboardRenderer::TAB_SYSTEM);
+        Renderer.render(t12);
+
+        // Tap [ FAULT LOG (1) ] button in Card 4 (x=284..516, y=384..432 -> center 400, 408)
+        assert(Renderer.handleSettingsTouch(400, 408, t12) == true);
+        Renderer.render(t12);
+
+        // Tap [ LOG LOESCHEN ] in Modal (x=110..370, y=398..440 -> center 240, 419)
+        assert(Renderer.handleSettingsTouch(240, 419, t12) == true);
+        assert(FaultManager::instance().getFaultCount() == 0);
+        Renderer.render(t12);
+
+        // Tap [ SCHLIESSEN ] in Modal (x=430..690, y=398..440 -> center 560, 419)
+        assert(Renderer.handleSettingsTouch(560, 419, t12) == true);
+        Renderer.render(t12);
+
+        // Exit Settings cleanly back to Dash
+        assert(Renderer.handleSettingsTouch(44, 29, t12) == true);
+        assert(t12.screen == SCREEN_RIDE_DASH);
+        printf("[PASS] Regression test: Fault-Blackbox Modal Open, Clear (Count==0) & Close (Test #12)\n");
     }
 
     printf("\n[SUCCESS] All scenarios rendered and saved to tools/simulator/screenshots/\n");

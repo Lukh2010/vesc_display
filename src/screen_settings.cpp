@@ -15,6 +15,7 @@ void DashboardRenderer::initSettingsScreen(const DashTelemetry &telemetry) {
         }
     }
     _pin_modal_open = false;
+    _fault_modal_open = false;
     _settings_inited = false;
     _last_rendered_tab = 255;
     _settings_last_tuning_mode = telemetry.tuning_mode ? 1 : 0;
@@ -51,6 +52,7 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
             _pin_modal_buf[0] = '\0';
             _settings_inited = false;
             _last_rendered_tab = 255;
+            markFullDirty();
             _menu_dirty = true;
         }
     }
@@ -76,7 +78,8 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
 
         _settings_inited = true;
     } else {
-        addDirtyRect(0, _pin_modal_open ? 26 : 54, 800, _pin_modal_open ? 454 : 426);
+        addDirtyRect(0, (_pin_modal_open || _fault_modal_open) ? 26 : 54,
+                     800, (_pin_modal_open || _fault_modal_open) ? 454 : 426);
     }
 
     // 2. Segmented Tab Bar (Stealth-safe: Legal = 3 tabs, Tuning = 5 tabs)
@@ -372,18 +375,32 @@ void DashboardRenderer::renderSettingsScreen(const DashTelemetry &telemetry) {
         drawSmoothText(UIF_BODY, calib_active ? "AKTIV..." : "KALIBRIEREN", 655, 324,
                        textdatum_t::middle_center, calFg, calBg);
 
-        // Card 4: WERKZEUGE (WiFi Bridge & Setup Wizard) (y: 370..446, h: 76)
+        // Card 4: WERKZEUGE (WiFi Bridge, Fault Log & Setup Wizard) (y: 370..446, h: 76)
         drawCard(20, 370, 760, 76, pal.surface, pal.border, 12);
-        _canvas->fillRoundRect(36, 384, 352, 48, 12, pal.surface_alt);
-        _canvas->drawRoundRect(36, 384, 352, 48, 12, pal.primary);
-        drawSmoothText(UIF_BODY, "WIFI VESC-TOOL BRIDGE", 212, 408, textdatum_t::middle_center, pal.primary, pal.surface_alt);
+        _canvas->fillRoundRect(36, 384, 232, 48, 12, pal.surface_alt);
+        _canvas->drawRoundRect(36, 384, 232, 48, 12, pal.primary);
+        drawSmoothText(UIF_BODY, "WIFI VESC-TOOL", 152, 408, textdatum_t::middle_center, pal.primary, pal.surface_alt);
 
-        _canvas->fillRoundRect(412, 384, 352, 48, 12, pal.surface_alt);
-        _canvas->drawRoundRect(412, 384, 352, 48, 12, pal.border);
-        drawSmoothText(UIF_BODY, "SETUP-ASSISTENT STARTEN", 588, 408, textdatum_t::middle_center, pal.text, pal.surface_alt);
+        uint8_t faultCnt = FaultManager::instance().getFaultCount();
+        char faultBtnBuf[28];
+        snprintf(faultBtnBuf, sizeof(faultBtnBuf), "FAULT LOG (%u)", (unsigned)faultCnt);
+        uint16_t flBg = (faultCnt > 0) ? blendRgb565(pal.surface_alt, pal.accent_danger, 24) : pal.surface_alt;
+        uint16_t flBd = (faultCnt > 0) ? pal.accent_danger : pal.border;
+        uint16_t flFg = (faultCnt > 0) ? pal.accent_danger : pal.text;
+        _canvas->fillRoundRect(284, 384, 232, 48, 12, flBg);
+        _canvas->drawRoundRect(284, 384, 232, 48, 12, flBd);
+        drawSmoothText(UIF_BODY, faultBtnBuf, 400, 408, textdatum_t::middle_center, flFg, flBg);
+
+        _canvas->fillRoundRect(532, 384, 232, 48, 12, pal.surface_alt);
+        _canvas->drawRoundRect(532, 384, 232, 48, 12, pal.border);
+        drawSmoothText(UIF_BODY, "SETUP-ASSISTENT", 648, 408, textdatum_t::middle_center, pal.text, pal.surface_alt);
 
         drawSmoothText(UIF_SMALL, "System, Traktion & Akku-Schutz  •  Speichert im NVS Flash",
                        400, 462, textdatum_t::middle_center, pal.muted, pal.bg);
+
+        if (_fault_modal_open) {
+            drawFaultLogModal();
+        }
         return;
     }
 
@@ -494,6 +511,96 @@ void DashboardRenderer::drawPinChangeModal() {
     }
 }
 
+void DashboardRenderer::drawFaultLogModal() {
+    const ColorThemePalette &pal = currentTheme();
+    const int mx = 40, my = 26, mw = 720, mh = 428;
+    drawCard(mx, my, mw, mh, pal.surface, pal.primary, 16);
+    _canvas->drawRoundRect(mx + 1, my + 1, mw - 2, mh - 2, 15, pal.primary);
+
+    uint8_t cnt = FaultManager::instance().getFaultCount();
+    drawSmoothText(UIF_HEADING, "VESC FAULT BLACKBOX", mx + 22, my + 16,
+                   textdatum_t::top_left, pal.text, pal.surface);
+    char subBuf[64];
+    snprintf(subBuf, sizeof(subBuf), "%u gespeicherte Fehler (neueste zuerst)", (unsigned)cnt);
+    drawSmoothText(UIF_SMALL, subBuf, mx + 22, my + 44,
+                   textdatum_t::top_left, pal.muted, pal.surface);
+
+    // Top-Right [ X ] Close Button
+    _canvas->fillRoundRect(mx + mw - 48, my + 14, 34, 32, 8, pal.surface_alt);
+    _canvas->drawRoundRect(mx + mw - 48, my + 14, 34, 32, 8, pal.border);
+    drawSmoothText(UIF_BODY, "X", mx + mw - 31, my + 30, textdatum_t::middle_center, pal.text, pal.surface_alt);
+
+    _canvas->drawFastHLine(mx + 16, my + 68, mw - 32, pal.border);
+
+    if (cnt == 0) {
+        uint16_t okBg = blendRgb565(pal.surface_alt, pal.accent_ok, 18);
+        drawCard(mx + 40, my + 120, mw - 80, 170, okBg, pal.accent_ok, 12);
+        drawSmoothText(UIF_HEADING, "Keine VESC-Fehler gespeichert - System sauber!",
+                       mx + mw / 2, my + 190, textdatum_t::middle_center, pal.accent_ok, okBg);
+        drawSmoothText(UIF_SMALL, "Aufgezeichnete Controller-Stoerungen erscheinen hier chronologisch.",
+                       mx + mw / 2, my + 228, textdatum_t::middle_center, pal.muted, okBg);
+    } else {
+        uint8_t shown = (cnt > 7) ? 7 : cnt;
+        int rx = mx + 16;
+        int rw = mw - 32;
+        int y0 = my + 76;
+        uint16_t badgeBg = blendRgb565(pal.surface_alt, pal.accent_danger, 32);
+
+        for (uint8_t i = 0; i < shown; i++) {
+            const FaultRecord &rec = FaultManager::instance().getFault(i);
+            int ry = y0 + i * 40;
+            uint16_t rowBd = (i == 0) ? pal.accent_danger : pal.border;
+            drawCard(rx, ry, rw, 36, pal.surface_alt, rowBd, 8);
+
+            // Fault code badge
+            _canvas->fillRoundRect(rx + 8, ry + 6, 48, 24, 6, badgeBg);
+            _canvas->drawRoundRect(rx + 8, ry + 6, 48, 24, 6, pal.accent_danger);
+            char codeBuf[12];
+            snprintf(codeBuf, sizeof(codeBuf), "F%02u", (unsigned)rec.code);
+            drawSmoothText(UIF_SMALL, codeBuf, rx + 32, ry + 18,
+                           textdatum_t::middle_center, pal.accent_danger, badgeBg);
+
+            // German fault title
+            drawSmoothText(UIF_SMALL, FaultManager::getFaultTitleDe(rec.code), rx + 66, ry + 18,
+                           textdatum_t::middle_left, pal.text, pal.surface_alt);
+
+            // Telemetry snapshot & uptime
+            uint32_t mins = rec.timestamp_s / 60;
+            uint32_t secs = rec.timestamp_s % 60;
+            char timeBuf[20];
+            if (mins > 0) {
+                snprintf(timeBuf, sizeof(timeBuf), "%lum%02lus", (unsigned long)mins, (unsigned long)secs);
+            } else {
+                snprintf(timeBuf, sizeof(timeBuf), "%lus", (unsigned long)secs);
+            }
+            char telBuf[72];
+            snprintf(telBuf, sizeof(telBuf), "%.1fV  %.0fA  F:%.0fC M:%.0fC  @%s",
+                     (double)rec.voltage, (double)rec.current,
+                     (double)rec.temp_fet, (double)rec.temp_mot, timeBuf);
+            drawSmoothText(UIF_SMALL, telBuf, rx + rw - 10, ry + 18,
+                           textdatum_t::middle_right, pal.muted, pal.surface_alt);
+        }
+    }
+
+    // Bottom buttons: [ LOG LOESCHEN ] and [ SCHLIESSEN ]
+    int by = my + mh - 56;
+    int bw = 260, bh = 42;
+    int bx1 = mx + 70;
+    int bx2 = mx + mw - 70 - bw;
+
+    uint16_t clrBg = (cnt > 0) ? blendRgb565(pal.surface_alt, pal.accent_danger, 28) : pal.surface_alt;
+    uint16_t clrBd = (cnt > 0) ? pal.accent_danger : pal.border;
+    uint16_t clrFg = (cnt > 0) ? pal.accent_danger : pal.muted;
+    drawCard(bx1, by, bw, bh, clrBg, clrBd, 10);
+    drawSmoothText(UIF_BODY, "LOG LOESCHEN", bx1 + bw / 2, by + bh / 2,
+                   textdatum_t::middle_center, clrFg, clrBg);
+
+    uint16_t clsFg = onPrimaryFg(pal);
+    drawCard(bx2, by, bw, bh, pal.primary, pal.primary, 10);
+    drawSmoothText(UIF_BODY, "SCHLIESSEN", bx2 + bw / 2, by + bh / 2,
+                   textdatum_t::middle_center, clsFg, pal.primary);
+}
+
 void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry) {
     if (action == NAV_NONE) return;
 
@@ -509,6 +616,8 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
         Settings.save();
         ModeManager::instance().applyCurrentMode();
 
+        _fault_modal_open = false;
+        _pin_modal_open = false;
         _settings_tab_idx = 255;
         _settings_inited = false;
         _last_rendered_tab = 255;
@@ -526,6 +635,8 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
             else if (_settings_tab_idx == TAB_SYSTEM) _settings_tab_idx = TAB_PIN;
             else _settings_tab_idx = TAB_DASH;
         }
+        _fault_modal_open = false;
+        _pin_modal_open = false;
         _last_rendered_tab = 255;
         _cache.invalidate();
         _menu_dirty = true;
@@ -559,7 +670,40 @@ void DashboardRenderer::handleMenuNav(NavAction action, DashTelemetry &telemetry
 bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetry &telemetry) {
     if (tx < 0 || ty < 0) return false;
 
-    // 0. PIN Change Modal Touch Handling
+    // 0. Fault Blackbox Modal Touch Handling
+    if (_fault_modal_open) {
+        const int mx = 40, my = 26, mw = 720, mh = 428;
+        const int by = my + mh - 56;
+        const int bw = 260, bh = 42;
+        const int bx1 = mx + 70;
+        const int bx2 = mx + mw - 70 - bw;
+
+        // Close on [ X ], [ SCHLIESSEN ], or tap outside modal
+        if ((tx >= mx + mw - 55 && tx <= mx + mw && ty >= my && ty <= my + 52) ||
+            (tx >= bx2 && tx <= bx2 + bw && ty >= by - 4 && ty <= by + bh + 4) ||
+            (tx < mx || tx > mx + mw || ty < my || ty > my + mh)) {
+            _fault_modal_open = false;
+            _settings_inited = false;
+            _last_rendered_tab = 255;
+            _cache.invalidate();
+            markFullDirty();
+            _menu_dirty = true;
+            return true;
+        }
+
+        // [ LOG LOESCHEN ]
+        if (tx >= bx1 && tx <= bx1 + bw && ty >= by - 4 && ty <= by + bh + 4) {
+            if (FaultManager::instance().getFaultCount() > 0) {
+                FaultManager::instance().clearFaults();
+                _menu_dirty = true;
+            }
+            return true;
+        }
+
+        return true;
+    }
+
+    // 0b. PIN Change Modal Touch Handling
     if (_pin_modal_open) {
         int mx = 160, my = 26, mw = 480;
         if ((tx >= mx + mw - 55 && tx <= mx + mw && ty >= my && ty <= my + 52) ||
@@ -569,6 +713,7 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             _settings_inited = false;
             _last_rendered_tab = 255;
             _cache.invalidate();
+            markFullDirty();
             _menu_dirty = true;
             return true;
         }
@@ -897,16 +1042,21 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
             return true;
         }
 
-        // Card 4: WiFi Bridge & Setup Wizard (y: 370..446)
+        // Card 4: WiFi Bridge, Fault Log & Setup Wizard (y: 370..446)
         if (ty >= 370 && ty <= 446) {
-            if (tx >= 28 && tx <= 394) {
+            if (tx >= 28 && tx < 276) {
                 Vesc.enterWifiBridgeMode();
                 telemetry.screen = SCREEN_WIFI_BRIDGE;
                 _settings_inited = false;
                 _screen_dirty = true;
                 return true;
             }
-            if (tx >= 406 && tx <= 772) {
+            if (tx >= 276 && tx < 524) {
+                _fault_modal_open = true;
+                _menu_dirty = true;
+                return true;
+            }
+            if (tx >= 524 && tx <= 772) {
                 resetSetupWizard();
                 telemetry.wizard_step = 0;
                 telemetry.wizard_pin_buf[0] = '\0';

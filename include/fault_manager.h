@@ -2,6 +2,10 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#if !defined(NATIVE_SIMULATOR)
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#endif
 
 #define MAX_FAULT_HISTORY 10
 
@@ -51,18 +55,21 @@ public:
     void begin();
     void recordFault(uint8_t code, float v, float i, float phase_i, float fet_temp, float mot_temp, uint32_t uptime_s);
 
-    uint8_t getFaultCount() const { return _fault_count; }
+    uint8_t getFaultCount() const;
     FaultRecord getFault(uint8_t index) const;
     void clearFaults();
 
-    uint8_t getActiveFault() const { return _active_fault; }
-    void setActiveFault(uint8_t code) { _active_fault = code; }
+    uint8_t getActiveFault() const;
+    void setActiveFault(uint8_t code);
 
     static const char* getFaultTitleDe(uint8_t code);
     static const char* getFaultDescriptionDe(uint8_t code);
 
 private:
     FaultManager();
+#if !defined(NATIVE_SIMULATOR)
+    mutable SemaphoreHandle_t _mutex;
+#endif
     Preferences _prefs;
     FaultRecord _history[MAX_FAULT_HISTORY];
     uint8_t     _fault_count;

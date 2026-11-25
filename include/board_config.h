@@ -140,3 +140,10 @@
 // 0 = Disabled (excludes ESP32 BLE stack completely from Flash & RAM)
 // 1 = Enabled
 #define ENABLE_BLE_KEYLESS  0
+
+// WLED Addressable Underglow / Brake Strip (WS2812B / SK6812 / WS2815 via ESP32-S3 RMT)
+#define PIN_WLED_DATA       15
+#define WLED_LED_COUNT      60
+#ifndef ENABLE_WLED
+#define ENABLE_WLED         1
+#endif

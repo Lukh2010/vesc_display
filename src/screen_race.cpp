@@ -142,7 +142,7 @@ void DashboardRenderer::updateRaceTimer(DashTelemetry &telemetry, uint32_t now) 
             }
         }
 
-        if (telemetry.race_state == 2 && telemetry.race_dyno.peak_speed_kmh >= 25.0f && telemetry.race_elapsed_sec > 2.0f && telemetry.speed_kmh < 2.0f) {
+        if (telemetry.race_state == 2 && telemetry.race_dyno.peak_speed_kmh >= (float)cur_sp1 && telemetry.race_elapsed_sec > 2.0f && telemetry.speed_kmh < 2.0f) {
             finishRaceRun();
         }
 

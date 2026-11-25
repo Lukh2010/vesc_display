@@ -2,6 +2,33 @@
 #include <string.h>
 #include <stdio.h>
 
+namespace {
+struct FaultLockGuard {
+#if !defined(NATIVE_SIMULATOR)
+    SemaphoreHandle_t m;
+    bool locked;
+    explicit FaultLockGuard(SemaphoreHandle_t mutex) : m(mutex), locked(false) {
+        if (m) {
+            locked = (xSemaphoreTakeRecursive(m, portMAX_DELAY) == pdTRUE);
+        }
+    }
+    ~FaultLockGuard() {
+        if (m && locked) {
+            xSemaphoreGiveRecursive(m);
+        }
+    }
+#else
+    explicit FaultLockGuard(int = 0) {}
+#endif
+};
+} // namespace
+
+#if !defined(NATIVE_SIMULATOR)
+#define FAULT_LOCK() FaultLockGuard fault_lock(_mutex)
+#else
+#define FAULT_LOCK() FaultLockGuard fault_lock(0)
+#endif
+
 #define FAULT_BLOB_MAGIC   0x464C5432 // "FLT2"
 #define FAULT_BLOB_VERSION 1
 
@@ -19,7 +46,12 @@ FaultManager& FaultManager::instance() {
 }
 
 FaultManager::FaultManager()
+#if !defined(NATIVE_SIMULATOR)
+    : _mutex(xSemaphoreCreateRecursiveMutex()),
+      _fault_count(0),
+#else
     : _fault_count(0),
+#endif
       _active_fault(0),
       _last_logged_time_ms(0),
       _last_logged_code(0) {
@@ -27,10 +59,12 @@ FaultManager::FaultManager()
 }
 
 void FaultManager::begin() {
+    FAULT_LOCK();
     loadFromNvs();
 }
 
 void FaultManager::loadFromNvs() {
+    FAULT_LOCK();
     _prefs.begin("vesc_faults", false);
 
     // 1. Try loading NVS Blob (hist_v2)
@@ -79,6 +113,7 @@ void FaultManager::loadFromNvs() {
 }
 
 void FaultManager::saveToNvs() {
+    FAULT_LOCK();
     _prefs.begin("vesc_faults", false);
     FaultHistoryBlob blob;
     memset(&blob, 0, sizeof(blob));
@@ -91,6 +126,7 @@ void FaultManager::saveToNvs() {
 }
 
 void FaultManager::recordFault(uint8_t code, float v, float i, float phase_i, float fet_temp, float mot_temp, uint32_t uptime_s) {
+    FAULT_LOCK();
     if (code == FAULT_NONE) {
         _active_fault = 0;
         return;
@@ -129,7 +165,23 @@ void FaultManager::recordFault(uint8_t code, float v, float i, float phase_i, fl
                   code, getFaultTitleDe(code), (unsigned long)uptime_s, v, i, fet_temp, mot_temp);
 }
 
+uint8_t FaultManager::getFaultCount() const {
+    FAULT_LOCK();
+    return _fault_count;
+}
+
+uint8_t FaultManager::getActiveFault() const {
+    FAULT_LOCK();
+    return _active_fault;
+}
+
+void FaultManager::setActiveFault(uint8_t code) {
+    FAULT_LOCK();
+    _active_fault = code;
+}
+
 FaultRecord FaultManager::getFault(uint8_t index) const {
+    FAULT_LOCK();
     if (index >= _fault_count) {
         FaultRecord empty = { 0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
         return empty;
@@ -138,6 +190,7 @@ FaultRecord FaultManager::getFault(uint8_t index) const {
 }
 
 void FaultManager::clearFaults() {
+    FAULT_LOCK();
     _fault_count = 0;
     _active_fault = 0;
     _last_logged_code = 0;

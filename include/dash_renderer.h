@@ -155,6 +155,7 @@ private:
     void drawRaceRecordsModal(const DashTelemetry &telemetry);
     void drawRaceDynoModal(const DashTelemetry &telemetry);
     void drawPinChangeModal();
+    void drawFaultLogModal();
 
     // Screen 7: First-Time Setup & Onboarding Wizard
     void renderSetupWizard(const DashTelemetry &telemetry);
@@ -386,6 +387,9 @@ private:
     char     _pin_modal_buf[8];
     bool     _pin_modal_success;
     uint32_t _pin_modal_success_ms;
+
+    // Fault Blackbox Modal State (in Settings)
+    bool     _fault_modal_open;
 
     // Wizard State
     uint8_t  _wizard_step;       // 0=Welcome, 1=PIN, 2=Hardware

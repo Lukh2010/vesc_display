@@ -2,6 +2,10 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#if !defined(NATIVE_SIMULATOR)
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#endif
 #include "dash_types.h"
 
 class SettingsManager {
@@ -33,6 +37,9 @@ private:
     RaceRecords  _race_records;
     RaceRecords  _last_saved_race;
     bool         _has_saved_snapshot;
+#if !defined(NATIVE_SIMULATOR)
+    mutable SemaphoreHandle_t _mutex;
+#endif
     Preferences  _prefs;
     void loadDefaults();
     void saveInternal(bool force);
