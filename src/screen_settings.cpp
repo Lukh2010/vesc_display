@@ -1065,14 +1065,17 @@ bool DashboardRenderer::handleSettingsTouch(int16_t tx, int16_t ty, DashTelemetr
                     return true;
                 }
                 if (tx >= 334 && tx < 420) {
-                    uint8_t cur_bri = wled.getBrightness();
-                    wled.setBrightness((cur_bri > 25) ? (uint8_t)(cur_bri - 25) : 0);
+                    int pct = ((int)wled.getBrightness() * 100 + 127) / 255;
+                    int next_pct = (pct > 0) ? (((pct - 1) / 10) * 10) : 0;
+                    wled.setBrightness((uint8_t)((next_pct * 255 + 50) / 100));
                     _menu_dirty = true;
                     return true;
                 }
                 if (tx >= 450 && tx <= 528) {
-                    uint8_t cur_bri = wled.getBrightness();
-                    wled.setBrightness((cur_bri <= 230) ? (uint8_t)(cur_bri + 25) : 255);
+                    int pct = ((int)wled.getBrightness() * 100 + 127) / 255;
+                    int next_pct = (pct < 100) ? (((pct / 10) + 1) * 10) : 100;
+                    if (next_pct > 100) next_pct = 100;
+                    wled.setBrightness((uint8_t)((next_pct * 255 + 50) / 100));
                     _menu_dirty = true;
                     return true;
                 }

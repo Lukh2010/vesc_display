@@ -4462,15 +4462,15 @@ int main(int argc, char **argv) {
         assert(Renderer.handleSettingsTouch(250, 408, t15) == true);
         assert(wled.getEffect() == (uint8_t)((cur_fx + 1U) % (WledController::EFFECT_MAX + 1U)));
 
-        // Tap [ - ] brightness at (362, 408)
-        uint8_t cur_bri = wled.getBrightness();
+        // Tap [ - ] brightness at (362, 408) -> snaps cleanly to 10% steps (from 210=82% -> 80%=204 -> 70%=179)
         assert(Renderer.handleSettingsTouch(362, 408, t15) == true);
-        assert(wled.getBrightness() == ((cur_bri > 25) ? (uint8_t)(cur_bri - 25) : 0));
+        assert(((int)wled.getBrightness() * 100 + 127) / 255 == 80);
+        assert(Renderer.handleSettingsTouch(362, 408, t15) == true);
+        assert(((int)wled.getBrightness() * 100 + 127) / 255 == 70);
 
-        // Tap [ + ] brightness at (490, 408)
-        cur_bri = wled.getBrightness();
+        // Tap [ + ] brightness at (490, 408) -> cleanly steps back to 80%
         assert(Renderer.handleSettingsTouch(490, 408, t15) == true);
-        assert(wled.getBrightness() == ((cur_bri <= 230) ? (uint8_t)(cur_bri + 25) : 255));
+        assert(((int)wled.getBrightness() * 100 + 127) / 255 == 80);
 
         // 3. Restore clean defaults
         wled.setEnabled(true);
